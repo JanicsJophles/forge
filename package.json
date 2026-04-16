@@ -1,0 +1,16 @@
+{
+  "name": "forge",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev": "npm run dev --workspace=apps/runner"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

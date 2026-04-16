@@ -1,0 +1,26 @@
+
+# Local dev — run the forge runner with Docker.
+#
+# Usage:
+#   cp apps/runner/.env.example apps/runner/.env   # edit ALLOWED_REPO_PATHS
+#   docker compose up
+
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+    ports:
+      - "${FORGE_PORT:-5000}:5000"
+    volumes:
+      - runner-data:/app/apps/runner/data
+      - runner-logs:/app/apps/runner/logs
+      # Mount the repos you want the agent to access (read-write so it can commit)
+      - ${FORGE_REPOS_DIR:-.}:/repos
+    env_file:
+      - apps/runner/.env
+    restart: unless-stopped
+
+volumes:
+  runner-data:
+  runner-logs:

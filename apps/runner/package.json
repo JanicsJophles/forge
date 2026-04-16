@@ -1,0 +1,26 @@
+{
+  "name": "@forge/runner",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@forge/shared": "*",
+    "better-sqlite3": "^9.6.0",
+    "dotenv": "^17.4.2",
+    "express": "^4.19.2",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.10",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "@types/uuid": "^10.0.0",
+    "tsx": "^4.15.1",
+    "typescript": "^5.4.5"
+  }
+}
