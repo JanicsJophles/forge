@@ -31,8 +31,13 @@ export function getCurrentBranch(repoPath: string): string {
  */
 function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
   if (opts.uid === undefined || opts.gid === undefined) return
+  // Chown the ENTIRE repo, not just .git/. Working-tree files get
+  // root-owned too if a prior agent ran with elevated privs and wrote
+  // files (e.g. a refactor that touched src/ from root). Without this,
+  // the next agent (running as forge) hits ENOENT-equivalent failures
+  // editing src/. Mass-chown is cheap on these repos (< 1s).
   try {
-    execSync(`chown -R ${opts.uid}:${opts.gid} ${JSON.stringify(repoPath + "/.git")}`, {
+    execSync(`chown -R ${opts.uid}:${opts.gid} ${JSON.stringify(repoPath)}`, {
       stdio: "ignore",
     })
   } catch {
