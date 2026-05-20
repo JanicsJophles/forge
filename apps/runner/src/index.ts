@@ -5,6 +5,7 @@ import { healthRouter } from './routes/health.js'
 import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
+import { dashboardRouter } from './routes/dashboard.js'
 
 const app = express()
 
@@ -25,6 +26,7 @@ app.use(healthRouter)
 app.use('/tasks', tasksRouter)
 app.use('/repos', reposRouter)
 app.use(agentStateRouter)
+app.use(dashboardRouter)
 
 // 404 catch-all
 app.use((_req, res) => {
