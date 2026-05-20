@@ -27,9 +27,26 @@ export function countActiveProcs(): number {
 }
 
 export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
+  // Resolve the run user's uid/gid FIRST. Every subsequent git op runs
+  // as that user so we never leave root-owned objects under .git/ for the
+  // forge user to choke on later (RAC-229).
+  let uid: number | undefined
+  let gid: number | undefined
+  let claudeHome: string = process.env.HOME ?? '/root'
+  try {
+    const pw = execSync(`getent passwd ${config.claudeRunUser}`, { encoding: 'utf8' }).trim()
+    const parts = pw.split(':')
+    uid = parseInt(parts[2], 10)
+    gid = parseInt(parts[3], 10)
+    claudeHome = parts[5]
+  } catch {
+    console.warn(`[runner] CLAUDE_RUN_USER "${config.claudeRunUser}" not found — running as current user`)
+  }
+  const runAs = uid !== undefined && gid !== undefined ? { uid, gid } : {}
+
   // --- git pull before starting ---
   try {
-    gitPull(task.repo)
+    gitPull(task.repo, runAs)
     const pullMsg = `[forge] git pull completed\n`
     appendLog(task.id, pullMsg)
     emitter.emit('event', makeEvent('log', pullMsg))
@@ -50,21 +67,6 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   const startMsg = `[forge] starting claude agent in ${task.repo}\n`
   appendLog(task.id, startMsg)
   emitter.emit('event', makeEvent('log', startMsg))
-
-  // Resolve the run user's uid/gid so we drop privileges before exec.
-  // claude refuses --dangerously-skip-permissions when running as root.
-  let uid: number | undefined
-  let gid: number | undefined
-  let claudeHome: string = process.env.HOME ?? '/root'
-  try {
-    const pw = execSync(`getent passwd ${config.claudeRunUser}`, { encoding: 'utf8' }).trim()
-    const parts = pw.split(':')
-    uid = parseInt(parts[2], 10)
-    gid = parseInt(parts[3], 10)
-    claudeHome = parts[5]
-  } catch {
-    console.warn(`[runner] CLAUDE_RUN_USER "${config.claudeRunUser}" not found — running as current user`)
-  }
 
   const proc = spawn(
     'claude',
@@ -114,7 +116,8 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
         try {
           const sha = gitCommit(
             task.repo,
-            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`
+            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`,
+            runAs
           )
           if (sha) {
             setCommitSha(task.id, sha)
