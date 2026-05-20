@@ -29,4 +29,16 @@ db.exec(`
   );
 `)
 
+// Reconcile any tasks that were 'running' at the last shutdown — those
+// are zombies whose agent processes died with the runner (pm2 restart,
+// crash, OS kill). Without this they sit 'running' forever and block
+// future dispatches that respect same-repo serialization.
+db.prepare(
+  `UPDATE tasks
+   SET status = 'failed',
+       error_message = COALESCE(error_message, 'agent process killed by runner restart'),
+       completed_at = datetime('now')
+   WHERE status IN ('queued', 'running')`
+).run()
+
 console.log(`[db] SQLite open: ${DB_PATH}`)
