@@ -12,6 +12,10 @@
 //   GET  /agent-context             combined snapshot: live agents +
 //                                   last 24h of events. The "one call that
 //                                   tells you everything" endpoint.
+//
+//   POST /agent-candidates          add a captured stuckpoint candidate
+//   GET  /agent-candidates          list pending (default status=new) candidates
+//   GET  /agent-candidates/:id      fetch one
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -26,6 +30,14 @@ import {
   type CheckpointInput,
   type EventInput,
 } from '../db/agent-state.js'
+import {
+  insertCandidate,
+  listCandidates,
+  getCandidate,
+  gcCandidates,
+  type ListCandidatesFilter,
+} from '../db/candidates.js'
+import type { CandidateInput, CandidateStatus, CandidateSource } from '@forge/shared'
 
 export const agentStateRouter = Router()
 
@@ -137,4 +149,94 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     recentEventsCount: events.length,
     since,
   })
+})
+
+// ---- agent_candidates (RAC-378 stuckpoint sink) ----------------------------
+
+const VALID_SOURCES: CandidateSource[] = ['testing-loop', 'web-harvest']
+const VALID_STATUSES: CandidateStatus[] = ['new', 'queued', 'promoted', 'rejected']
+
+agentStateRouter.post('/agent-candidates', (req: Request, res: Response) => {
+  const b = req.body ?? {}
+  // Minimal contract: source + the three failureMode-mapped strings.
+  if (typeof b.source !== 'string' || !VALID_SOURCES.includes(b.source as CandidateSource)) {
+    return badRequest(res, `source must be one of: ${VALID_SOURCES.join(', ')}`)
+  }
+  if (typeof b.symptom !== 'string' || !b.symptom.trim()) {
+    return badRequest(res, 'symptom is required')
+  }
+  if (typeof b.cause !== 'string' || !b.cause.trim()) {
+    return badRequest(res, 'cause is required')
+  }
+  if (typeof b.fix !== 'string' || !b.fix.trim()) {
+    return badRequest(res, 'fix is required')
+  }
+
+  const input: CandidateInput = {
+    source: b.source as CandidateSource,
+    symptom: b.symptom.trim(),
+    cause: b.cause.trim(),
+    fix: b.fix.trim(),
+    candidateId: typeof b.candidateId === 'string' ? b.candidateId : undefined,
+    originAgentId: typeof b.originAgentId === 'string' ? b.originAgentId : undefined,
+    originRepo: typeof b.originRepo === 'string' ? b.originRepo : undefined,
+    originTicket: typeof b.originTicket === 'string' ? b.originTicket : undefined,
+    capturedAt: typeof b.capturedAt === 'string' ? b.capturedAt : undefined,
+    proposedCluster: typeof b.proposedCluster === 'string' ? b.proposedCluster : undefined,
+    diagnosticSteps: Array.isArray(b.diagnosticSteps)
+      ? b.diagnosticSteps.filter((x: unknown) => typeof x === 'string')
+      : undefined,
+    severity: typeof b.severity === 'string' ? b.severity as CandidateInput['severity'] : undefined,
+    verifiedCommand: typeof b.verifiedCommand === 'string' ? b.verifiedCommand : undefined,
+    deadEnds: Array.isArray(b.deadEnds) ? b.deadEnds : undefined,
+    reproduction: b.reproduction && typeof b.reproduction === 'object' ? b.reproduction : undefined,
+    rawEvidence: typeof b.rawEvidence === 'string' ? b.rawEvidence : undefined,
+    status:
+      typeof b.status === 'string' && VALID_STATUSES.includes(b.status as CandidateStatus)
+        ? (b.status as CandidateStatus)
+        : undefined,
+    groundingSources: Array.isArray(b.groundingSources)
+      ? b.groundingSources.filter((x: unknown) => typeof x === 'string')
+      : undefined,
+    confidence: b.confidence === 'high' || b.confidence === 'medium' ? b.confidence : undefined,
+    nicheLevel: typeof b.nicheLevel === 'string' ? b.nicheLevel : undefined,
+    mechanismVerified: typeof b.mechanismVerified === 'boolean' ? b.mechanismVerified : undefined,
+    commandRecheck:
+      b.commandRecheck && typeof b.commandRecheck === 'object' ? b.commandRecheck : undefined,
+  }
+
+  const result = insertCandidate(input)
+  res.status(201).json(result)
+})
+
+agentStateRouter.get('/agent-candidates', (req: Request, res: Response) => {
+  // Default to pending work (status=new) so the gate (RAC-380) gets its queue
+  // without having to filter. Pass ?status=all to see everything.
+  const rawStatus = typeof req.query.status === 'string' ? req.query.status : 'new'
+  const filter: ListCandidatesFilter = {}
+  if (rawStatus !== 'all') {
+    filter.status = VALID_STATUSES.includes(rawStatus as CandidateStatus)
+      ? (rawStatus as CandidateStatus)
+      : 'new'
+  }
+  if (typeof req.query.source === 'string' && VALID_SOURCES.includes(req.query.source as CandidateSource)) {
+    filter.source = req.query.source as CandidateSource
+  }
+  if (typeof req.query.repo === 'string') filter.repo = req.query.repo
+  if (typeof req.query.limit === 'string') {
+    const n = parseInt(req.query.limit, 10)
+    if (Number.isFinite(n)) filter.limit = n
+  }
+
+  // Cheap sweep of processed dust, mirroring /agent-context.
+  gcCandidates()
+
+  const rows = listCandidates(filter)
+  res.json(rows)
+})
+
+agentStateRouter.get('/agent-candidates/:candidateId', (req: Request, res: Response) => {
+  const found = getCandidate(req.params.candidateId)
+  if (!found) return res.status(404).json({ error: 'not found' })
+  res.json(found)
 })
