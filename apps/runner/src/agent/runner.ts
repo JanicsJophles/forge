@@ -11,6 +11,7 @@ import {
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
+import { captureStuckpoints } from './capture.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -81,11 +82,19 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
   let buffer = ''
   let flushTimer: ReturnType<typeof setInterval> | null = null
+  // Full accumulated log, kept in-memory so the stuckpoint-capture hook can
+  // read the whole transcript at close without a DB round-trip. Capped to
+  // avoid unbounded growth on very long runs.
+  const MAX_CAPTURE_LOG = 256 * 1024 // 256KB
+  let fullLog = ''
 
   function flush() {
     if (!buffer) return
     const chunk = buffer
     buffer = ''
+    if (fullLog.length < MAX_CAPTURE_LOG) {
+      fullLog += chunk
+    }
     appendLog(task.id, chunk)
     emitter.emit('event', makeEvent('log', chunk))
   }
@@ -142,6 +151,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       updateTaskStatus(task.id, 'failed')
       emitter.emit('event', makeEvent('error', errMsg))
     }
+
+    // RAC-378 stuckpoint capture — fire-and-forget. Runs AFTER the status
+    // transition, is NOT awaited, and swallows all errors internally, so it
+    // can never slow or break a task even if the board is unreachable.
+    void captureStuckpoints(fullLog, { taskId: task.id, repo: task.repo, exitCode: code })
 
     emitter.emit('done')
     removeEmitter(task.id)

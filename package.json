@@ -8,7 +8,9 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "dev": "npm run dev --workspace=apps/runner"
+    "dev": "npm run dev --workspace=apps/runner",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run build && npm run test --workspaces --if-present"
   },
   "engines": {
     "node": ">=20"

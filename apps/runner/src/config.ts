@@ -16,6 +16,11 @@ export const config = {
   logLevel: process.env.LOG_LEVEL ?? 'info',
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
+  // Stuckpoint capture (RAC-378): where candidates are shipped + master switch.
+  // The board is co-located on this same box in prod; localhost default keeps
+  // the POST on-loopback. CAPTURE_ENABLED=false fully disables the hook.
+  agentBoardUrl: process.env.AGENT_BOARD_URL ?? `http://127.0.0.1:${process.env.PORT ?? '5000'}`,
+  captureEnabled: process.env.CAPTURE_ENABLED !== 'false',
 } as const
 
 export function isRepoAllowed(repo: string): boolean {
