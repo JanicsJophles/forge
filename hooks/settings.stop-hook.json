@@ -1,0 +1,15 @@
+{
+  "_comment": "RAC-378 local stuckpoint capture. MERGE this `hooks.Stop` block into your ~/.claude/settings.json (do NOT overwrite the whole file). On session stop it pipes the Stop-hook payload (incl. transcript_path) into extract-stuckpoints.mjs, which captures any stuckpoint to the agent-board. Non-blocking, exits 0 always. Set AGENT_BOARD_URL / CAPTURE_ENABLED in the command env if you need to override the defaults.",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/bin/extract-stuckpoints.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}
