@@ -12,14 +12,29 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
+import { db } from '../db/schema.js'
+import { readTaskProjection } from '../db/task-projection.js'
 
 export const tasksRouter = Router()
+// Versioned contract, not a claim that either CLI is authenticated.
+tasksRouter.get('/capabilities', (_req, res) => {
+  res.json({ providerSelectionVersion: 1, providers: ['claude', 'codex'] })
+})
 
 // POST /tasks — create and kick off a task
 tasksRouter.post('/', (req: Request, res: Response) => {
-  const body = req.body as RunRequest
+  const body = (req.body ?? {}) as RunRequest
 
-  if (!body.repo || !body.prompt) {
+  if (body.provider !== undefined && body.provider !== 'claude' && body.provider !== 'codex') {
+    res.status(400).json({ error: 'provider must be claude or codex' })
+    return
+  }
+  if (body.autoCommit !== undefined && typeof body.autoCommit !== 'boolean') {
+    res.status(400).json({ error: 'autoCommit must be a boolean' })
+    return
+  }
+
+  if (typeof body.repo !== 'string' || !body.repo.trim() || typeof body.prompt !== 'string' || !body.prompt.trim()) {
     res.status(400).json({ error: 'repo and prompt are required' })
     return
   }
@@ -44,6 +59,8 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   const task: AgentTask = {
     id: uuidv4(),
+    provider: body.provider ?? 'claude',
+    autoCommit: body.autoCommit ?? config.autoCommit,
     repo: body.repo,
     branch,
     prompt: body.prompt,
@@ -71,7 +88,10 @@ tasksRouter.get('/', (_req: Request, res: Response) => {
 
 // GET /tasks/:id — single task
 tasksRouter.get('/:id', (req: Request, res: Response) => {
-  const task = getTask(req.params.id)
+  const view = req.query.view
+  const task = view === 'status' || view === 'detail'
+    ? readTaskProjection(db, req.params.id, view)
+    : getTask(req.params.id)
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return

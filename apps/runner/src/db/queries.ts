@@ -2,6 +2,8 @@ import { db } from './schema.js'
 import type { AgentTask, TaskStatus } from '@forge/shared'
 
 interface TaskRow {
+  provider: 'claude' | 'codex'
+  auto_commit: number | null
   id: string
   repo: string
   branch: string
@@ -17,6 +19,8 @@ interface TaskRow {
 
 function rowToTask(row: TaskRow): AgentTask {
   return {
+    provider: row.provider,
+    autoCommit: row.auto_commit == null ? undefined : Boolean(row.auto_commit),
     id: row.id,
     repo: row.repo,
     branch: row.branch,
@@ -33,10 +37,12 @@ function rowToTask(row: TaskRow): AgentTask {
 
 export function insertTask(task: AgentTask): void {
   db.prepare(`
-    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at)
-    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt)
+    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit)
+    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit)
   `).run({
     id: task.id,
+    provider: task.provider ?? 'claude',
+    autoCommit: task.autoCommit == null ? null : Number(task.autoCommit),
     repo: task.repo,
     branch: task.branch,
     prompt: task.prompt,

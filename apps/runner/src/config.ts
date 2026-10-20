@@ -16,6 +16,7 @@ export const config = {
   logLevel: process.env.LOG_LEVEL ?? 'info',
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
+  codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
 } as const
 
 export function isRepoAllowed(repo: string): boolean {

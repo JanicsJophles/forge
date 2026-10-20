@@ -41,4 +41,11 @@ db.prepare(
    WHERE status IN ('queued', 'running')`
 ).run()
 
+const columns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+if (!columns.some(c => c.name === 'provider')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'")
+}
+if (!columns.some(c => c.name === 'auto_commit')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
+}
 console.log(`[db] SQLite open: ${DB_PATH}`)

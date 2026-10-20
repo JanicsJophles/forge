@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process'
-import { execSync } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
 import {
   updateTaskStatus,
+  getTask,
   appendLog,
   setErrorMessage,
   setCommitSha,
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
+import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -27,26 +28,31 @@ export function countActiveProcs(): number {
 }
 
 export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
-  // Resolve the run user's uid/gid FIRST. Every subsequent git op runs
-  // as that user so we never leave root-owned objects under .git/ for the
-  // forge user to choke on later (RAC-229).
-  let uid: number | undefined
-  let gid: number | undefined
-  let claudeHome: string = process.env.HOME ?? '/root'
+  const provider = task.provider ?? 'claude'
+  let identity: ReturnType<typeof executionIdentity>
   try {
-    const pw = execSync(`getent passwd ${config.claudeRunUser}`, { encoding: 'utf8' }).trim()
-    const parts = pw.split(':')
-    uid = parseInt(parts[2], 10)
-    gid = parseInt(parts[3], 10)
-    claudeHome = parts[5]
-  } catch {
-    console.warn(`[runner] CLAUDE_RUN_USER "${config.claudeRunUser}" not found — running as current user`)
+    identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
+    if (provider === 'codex') await checkCodexLogin(identity)
+  } catch (err) {
+    const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
+    appendLog(task.id, message + '\n')
+    setErrorMessage(task.id, message)
+    updateTaskStatus(task.id, 'failed')
+    emitter.emit('event', makeEvent('error', message))
+    emitter.emit('done')
+    removeEmitter(task.id)
+    return
   }
-  const runAs = uid !== undefined && gid !== undefined ? { uid, gid } : {}
-
+  // A cancellation may arrive while the login probe is in flight.
+  if (getTask(task.id)?.status !== 'queued') {
+    emitter.emit('event', makeEvent('error', 'Task cancelled before launch'))
+    emitter.emit('done')
+    removeEmitter(task.id)
+    return
+  }
   // --- git pull before starting ---
   try {
-    gitPull(task.repo, runAs)
+    gitPull(task.repo, identity)
     const pullMsg = `[forge] git pull completed\n`
     appendLog(task.id, pullMsg)
     emitter.emit('event', makeEvent('log', pullMsg))
@@ -64,30 +70,41 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   updateTaskStatus(task.id, 'running')
   emitter.emit('event', makeEvent('status', 'running'))
 
-  const startMsg = `[forge] starting claude agent in ${task.repo}\n`
+  const startMsg = `[forge] starting ${provider} agent in ${task.repo}\n`
   appendLog(task.id, startMsg)
   emitter.emit('event', makeEvent('log', startMsg))
 
+  const command = providerCommand(provider)
   const proc = spawn(
-    'claude',
-    ['--dangerously-skip-permissions', '-p', task.prompt],
+    command.command,
+    provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
       cwd: task.repo,
-      env: { ...process.env, HOME: claudeHome },
-      ...(uid !== undefined ? { uid, gid } : {}),
+      ...identity,
     }
   )
 
   activeProcs.set(task.id, proc)
+  let settled = false
+  proc.stdin.on('error', () => { /* early process exit is handled below */ })
+  proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
   let buffer = ''
   let flushTimer: ReturnType<typeof setInterval> | null = null
+  // Full accumulated log, kept in-memory so the stuckpoint-capture hook can
+  // read the whole transcript at close without a DB round-trip. Capped to
+  // avoid unbounded growth on very long runs.
+  const MAX_CAPTURE_LOG = 256 * 1024 // 256KB
+  let fullLog = ''
 
   function flush() {
     if (!buffer) return
     const chunk = buffer
     buffer = ''
+    if (fullLog.length < MAX_CAPTURE_LOG) {
+      fullLog += chunk
+    }
     appendLog(task.id, chunk)
     emitter.emit('event', makeEvent('log', chunk))
   }
@@ -104,6 +121,8 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   })
 
   proc.on('close', async (code) => {
+    if (settled) return
+    settled = true
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     flush()
@@ -112,12 +131,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
     if (code === 0) {
       // Auto-commit if enabled
-      if (config.autoCommit) {
+      if (task.autoCommit ?? config.autoCommit) {
         try {
           const sha = gitCommit(
             task.repo,
-            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`,
-            runAs
+            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`, identity
           )
           if (sha) {
             setCommitSha(task.id, sha)
@@ -139,23 +157,26 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       updateTaskStatus(task.id, 'completed')
       emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
     } else {
-      const errMsg = `[forge] claude exited with code ${code}\n`
+      const errMsg = `[forge] ${provider} exited with code ${code}\n`
       appendLog(task.id, errMsg)
-      setErrorMessage(task.id, `claude exited with code ${code}`)
+      setErrorMessage(task.id, `${provider} exited with code ${code}`)
       updateTaskStatus(task.id, 'failed')
       emitter.emit('event', makeEvent('error', errMsg))
     }
+
 
     emitter.emit('done')
     removeEmitter(task.id)
   })
 
   proc.on('error', (err) => {
+    if (settled) return
+    settled = true
     if (flushTimer) clearInterval(flushTimer)
     flush()
     activeProcs.delete(task.id)
 
-    const errMsg = `[forge] failed to spawn claude: ${err.message}\n`
+    const errMsg = `[forge] failed to spawn ${provider}: ${err.message}. Check installation and login for the configured runner user.\n`
     appendLog(task.id, errMsg)
     setErrorMessage(task.id, err.message)
     updateTaskStatus(task.id, 'failed')

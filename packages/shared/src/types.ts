@@ -1,6 +1,9 @@
 export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type AgentProvider = 'claude' | 'codex'
 
 export interface AgentTask {
+  provider?: AgentProvider
+  autoCommit?: boolean
   id: string
   repo: string
   branch: string
@@ -21,6 +24,7 @@ export interface TaskEvent {
 }
 
 export interface RunRequest {
+  provider?: AgentProvider
   repo: string          // absolute path on the LXC / local machine
   branch?: string
   prompt: string
