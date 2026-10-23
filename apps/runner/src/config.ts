@@ -17,7 +17,14 @@ export const config = {
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
+  // Bearer token required on state-changing task routes (see auth.ts). Unset = open, with a startup warning.
+  runnerToken: process.env.FORGE_RUNNER_TOKEN,
 } as const
+
+// Read once, then drop it from the environment: agents (and git hooks in the
+// repos they edit) inherit process.env, and their output is readable through
+// the open GET /tasks/:id, so the token must not be visible to them.
+delete process.env.FORGE_RUNNER_TOKEN
 
 export function isRepoAllowed(repo: string): boolean {
   return config.allowedRepoPaths.some(allowed => repo.startsWith(allowed))

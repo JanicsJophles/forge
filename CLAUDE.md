@@ -42,6 +42,7 @@ forge/
 - **500ms flush buffer** — avoids hammering SSE/DB on every stdout chunk
 - **No queue** — returns 429 when MAX_CONCURRENT_TASKS is reached
 - **Repo allowlist** — ALLOWED_REPO_PATHS prevents arbitrary filesystem access
+- **Optional bearer token** — FORGE_RUNNER_TOKEN, when set, is required on every non-GET route except the agent-board writes (src/routes/auth.ts, deny-by-default)
 - **git pull before run** — auto-pulls if upstream is configured, no-op otherwise
 - **git add -u on commit** — only stages tracked file modifications, not untracked files
 
