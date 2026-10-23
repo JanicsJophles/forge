@@ -20,8 +20,10 @@ export interface TaskChanges {
 }
 interface Identity { uid?: number; gid?: number; env?: NodeJS.ProcessEnv }
 
+// --no-optional-locks: never take the real index.lock (a concurrent task's agent
+// may be mid-`git add` in the same tree) or rewrite its stat cache.
 function git(repo: string, args: string[], id: Identity, env?: NodeJS.ProcessEnv): string {
-  return execFileSync('git', args, {
+  return execFileSync('git', ['--no-optional-locks', ...args], {
     cwd: repo, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, maxBuffer: GIT_MAX_BUFFER,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...(id.env ?? process.env), ...env },
@@ -54,21 +56,23 @@ function parseNumstat(out: string): Map<string, [number | null, number | null]> 
   return map
 }
 
-// Untracked (non-ignored) paths from `git status --porcelain=v1 -z`.
-function untrackedPaths(out: string): string[] {
-  const parts = out.split('\0'), paths: string[] = []
+// Untracked (non-ignored) paths from `git status --porcelain=v1 -z`. With
+// --untracked-files=all a trailing "/" only marks a nested repository.
+function untrackedPaths(out: string): { files: string[]; repos: string[] } {
+  const parts = out.split('\0'), files: string[] = [], repos: string[] = []
   for (let i = 0; i < parts.length; i++) {
     const rec = parts[i]
-    if (rec.startsWith('?? ')) paths.push(rec.slice(3))
-    else if (rec[0] === 'R' || rec[0] === 'C') i++ // rename/copy carries a second path
+    if (rec.startsWith('?? ')) (rec.endsWith('/') ? repos : files).push(rec.slice(3))
+    else if (/^[RC]|^.[RC]/.test(rec)) i++ // index or worktree rename/copy carries a second path
   }
-  return paths
+  return { files, repos }
 }
 
 /**
  * Diff the working tree (incl. commits the agent or auto-commit made) against
- * baseSha. Untracked files are counted by marking them intent-to-add in a
- * throwaway copy of the index, so the repo's real index is never written.
+ * baseSha. Every call uses a throwaway copy of the index (untracked files are
+ * intent-added there) and --no-optional-locks, so the real index is never
+ * written or locked.
  * All git runs as the task's execution identity.
  */
 export function captureChanges(repo: string, baseSha: string | null, id: Identity = {}, maxFiles = MAX_CHANGED_FILES): TaskChanges {
@@ -77,25 +81,31 @@ export function captureChanges(repo: string, baseSha: string | null, id: Identit
   try {
     const base = baseSha ?? headSha(repo, id)
       ?? git(repo, ['hash-object', '-t', 'tree', '--stdin'], id).trim() // unborn: empty tree
-    const untracked = untrackedPaths(git(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], id))
     tmpIndex = path.resolve(repo, git(repo, ['rev-parse', '--git-path', `forge-changes-${process.pid}-${Date.now()}.index`], id).trim())
     const realIndex = path.resolve(repo, git(repo, ['rev-parse', '--git-path', 'index'], id).trim())
     if (fs.existsSync(realIndex)) {
       fs.copyFileSync(realIndex, tmpIndex)
+      // Keep the index mtime: git's racy-clean check compares file mtimes to it,
+      // and a fresh mtime would hide same-size edits made in the commit's second.
+      const st = fs.statSync(realIndex)
+      fs.utimesSync(tmpIndex, st.atime, st.mtime)
       if (id.uid !== undefined && id.gid !== undefined) { try { fs.chownSync(tmpIndex, id.uid, id.gid) } catch { /* not root */ } }
     }
     const env = { GIT_INDEX_FILE: tmpIndex }
-    // Bounded: never intent-add more than we could report.
-    const toAdd = untracked.slice(0, maxFiles + 1)
+    const untracked = untrackedPaths(git(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], id, env))
+    // Bounded: never intent-add more than we could report. Nested repos can't be
+    // intent-added (one with no commit fails the whole add), so list them as-is.
+    const toAdd = untracked.files.slice(0, maxFiles + 1)
     for (let i = 0; i < toAdd.length; i += 200) git(repo, ['add', '-N', '--', ...toAdd.slice(i, i + 200)], id, env)
     const statuses = parseNameStatus(git(repo, ['diff', '--name-status', '-z', '--no-renames', base], id, env))
     const counts = parseNumstat(git(repo, ['diff', '--numstat', '-z', '--no-renames', base], id, env))
+    for (const r of untracked.repos) statuses.set(r.slice(0, -1), 'added')
     const all = [...statuses.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     const files = all.slice(0, maxFiles).map(([p, status]) => {
       const [added, deleted] = counts.get(p) ?? [null, null]
       return { path: p, status, added, deleted }
     })
-    return { files, captured_at, base_sha: baseSha, truncated: all.length > maxFiles || untracked.length > toAdd.length }
+    return { files, captured_at, base_sha: baseSha, truncated: all.length > maxFiles || untracked.files.length > toAdd.length }
   } catch (err: any) {
     const msg = String(err?.stderr || err?.message || 'unknown error').trim().slice(0, 500)
     return { files: [], captured_at, base_sha: baseSha, truncated: false, error: `capture failed: ${msg}` }

@@ -57,6 +57,56 @@ test('never writes the real index and leaves no temp index behind', () => {
   assert.deepEqual(fs.readdirSync(path.join(repo, '.git')).filter(f => f.startsWith('forge-changes-')), [])
 })
 
+test('does not refresh or lock the real index when stat info is stale', () => {
+  const repo = tempRepo({ 'a.txt': 'a\n' })
+  const idx = path.join(repo, '.git/index'), bytes = fs.readFileSync(idx)
+  const later = new Date(Date.now() + 10_000)
+  fs.utimesSync(path.join(repo, 'a.txt'), later, later) // plain `git status` would rewrite the index here
+  assert.deepEqual(captureChanges(repo, headSha(repo)).files, [])
+  assert.deepEqual(fs.readFileSync(idx), bytes)
+  fs.writeFileSync(path.join(repo, '.git/index.lock'), '') // a concurrent agent mid-`git add`
+  assert.equal(captureChanges(repo, headSha(repo)).error, undefined)
+  assert.ok(fs.existsSync(path.join(repo, '.git/index.lock')), 'foreign lock left alone')
+})
+
+test('racily clean edits (same size, same timestamp as the index) are still seen', () => {
+  const repo = tempRepo()
+  git(repo, 'config', 'core.trustctime', 'false'); git(repo, 'config', 'core.checkStat', 'minimal')
+  const file = path.join(repo, 'a.txt'), t0 = new Date(Date.now() - 60_000)
+  fs.writeFileSync(file, 'a\n'); fs.utimesSync(file, t0, t0)
+  git(repo, 'add', 'a.txt'); git(repo, 'commit', '-qm', 'init')
+  fs.utimesSync(path.join(repo, '.git/index'), t0, t0) // index no newer than the file: racy
+  fs.writeFileSync(file, 'b\n'); fs.utimesSync(file, t0, t0) // stat still matches the entry
+  assert.deepEqual(captureChanges(repo, headSha(repo)).files, [{ path: 'a.txt', status: 'modified', added: 1, deleted: 1 }])
+})
+
+test('nested repositories are listed without failing the snapshot', () => {
+  const repo = tempRepo({ 'a.txt': 'a\n' })
+  const empty = path.join(repo, 'scaffold'), full = path.join(repo, 'vendor/lib')
+  fs.mkdirSync(empty); git(empty, 'init', '-q'); fs.writeFileSync(path.join(empty, 'x.txt'), 'x\n') // no commit yet
+  fs.mkdirSync(full, { recursive: true }); git(full, 'init', '-q'); fs.writeFileSync(path.join(full, 'y.txt'), 'y\n')
+  git(full, 'add', '.'); git(full, 'commit', '-qm', 'y')
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n')
+  const c = captureChanges(repo, headSha(repo))
+  assert.equal(c.error, undefined)
+  assert.deepEqual(c.files, [
+    { path: 'b.txt', status: 'added', added: 1, deleted: 0 },
+    { path: 'scaffold', status: 'added', added: null, deleted: null },
+    { path: 'vendor/lib', status: 'added', added: null, deleted: null },
+  ])
+})
+
+test('worktree rename records (" R new\\0old") do not desync status parsing', () => {
+  // The rename source is its own -z field; a name that looks like a status
+  // line must not be read as an untracked path.
+  const repo = tempRepo({ '?? old.txt': '1\n2\n3\n' })
+  fs.renameSync(path.join(repo, '?? old.txt'), path.join(repo, 'new.txt'))
+  git(repo, 'add', '-N', 'new.txt') // intent-to-add makes status report a worktree rename
+  const c = captureChanges(repo, headSha(repo))
+  assert.equal(c.error, undefined)
+  assert.deepEqual(c.files.map(f => [f.path, f.status]), [['?? old.txt', 'deleted'], ['new.txt', 'added']])
+})
+
 test('includes commits made after base (agent or auto-commit) and staged files', () => {
   const repo = tempRepo({ 'a.txt': 'a\n' })
   const base = headSha(repo)

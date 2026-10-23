@@ -77,6 +77,20 @@ test('GET /tasks/:id/changes: 404 unknown, 404 pre-feature task, 409 active task
   q.updateTaskStatus('active', 'failed')
 })
 
+test('a prompt spawn() rejects (NUL byte) fails the task instead of leaving it running', async () => {
+  const id = 'nul-prompt'
+  q.insertTask({ id, repo, branch: 'main', prompt: 'bad\0prompt', status: 'queued', log: '', createdAt: new Date().toISOString(), provider: 'claude', autoCommit: false })
+  const emitter = createEmitter(id)
+  const done = new Promise(resolve => emitter.once('done', resolve))
+  await runTask(q.getTask(id)!, emitter)
+  await done
+  const task = q.getTask(id)!
+  assert.equal(task.status, 'failed')
+  assert.match(task.log, /failed to spawn claude/)
+  assert.equal((await fetch(`${base}/tasks/${id}/changes`)).status, 404)
+  // Later tasks must not see it as a live same-repo task (asserted below).
+})
+
 test('successful task with auto-commit: changes survive the commit', async () => {
   const startSha = git('rev-parse', 'HEAD')
   const id = await run('ok', true)

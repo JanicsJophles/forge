@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import path from 'node:path'
 import type { EventEmitter } from 'node:events'
 import type { AgentTask } from '@forge/shared'
@@ -107,14 +107,29 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   emitter.emit('event', makeEvent('log', startMsg))
 
   const command = providerCommand(provider)
-  const proc = spawn(
-    command.command,
-    provider === 'claude' ? [...command.args, task.prompt] : command.args,
-    {
-      cwd: task.repo,
-      ...identity,
-    }
-  )
+  let proc: ChildProcessWithoutNullStreams
+  try {
+    proc = spawn(
+      command.command,
+      provider === 'claude' ? [...command.args, task.prompt] : command.args,
+      {
+        cwd: task.repo,
+        ...identity,
+      }
+    )
+  } catch (err: any) {
+    // spawn throws (not 'error') for e.g. a NUL in the prompt or EPERM on setuid;
+    // without this the task sits 'running' forever and stays live in liveByRepo.
+    leaveRepo(task.id, task.repo)
+    const errMsg = `[forge] failed to spawn ${provider}: ${err?.message ?? 'unknown error'}\n`
+    appendLog(task.id, errMsg)
+    setErrorMessage(task.id, err?.message ?? 'spawn failed')
+    updateTaskStatus(task.id, 'failed')
+    emitter.emit('event', makeEvent('error', errMsg))
+    emitter.emit('done')
+    removeEmitter(task.id)
+    return
+  }
 
   activeProcs.set(task.id, proc)
   let settled = false
