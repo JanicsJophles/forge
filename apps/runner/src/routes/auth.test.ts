@@ -189,6 +189,14 @@ test('token set: startup logs say auth is on and never contain the token', async
   assert.equal(short.logs.warn.length, 1)
   assert.match(short.logs.warn[0], /shorter than 32/)
   assert.ok(!short.logs.warn[0].includes('short-token'))
+  // A token outside the bearer alphabet can never be sent, so say so at startup.
+  const unsendable = 'x'.repeat(32) + '!$ #'
+  const bad = await start(unsendable)
+  assert.equal(bad.logs.warn.length, 1)
+  assert.match(bad.logs.warn[0], /cannot carry/)
+  assert.ok(!bad.logs.warn[0].includes(unsendable))
+  const refused = await fetch(`${bad.base}/tasks`, { method: 'POST', headers: { ...json, Authorization: `Bearer ${unsendable}` }, body: taskBody() })
+  assert.equal(refused.status, 401)
 })
 
 test('token unset: behaves as before and warns once', async () => {

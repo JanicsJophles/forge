@@ -111,6 +111,7 @@ When `FORGE_RUNNER_TOKEN` is set, every request that is not a read (`GET`/`HEAD`
 `DELETE /tasks/:id` and any write route added later. Reads (task lists, SSE streams, `/repos`, `/health`,
 `/dashboard`) and the agent-board writes (`POST /agent-state/checkpoint`, `DELETE /agent-state/:agentId`,
 `POST /agent-events`) stay open. When it is unset the runner accepts everything, as before, and warns once at startup.
+The runner removes the token from its own environment at startup, so agents, and the git hooks they run, never see it. Their output can be read without auth through `GET /tasks/:id`.
 
 ```bash
 curl -X POST http://localhost:5000/tasks -H "Authorization: Bearer $FORGE_RUNNER_TOKEN" \

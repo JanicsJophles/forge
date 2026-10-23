@@ -34,6 +34,7 @@ const digest = (value: string): Buffer => createHash('sha256').update(value, 'ut
 
 // RFC 6750 b64token, the only token alphabet a bearer credential may use.
 const BEARER = /^bearer +([A-Za-z0-9\-._~+/]+=*) *$/i
+const TOKEN_CHARS = /^[A-Za-z0-9\-._~+/]+=*$/
 const MAX_HEADER_LENGTH = 4096
 
 /** The bearer token in the request, or undefined if it has none or several. */
@@ -63,6 +64,7 @@ export function runnerAuth({ token, warn = console.warn, info = console.log }: R
     warn('[auth] FORGE_RUNNER_TOKEN is not set: task routes accept unauthenticated requests. Set it to require a bearer token.')
     return (_req, _res, next) => next()
   }
+  if (!TOKEN_CHARS.test(expected)) warn('[auth] FORGE_RUNNER_TOKEN contains characters a bearer token cannot carry (allowed: A-Z a-z 0-9 - . _ ~ + / and trailing =); every write will be refused.')
   if (expected.length < 32) warn('[auth] FORGE_RUNNER_TOKEN is shorter than 32 characters; use a long random value.')
   info('[auth] FORGE_RUNNER_TOKEN is set: state-changing task routes require a bearer token.')
 

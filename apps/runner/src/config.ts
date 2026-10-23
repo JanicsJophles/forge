@@ -21,6 +21,11 @@ export const config = {
   runnerToken: process.env.FORGE_RUNNER_TOKEN,
 } as const
 
+// Read once, then drop it from the environment: agents (and git hooks in the
+// repos they edit) inherit process.env, and their output is readable through
+// the open GET /tasks/:id, so the token must not be visible to them.
+delete process.env.FORGE_RUNNER_TOKEN
+
 export function isRepoAllowed(repo: string): boolean {
   return config.allowedRepoPaths.some(allowed => repo.startsWith(allowed))
 }
