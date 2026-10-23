@@ -52,6 +52,7 @@ POST /tasks          → create + start task, returns { taskId }
 GET  /tasks          → last 20 tasks
 GET  /tasks/:id      → single task
 GET  /tasks/:id/stream → SSE stream (catch-up + live)
+GET  /tasks/:id/changes → files the task changed, snapshotted at exit (404 none, 409 still active)
 DELETE /tasks/:id    → SIGTERM active task
 GET  /repos          → list git repos in ALLOWED_REPO_PATHS
 GET  /health         → { status: 'ok', activeTasks: N }

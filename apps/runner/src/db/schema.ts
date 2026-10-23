@@ -48,4 +48,8 @@ if (!columns.some(c => c.name === 'provider')) {
 if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
+// JSON snapshot of what the task changed in its repo (see agent/changes.ts).
+if (!columns.some(c => c.name === 'changes')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN changes TEXT')
+}
 console.log(`[db] SQLite open: ${DB_PATH}`)
