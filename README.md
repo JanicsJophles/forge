@@ -90,6 +90,7 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | `COMMIT_MESSAGE_PREFIX` | `[forge]` | Prefix for auto-commit messages |
 | `CLAUDE_RUN_USER` | `forge` | Unprivileged user to run claude as (for root-started servers) |
 | `LOG_LEVEL` | `info` | Log verbosity |
+| `FORGE_RUNNER_TOKEN` | *(unset)* | Bearer token required on state-changing routes. Unset = no auth (logged as a warning at startup) |
 
 ## API
 
@@ -102,6 +103,19 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | `DELETE` | `/tasks/:id` | Kill a running task |
 | `GET` | `/repos` | List available git repos |
 | `GET` | `/health` | Health check |
+
+### Authentication
+
+When `FORGE_RUNNER_TOKEN` is set, every request that is not a read (`GET`/`HEAD`/`OPTIONS`) must send
+`Authorization: Bearer <token>`, or it gets `401 {"error":"unauthorized"}`. That covers `POST /tasks`,
+`DELETE /tasks/:id` and any write route added later. Reads (task lists, SSE streams, `/repos`, `/health`,
+`/dashboard`) and the agent-board writes (`POST /agent-state/checkpoint`, `DELETE /agent-state/:agentId`,
+`POST /agent-events`) stay open. When it is unset the runner accepts everything, as before, and warns once at startup.
+
+```bash
+curl -X POST http://localhost:5000/tasks -H "Authorization: Bearer $FORGE_RUNNER_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"repo":"/repos/my-project","prompt":"..."}'
+```
 
 ### POST /tasks body
 

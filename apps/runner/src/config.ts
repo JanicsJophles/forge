@@ -17,6 +17,8 @@ export const config = {
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
+  // Bearer token required on state-changing task routes (see auth.ts). Unset = open, with a startup warning.
+  runnerToken: process.env.FORGE_RUNNER_TOKEN,
 } as const
 
 export function isRepoAllowed(repo: string): boolean {
