@@ -84,6 +84,16 @@ export function setCommitSha(id: string, sha: string): void {
   db.prepare(`UPDATE tasks SET commit_sha = ? WHERE id = ?`).run(sha, id)
 }
 
+export function setTaskChanges(id: string, changes: unknown): void {
+  db.prepare(`UPDATE tasks SET changes = ? WHERE id = ?`).run(JSON.stringify(changes), id)
+}
+
+export function getTaskChanges(id: string): { status: TaskStatus; changes: Record<string, unknown> | null } | undefined {
+  const row = db.prepare('SELECT status, changes FROM tasks WHERE id = ?').get(id) as { status: string; changes: string | null } | undefined
+  if (!row) return undefined
+  return { status: row.status as TaskStatus, changes: row.changes ? JSON.parse(row.changes) : null }
+}
+
 export function countActiveTasks(): number {
   const row = db.prepare(
     `SELECT COUNT(*) as count FROM tasks WHERE status IN ('queued', 'running')`

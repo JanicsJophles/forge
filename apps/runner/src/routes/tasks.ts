@@ -8,6 +8,7 @@ import {
   listTasks,
   countActiveTasks,
   updateTaskStatus,
+  getTaskChanges,
 } from '../db/queries.js'
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
@@ -97,6 +98,25 @@ tasksRouter.get('/:id', (req: Request, res: Response) => {
     return
   }
   res.json(task)
+})
+
+// GET /tasks/:id/changes — files the task changed, snapshotted at completion
+tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
+  const row = getTaskChanges(req.params.id)
+  if (!row) {
+    res.status(404).json({ error: 'task not found' })
+    return
+  }
+  if (row.changes) {
+    res.json(row.changes)
+    return
+  }
+  if (row.status === 'running' || row.status === 'queued') {
+    res.status(409).json({ error: 'task is still active; changes are captured at completion' })
+    return
+  }
+  // Pre-feature tasks, setup failures, and runner-restart zombies.
+  res.status(404).json({ error: 'no changes captured for this task' })
 })
 
 // GET /tasks/:id/stream — SSE stream
