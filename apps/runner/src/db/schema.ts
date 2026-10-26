@@ -48,4 +48,14 @@ if (!columns.some(c => c.name === 'provider')) {
 if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
+
+// Indexes for the two hot queries over tasks: listTasks() does
+// ORDER BY created_at DESC LIMIT, and countActiveTasks() filters on status.
+// Without these both full-scan a table that grows unbounded (no retention
+// sweep). Mirrors the purpose-built indexes on agent_state/agent_events.
+db.exec(`
+  CREATE INDEX IF NOT EXISTS tasks_created_idx ON tasks(created_at DESC);
+  CREATE INDEX IF NOT EXISTS tasks_status_idx  ON tasks(status);
+`)
+
 console.log(`[db] SQLite open: ${DB_PATH}`)
