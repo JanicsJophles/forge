@@ -10,6 +10,7 @@ export const config = {
   port: parseInt(process.env.PORT ?? '5000', 10),
   host: process.env.HOST ?? '0.0.0.0',
   maxConcurrentTasks: parseInt(process.env.MAX_CONCURRENT_TASKS ?? '2', 10),
+  minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB ?? '2048', 10),
   allowedRepoPaths: rawPaths.split(',').map(p => p.trim()).filter(Boolean),
   autoCommit: process.env.AUTO_COMMIT !== 'false',
   commitMessagePrefix: process.env.COMMIT_MESSAGE_PREFIX ?? '[forge]',
