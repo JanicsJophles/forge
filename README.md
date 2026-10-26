@@ -86,7 +86,7 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | `PORT` | `5000` | Server port |
 | `ALLOWED_REPO_PATHS` | *(required)* | Comma-separated absolute paths the agent can access |
 | `MAX_CONCURRENT_TASKS` | `2` | Max simultaneous agent runs |
-| `AUTO_COMMIT` | `true` | Commit changes after successful runs |
+| `AUTO_COMMIT` | `false` | Opt-in: commit changes after successful runs (set to `true`/`1`). A per-task `autoCommit` in the POST body overrides this |
 | `COMMIT_MESSAGE_PREFIX` | `[forge]` | Prefix for auto-commit messages |
 | `CLAUDE_RUN_USER` | `forge` | Unprivileged user to run claude as (for root-started servers) |
 | `LOG_LEVEL` | `info` | Log verbosity |
