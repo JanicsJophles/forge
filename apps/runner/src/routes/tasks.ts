@@ -12,6 +12,7 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
+import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
 
@@ -42,6 +43,25 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   if (!isRepoAllowed(body.repo)) {
     res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
     return
+  }
+
+  // Disk guard: the runner git-pulls into the repo and the agent writes files
+  // there plus a growing SQLite WAL. If the disk fills, git and the agent
+  // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
+  // cannot read the filesystem — never crash the request over a stat error.
+  const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
+  try {
+    const freeBytes = freeDiskBytes(body.repo)
+    if (freeBytes < minFreeBytes) {
+      res.status(507).json({
+        error: 'insufficient disk space to accept new tasks',
+        freeMb: Math.floor(freeBytes / (1024 * 1024)),
+        requiredMb: config.minFreeDiskMb,
+      })
+      return
+    }
+  } catch (err: any) {
+    console.warn(`[runner] disk-space check failed for ${body.repo}, allowing task: ${err.message}`)
   }
 
   if (countActiveTasks() >= config.maxConcurrentTasks) {
