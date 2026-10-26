@@ -12,7 +12,9 @@ export const config = {
   maxConcurrentTasks: parseInt(process.env.MAX_CONCURRENT_TASKS ?? '2', 10),
   minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB ?? '2048', 10),
   allowedRepoPaths: rawPaths.split(',').map(p => p.trim()).filter(Boolean),
-  autoCommit: process.env.AUTO_COMMIT !== 'false',
+  // Opt-in: off unless AUTO_COMMIT is explicitly 'true' or '1'. A per-task
+  // autoCommit:true in the POST body still overrides this (see runner.ts).
+  autoCommit: process.env.AUTO_COMMIT === 'true' || process.env.AUTO_COMMIT === '1',
   commitMessagePrefix: process.env.COMMIT_MESSAGE_PREFIX ?? '[forge]',
   logLevel: process.env.LOG_LEVEL ?? 'info',
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
