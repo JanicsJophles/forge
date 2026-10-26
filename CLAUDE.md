@@ -47,14 +47,43 @@ forge/
 
 ## API routes
 
+### Tasks
+
 ```
-POST /tasks          → create + start task, returns { taskId }
-GET  /tasks          → last 20 tasks
-GET  /tasks/:id      → single task
-GET  /tasks/:id/stream → SSE stream (catch-up + live)
-DELETE /tasks/:id    → SIGTERM active task
-GET  /repos          → list git repos in ALLOWED_REPO_PATHS
-GET  /health         → { status: 'ok', activeTasks: N }
+POST   /tasks               → create + start task, returns { taskId }
+                              body: { repo, prompt, branch?, provider?, autoCommit? }
+                              provider is 'claude' (default) or 'codex'
+                              autoCommit defaults to config.autoCommit (off unless enabled)
+GET    /tasks               → last 20 tasks
+GET    /tasks/:id           → single task; ?view=status|detail returns a projection
+GET    /tasks/:id/stream    → SSE stream (catch-up + live)
+DELETE /tasks/:id           → SIGTERM active task
+GET    /capabilities        → { providerSelectionVersion, providers: ['claude','codex'] }
+```
+
+### Repos & health
+
+```
+GET    /repos               → list git repos in ALLOWED_REPO_PATHS
+GET    /health              → { status: 'ok', activeTasks: N }
+```
+
+### Agent coordination surface
+
+```
+POST   /agent-state/checkpoint  → upsert this agent's live state
+GET    /agent-state             → list all live (non-expired) agents
+GET    /agent-state/:agentId    → fetch one agent's state
+DELETE /agent-state/:agentId    → remove (clean shutdown)
+POST   /agent-events            → append a transition event
+GET    /agent-events            → list recent events (filterable)
+GET    /agent-context           → combined snapshot: live agents + last 24h of events
+```
+
+### Dashboard
+
+```
+GET    /dashboard           → live HTML view of the agent board (polls /agent-context)
 ```
 
 ## Development
