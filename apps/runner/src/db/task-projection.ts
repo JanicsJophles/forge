@@ -15,12 +15,13 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
   const provider = (db.pragma('table_info(tasks)') as { name: string }[])
     .some(column => column.name === 'provider') ? ', provider' : ''
   const detail = view === 'detail'
-    ? `, repo, branch, prompt, error_message AS errorMessage,
+    ? `, repo, branch, prompt,
        substr(CAST(COALESCE(log, '') AS BLOB), -${LOG_TAIL_BYTES}) AS log_tail,
        length(CAST(COALESCE(log, '') AS BLOB)) > ${LOG_TAIL_BYTES} AS log_truncated`
     : ''
   const row = db.prepare(`SELECT id, status, created_at AS createdAt,
-    started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha
+    started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha,
+    error_message AS errorMessage
     ${provider}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) return undefined
   if (view === 'detail') {
