@@ -2,13 +2,13 @@ import { Router, Response } from 'express'
 import { readdirSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { config } from '../config.js'
-import { getCurrentBranch } from '../agent/git.js'
+import { getCurrentBranch, hasUncommittedChanges } from '../agent/git.js'
 
 export const reposRouter = Router()
 
 // GET /repos — list all git repos inside ALLOWED_REPO_PATHS
 reposRouter.get('/', (_req, res: Response) => {
-  const repos: { name: string; path: string; currentBranch: string }[] = []
+  const repos: { name: string; path: string; currentBranch: string; dirty: boolean }[] = []
 
   for (const basePath of config.allowedRepoPaths) {
     let entries
@@ -26,7 +26,12 @@ reposRouter.get('/', (_req, res: Response) => {
       let currentBranch = 'unknown'
       try { currentBranch = getCurrentBranch(fullPath) } catch { /* empty */ }
 
-      repos.push({ name: entry.name, path: fullPath, currentBranch })
+      // Fail-safe: if the dirty check throws, treat the repo as clean rather
+      // than failing the whole request — the flag is advisory for dispatchers.
+      let dirty = false
+      try { dirty = hasUncommittedChanges(fullPath) } catch { /* empty */ }
+
+      repos.push({ name: entry.name, path: fullPath, currentBranch, dirty })
     }
   }
 
