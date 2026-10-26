@@ -86,6 +86,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
   activeProcs.set(task.id, proc)
   let settled = false
+  // Tracks whether the child has actually exited, so the SIGKILL escalation
+  // can be skipped once SIGTERM succeeds.
+  let procExited = false
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null
+  let killTimer: ReturnType<typeof setTimeout> | null = null
   proc.stdin.on('error', () => { /* early process exit is handled below */ })
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
@@ -111,6 +116,47 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
   flushTimer = setInterval(flush, 500)
 
+  // --- per-task timeout: SIGTERM then SIGKILL a hung agent ---
+  // A hung `claude -p` / `codex` child would otherwise run forever, holding a
+  // MAX_CONCURRENT_TASKS slot and blocking same-repo serialization until a
+  // manual pm2 restart. On timeout we SIGTERM, wait a grace period, then SIGKILL.
+  const parsedTimeout = Number.parseInt(process.env.TASK_TIMEOUT_MS ?? '', 10)
+  const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 1800000
+  const KILL_GRACE_MS = 10000
+  timeoutTimer = setTimeout(() => {
+    if (settled) return
+    settled = true
+    if (flushTimer) clearInterval(flushTimer)
+    flush()
+
+    const termMsg = `[forge] ${provider} agent exceeded timeout of ${timeoutMs}ms — sending SIGTERM\n`
+    appendLog(task.id, termMsg)
+    emitter.emit('event', makeEvent('log', termMsg))
+    proc.kill('SIGTERM')
+
+    // Escalate to SIGKILL if the child hasn't exited within the grace period.
+    killTimer = setTimeout(() => {
+      if (procExited) return
+      const killMsg = `[forge] agent did not exit after SIGTERM — sending SIGKILL\n`
+      appendLog(task.id, killMsg)
+      emitter.emit('event', makeEvent('log', killMsg))
+      proc.kill('SIGKILL')
+    }, KILL_GRACE_MS)
+    if (typeof killTimer.unref === 'function') killTimer.unref()
+
+    // Free the concurrency slot immediately — the proc 'close' handler will
+    // early-return on the `settled` guard, so do the cleanup here.
+    activeProcs.delete(task.id)
+    const errMsg = `${provider} timed out after ${timeoutMs}ms`
+    appendLog(task.id, `[forge] ${errMsg}\n`)
+    setErrorMessage(task.id, errMsg)
+    updateTaskStatus(task.id, 'failed')
+    emitter.emit('event', makeEvent('error', `[forge] ${errMsg}\n`))
+    emitter.emit('done')
+    removeEmitter(task.id)
+  }, timeoutMs)
+  if (typeof timeoutTimer.unref === 'function') timeoutTimer.unref()
+
   proc.stdout.on('data', (data: Buffer) => {
     buffer += data.toString()
   })
@@ -121,6 +167,9 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   })
 
   proc.on('close', async (code) => {
+    procExited = true
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    if (killTimer) clearTimeout(killTimer)
     if (settled) return
     settled = true
     // Final flush before wrapping up
@@ -170,6 +219,9 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   })
 
   proc.on('error', (err) => {
+    procExited = true
+    if (timeoutTimer) clearTimeout(timeoutTimer)
+    if (killTimer) clearTimeout(killTimer)
     if (settled) return
     settled = true
     if (flushTimer) clearInterval(flushTimer)
