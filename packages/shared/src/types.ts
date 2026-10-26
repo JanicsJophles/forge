@@ -10,6 +10,10 @@ export interface AgentTask {
   prompt: string
   status: TaskStatus
   log: string
+  /** Full byte length of the log column (set on list views where `log` is a tail). */
+  logBytes?: number
+  /** True when `log` is a truncated tail of a larger transcript (list views). */
+  logTruncated?: boolean
   createdAt: string
   startedAt?: string
   completedAt?: string
