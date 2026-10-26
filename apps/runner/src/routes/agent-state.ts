@@ -26,6 +26,7 @@ import {
   type CheckpointInput,
   type EventInput,
 } from '../db/agent-state.js'
+import { listActiveTasks } from '../db/queries.js'
 
 export const agentStateRouter = Router()
 
@@ -114,6 +115,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
 
   const live = listAgentState({})
   const events = listEvents({ since, limit: 200 })
+  const liveTasks = listActiveTasks()
 
   // Sweep dust on every call. Cheap on small tables.
   gcAgentState()
@@ -127,12 +129,22 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     if (a.ticket) liveByTicket[a.ticket] = (liveByTicket[a.ticket] ?? 0) + 1
   }
 
+  // Runner's own queued/running tasks, so agents can see a forge task is
+  // already active in a repo (not just the checkpointed agent_state rows).
+  const liveTasksByRepo: Record<string, number> = {}
+  for (const t of liveTasks) {
+    liveTasksByRepo[t.repo] = (liveTasksByRepo[t.repo] ?? 0) + 1
+  }
+
   res.json({
     generatedAt: new Date().toISOString(),
     liveAgents: live,
     liveAgentsCount: live.length,
     liveByRepo,
     liveByTicket,
+    liveTasks,
+    liveTasksCount: liveTasks.length,
+    liveTasksByRepo,
     recentEvents: events,
     recentEventsCount: events.length,
     since,

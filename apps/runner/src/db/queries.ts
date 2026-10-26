@@ -90,3 +90,46 @@ export function countActiveTasks(): number {
   ).get() as { count: number }
   return row.count
 }
+
+/**
+ * A privacy-safe summary of a queued/running task for the /agent-context
+ * coordination surface. Deliberately excludes the full prompt and the log —
+ * only a truncated prompt snippet is exposed so agents can see what is
+ * already running in a repo without leaking task contents.
+ */
+export interface LiveTaskSummary {
+  id: string
+  repo: string
+  branch: string
+  status: TaskStatus
+  provider: 'claude' | 'codex'
+  createdAt: string
+  promptSnippet: string
+}
+
+const PROMPT_SNIPPET_MAX = 120
+
+export function listActiveTasks(): LiveTaskSummary[] {
+  const rows = db.prepare(
+    `SELECT id, repo, branch, status, provider, prompt, created_at
+       FROM tasks
+      WHERE status IN ('queued', 'running')
+      ORDER BY created_at DESC`
+  ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'prompt' | 'created_at'>>
+
+  return rows.map(row => {
+    const flat = row.prompt.replace(/\s+/g, ' ').trim()
+    const promptSnippet = flat.length > PROMPT_SNIPPET_MAX
+      ? flat.slice(0, PROMPT_SNIPPET_MAX - 1) + '\u2026'
+      : flat
+    return {
+      id: row.id,
+      repo: row.repo,
+      branch: row.branch,
+      status: row.status as TaskStatus,
+      provider: row.provider,
+      createdAt: row.created_at,
+      promptSnippet,
+    }
+  })
+}
