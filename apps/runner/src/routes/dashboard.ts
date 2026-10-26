@@ -248,6 +248,7 @@ const HTML = `<!DOCTYPE html>
   </footer>
 
   <script>
+    const GITHUB_ORG = __GITHUB_ORG__;
     function escape(s) {
       const d = document.createElement('div');
       d.textContent = s == null ? '' : String(s);
@@ -296,7 +297,7 @@ const HTML = `<!DOCTYPE html>
         let prHtml = '';
         if (e.prNumber && e.repo) {
           const repoSlug = e.repo.replace(/^.*\\//, '');
-          prHtml = '<span class="pr"><a target="_blank" href="https://github.com/rackmind-ai/' + escape(repoSlug) + '/pull/' + escape(e.prNumber) + '">PR#' + escape(e.prNumber) + '</a></span>';
+          prHtml = '<span class="pr"><a target="_blank" href="https://github.com/' + escape(GITHUB_ORG) + '/' + escape(repoSlug) + '/pull/' + escape(e.prNumber) + '">PR#' + escape(e.prNumber) + '</a></span>';
         } else if (e.prNumber) {
           prHtml = '<span class="pr">PR#' + escape(e.prNumber) + '</span>';
         }
@@ -341,6 +342,12 @@ const HTML = `<!DOCTYPE html>
 </html>`
 
 dashboardRouter.get('/dashboard', (_req: Request, res: Response) => {
+  const org = process.env.GITHUB_ORG || 'JanicsJophles'
+  // JSON.stringify makes a JS string literal; also escape '<' as \u003c so a
+  // '</script>' in the value can't break out of the inline <script> block.
+  // Replacer function avoids String.replace $-pattern interpretation.
+  const orgLiteral = JSON.stringify(org).replace(/</g, '\\u003c')
+  const html = HTML.replace('__GITHUB_ORG__', () => orgLiteral)
   res.setHeader('Content-Type', 'text/html; charset=utf-8')
-  res.send(HTML)
+  res.send(html)
 })
