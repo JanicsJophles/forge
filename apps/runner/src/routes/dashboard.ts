@@ -69,6 +69,7 @@ const HTML = `<!DOCTYPE html>
       margin: 0 auto;
     }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+    section.full { grid-column: 1 / -1; }
     section {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -103,13 +104,48 @@ const HTML = `<!DOCTYPE html>
       color: var(--text-mute);
       font-size: 12px;
     }
-    .agent-row, .event-row {
+    .agent-row, .event-row, .task-row {
       padding: 10px 16px;
       border-bottom: 1px solid var(--border);
       font-family: 'SF Mono', Menlo, monospace;
       font-size: 12px;
     }
-    .agent-row:last-child, .event-row:last-child { border-bottom: none; }
+    .agent-row:last-child, .event-row:last-child, .task-row:last-child { border-bottom: none; }
+    .task-row .id { color: var(--accent); font-weight: 600; }
+    .task-row .repo {
+      display: inline-block;
+      background: var(--panel-2);
+      color: var(--text-dim);
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+      font-size: 11px;
+    }
+    .task-row .branch { color: var(--text-dim); margin-left: 6px; font-size: 11px; }
+    .task-row .provider {
+      display: inline-block;
+      color: var(--text-mute);
+      margin-left: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .task-row .status {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-left: 6px;
+    }
+    .task-row .snippet {
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      font-size: 13px;
+      line-height: 1.4;
+    }
     .agent-row .id { color: var(--accent); font-weight: 600; }
     .agent-row .repo {
       display: inline-block;
@@ -135,7 +171,8 @@ const HTML = `<!DOCTYPE html>
       text-transform: uppercase;
       margin-left: 6px;
     }
-    .status-starting { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
+    .status-starting,
+    .status-queued { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
     .status-editing,
     .status-running,
     .status-testing,
@@ -231,6 +268,12 @@ const HTML = `<!DOCTYPE html>
   </header>
 
   <main>
+    <section class="full">
+      <h2>Runner tasks <span class="count" id="taskCount2">0</span></h2>
+      <div id="tasks"></div>
+      <div class="by-repo" id="tasksByRepo"></div>
+    </section>
+
     <section>
       <h2>Live agents <span class="count" id="liveCount2">0</span></h2>
       <div id="agents"></div>
@@ -263,6 +306,28 @@ const HTML = `<!DOCTYPE html>
       if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
+    }
+    function renderTasks(tasks) {
+      const root = document.getElementById('tasks');
+      if (!tasks.length) {
+        root.innerHTML = '<div class="empty">no queued or running tasks</div>';
+        return;
+      }
+      root.innerHTML = tasks.map(t => {
+        const statusClass = t.status ? 'status-' + t.status.replace(/[^a-z]/g, '') : '';
+        return [
+          '<div class="task-row">',
+            '<div>',
+              '<span class="id">' + escape((t.id || '').slice(0, 8)) + '</span>',
+              t.repo ? '<span class="repo">' + escape(t.repo) + '</span>' : '',
+              t.branch ? '<span class="branch">' + escape(t.branch) + '</span>' : '',
+              t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
+              t.provider ? '<span class="provider">' + escape(t.provider) + '</span>' : '',
+            '</div>',
+            t.promptSnippet ? '<div class="snippet">' + escape(t.promptSnippet) + '</div>' : '',
+          '</div>'
+        ].join('');
+      }).join('');
     }
     function renderAgents(agents) {
       const root = document.getElementById('agents');
@@ -313,8 +378,8 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
-    function renderByRepo(by) {
-      const root = document.getElementById('byRepo');
+    function renderByRepo(by, rootId) {
+      const root = document.getElementById(rootId || 'byRepo');
       const entries = Object.entries(by || {});
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
@@ -328,6 +393,9 @@ const HTML = `<!DOCTYPE html>
         document.getElementById('eventCount').textContent = d.recentEventsCount;
         document.getElementById('liveCount2').textContent = d.liveAgentsCount;
         document.getElementById('eventCount2').textContent = d.recentEventsCount;
+        document.getElementById('taskCount2').textContent = d.liveTasksCount || 0;
+        renderTasks(d.liveTasks || []);
+        renderByRepo(d.liveTasksByRepo || {}, 'tasksByRepo');
         renderAgents(d.liveAgents || []);
         renderEvents(d.recentEvents || []);
         renderByRepo(d.liveByRepo || {});
