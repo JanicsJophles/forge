@@ -12,6 +12,7 @@ import {
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
+import { exitReason } from './exit-reason.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -166,7 +167,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     buffer += text
   })
 
-  proc.on('close', async (code) => {
+  proc.on('close', async (code, signal) => {
     procExited = true
     if (timeoutTimer) clearTimeout(timeoutTimer)
     if (killTimer) clearTimeout(killTimer)
@@ -206,9 +207,10 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       updateTaskStatus(task.id, 'completed')
       emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
     } else {
-      const errMsg = `[forge] ${provider} exited with code ${code}\n`
+      const reason = exitReason(provider, code, signal)
+      const errMsg = `[forge] ${reason}\n`
       appendLog(task.id, errMsg)
-      setErrorMessage(task.id, `${provider} exited with code ${code}`)
+      setErrorMessage(task.id, reason)
       updateTaskStatus(task.id, 'failed')
       emitter.emit('event', makeEvent('error', errMsg))
     }
