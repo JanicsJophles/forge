@@ -200,6 +200,7 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
+    #repoFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -233,6 +234,11 @@ const HTML = `<!DOCTYPE html>
       <b id="eventCount">0</b> events (24h)
     </div>
   </header>
+
+  <div class="by-repo">
+    <label for="repoFilter">Repository</label>
+    <select id="repoFilter"><option value="">All repositories</option></select>
+  </div>
 
   <main>
     <section>
@@ -274,7 +280,7 @@ const HTML = `<!DOCTYPE html>
     function renderAgents(agents) {
       const root = document.getElementById('agents');
       if (!agents.length) {
-        root.innerHTML = '<div class="empty">no live agents</div>';
+        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching live agents' : 'no live agents') + '</div>';
         return;
       }
       root.innerHTML = agents.map(a => {
@@ -296,7 +302,7 @@ const HTML = `<!DOCTYPE html>
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
-        root.innerHTML = '<div class="empty">no events in last 24h</div>';
+        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching events' : 'no events in last 24h') + '</div>';
         return;
       }
       root.innerHTML = events.map(e => {
@@ -325,6 +331,38 @@ const HTML = `<!DOCTYPE html>
       const entries = Object.entries(by || {});
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
+    }
+    let latestSnapshot = null;
+    let selectedRepo = '';
+    const repoFilter = document.getElementById('repoFilter');
+    repoFilter.onchange = () => {
+      selectedRepo = repoFilter.value;
+      renderSnapshot();
+    };
+    function renderSnapshot() {
+      if (!latestSnapshot) return;
+      const d = latestSnapshot;
+      const repos = new Set([
+        ...Object.keys(d.liveByRepo),
+        ...d.liveAgents.map(a => a.repo),
+        ...d.recentEvents.map(e => e.repo),
+        ...(selectedRepo ? [selectedRepo] : [])
+      ].filter(repo => typeof repo === 'string' && repo.length));
+      repoFilter.innerHTML = '<option value="">All repositories</option>' +
+        [...repos].sort().map(repo => '<option value="' + escape(repo).replace(/"/g, '&quot;') + '">' + escape(repo) + '</option>').join('');
+      repoFilter.value = selectedRepo;
+      const matches = row => !selectedRepo || row.repo === selectedRepo;
+      const agents = d.liveAgents.filter(matches);
+      const events = d.recentEvents.filter(matches);
+      const liveCount = selectedRepo ? agents.length : d.liveAgentsCount;
+      const eventCount = selectedRepo ? events.length : d.recentEventsCount;
+      document.getElementById('liveCount').textContent = liveCount;
+      document.getElementById('eventCount').textContent = eventCount;
+      document.getElementById('liveCount2').textContent = liveCount;
+      document.getElementById('eventCount2').textContent = eventCount;
+      renderAgents(agents);
+      renderEvents(events);
+      renderByRepo(Object.fromEntries(Object.entries(d.liveByRepo).filter(([repo]) => !selectedRepo || repo === selectedRepo)));
     }
     function validSnapshot(d) {
       const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -372,13 +410,8 @@ const HTML = `<!DOCTYPE html>
         ]);
         if (!validSnapshot(d)) throw new Error('invalid snapshot');
         document.getElementById('generatedAt').textContent = 'generated ' + new Date(d.generatedAt).toLocaleTimeString();
-        document.getElementById('liveCount').textContent = d.liveAgentsCount;
-        document.getElementById('eventCount').textContent = d.recentEventsCount;
-        document.getElementById('liveCount2').textContent = d.liveAgentsCount;
-        document.getElementById('eventCount2').textContent = d.recentEventsCount;
-        renderAgents(d.liveAgents || []);
-        renderEvents(d.recentEvents || []);
-        renderByRepo(d.liveByRepo || {});
+        latestSnapshot = d;
+        renderSnapshot();
         lastSuccess = new Date();
         connection(true);
       } catch (e) {
