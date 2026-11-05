@@ -272,7 +272,8 @@ const HTML = `<!DOCTYPE html>
     </section>
 
     <section>
-      <h2>Recent events <span class="count" id="eventCount2">0</span></h2>
+      <h2>Recent event snapshot <span class="count" id="eventCount2">0</span></h2>
+      <p id="eventCoverage" role="status" aria-live="polite"></p>
       <div id="events"></div>
     </section>
   </main>
@@ -344,6 +345,14 @@ const HTML = `<!DOCTYPE html>
       // Validate components before placing them in an HTML attribute or URL path.
       if (!/^[a-zA-Z0-9_-]+$/.test(owner) || !/^[a-zA-Z0-9_.-]+$/.test(name) || name === '.' || name === '..') return null;
       return 'https://github.com/' + encodeURIComponent(owner) + '/' + encodeURIComponent(name) + '/pull/' + number;
+    }
+    function renderEventCoverage(snapshot) {
+      const coverage = snapshot.recentEventsTruncated;
+      document.getElementById('eventCoverage').textContent = coverage === true
+        ? 'Recent snapshot: older events are omitted. Filters search only the loaded snapshot.'
+        : coverage === false
+          ? 'Recent snapshot: no truncation for the returned window. Filters search only the loaded snapshot.'
+          : 'Recent snapshot: coverage unknown. Filters search only the loaded snapshot.';
     }
     function renderEvents(events) {
       const root = document.getElementById('events');
@@ -440,6 +449,7 @@ const HTML = `<!DOCTYPE html>
       document.getElementById('eventCount2').textContent = eventCount;
       renderAgents(agents);
       renderEvents(events);
+      renderEventCoverage(d);
       const byRepo = Object.create(null);
       for (const agent of agents) {
         if (agent.repo) byRepo[agent.repo] = (byRepo[agent.repo] || 0) + 1;
