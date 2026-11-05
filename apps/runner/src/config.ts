@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import path from 'node:path'
+import { realpathSync } from 'node:fs'
 
 function positiveIntegerEnv(name: string, fallback: number): number {
   const raw = process.env[name]
@@ -40,14 +41,22 @@ export const config = {
 
 export function isRepoAllowed(repo: string): boolean {
   if (typeof repo !== 'string' || !repo.trim()) return false
-  // Resolve the candidate so traversal segments (../) and relative paths are
-  // collapsed before comparison — startsWith on an unnormalized path would let
-  // /opt/repos/a/../../etc slip through.
-  const candidate = path.resolve(repo)
-  return config.allowedRepoPaths.some(
-    allowed =>
-      // Exact match, or genuinely contained under the root with a separator
-      // boundary. The boundary check stops /opt/repos matching /opt/repos-evil.
-      candidate === allowed || candidate.startsWith(allowed + path.sep),
-  )
+  let candidate: string
+  try {
+    candidate = realpathSync(repo)
+  } catch {
+    return false
+  }
+  return config.allowedRepoPaths.some(allowed => {
+    try {
+      // Resolve both sides on each check: configured roots may themselves be
+      // symlinks, and a missing or inaccessible root must fail closed.
+      const relative = path.relative(realpathSync(allowed), candidate)
+      return relative === '' || (
+        relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative)
+      )
+    } catch {
+      return false
+    }
+  })
 }
