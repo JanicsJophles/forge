@@ -165,10 +165,14 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   res.status(201).json({ taskId: task.id })
 })
 
-// GET /tasks — bounded history with optional exact stored-value filters
+// GET /tasks — bounded history with exact stored-value filters.
+// before is an exclusive task ID anchor (independent of filters). Missing anchors
+// return JSON 404. X-Next-Before is present only when another page exists; reuse
+// that ID as before with the same filters. The response body remains an array.
 tasksRouter.get('/', (req: Request, res: Response) => {
   const repo = req.query.repo
   const status = req.query.status
+  const before = req.query.before
   if (repo !== undefined && (typeof repo !== 'string' || !repo.trim())) {
     res.status(400).json({ error: 'repo must be a non-empty string' })
     return
@@ -178,6 +182,14 @@ tasksRouter.get('/', (req: Request, res: Response) => {
     res.status(400).json({ error: 'status must be queued, running, completed, or failed' })
     return
   }
+  if (before !== undefined && (typeof before !== 'string' || !before.trim())) {
+    res.status(400).json({ error: 'before must be a non-empty task ID' })
+    return
+  }
+  if (before !== undefined && !db.prepare('SELECT id FROM tasks WHERE id = ?').get(before)) {
+    res.status(404).json({ error: 'before task not found' })
+    return
+  }
   const rawLimit = req.query.limit
   const parsedLimit = typeof rawLimit === 'string' && rawLimit.trim() !== ''
     ? Number(rawLimit)
@@ -185,7 +197,12 @@ tasksRouter.get('/', (req: Request, res: Response) => {
   const limit = Number.isFinite(parsedLimit)
     ? Math.min(100, Math.max(1, Math.floor(parsedLimit)))
     : 20
-  res.json(listTasks(limit, { repo, status: status as TaskStatus | undefined }))
+  const rows = listTasks(limit + 1, { repo, status: status as TaskStatus | undefined, before })
+  if (rows.length > limit) {
+    rows.pop()
+    res.setHeader('X-Next-Before', rows[rows.length - 1].id)
+  }
+  res.json(rows)
 })
 
 // GET /tasks/:id — single task
