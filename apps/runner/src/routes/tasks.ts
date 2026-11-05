@@ -1,3 +1,5 @@
+import { realpathSync, statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import type { AgentTask, RunRequest } from '@forge/shared'
@@ -7,6 +9,7 @@ import {
   getTask,
   listTasks,
   countActiveTasks,
+  listActiveTasks,
   updateTaskStatus,
 } from '../db/queries.js'
 import { createEmitter, getEmitter } from '../agent/stream.js'
@@ -45,13 +48,39 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
+  let repo: string
+  try {
+    repo = realpathSync(body.repo)
+    if (!statSync(repo).isDirectory()) throw new Error('not a directory')
+  } catch {
+    res.status(400).json({ error: 'repo must be an existing directory' })
+    return
+  }
+  if (!isRepoAllowed(repo)) {
+    res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
+    return
+  }
+
+  // Keep admission synchronous through insertTask: queued login probes also
+  // own their checkout. Resolve older rows too, since they may contain aliases.
+  const conflict = listActiveTasks().find(task => {
+    let activeRepo: string
+    try { activeRepo = realpathSync(task.repo) }
+    catch { activeRepo = resolve(task.repo) }
+    return activeRepo === repo
+  })
+  if (conflict) {
+    res.status(409).json({ error: 'repo checkout already has an active task', taskId: conflict.id })
+    return
+  }
+
   // Disk guard: the runner git-pulls into the repo and the agent writes files
   // there plus a growing SQLite WAL. If the disk fills, git and the agent
   // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
   // cannot read the filesystem — never crash the request over a stat error.
   const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
   try {
-    const freeBytes = freeDiskBytes(body.repo)
+    const freeBytes = freeDiskBytes(repo)
     if (freeBytes < minFreeBytes) {
       res.status(507).json({
         error: 'insufficient disk space to accept new tasks',
@@ -71,7 +100,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   let branch: string
   try {
-    branch = body.branch ?? getCurrentBranch(body.repo)
+    branch = body.branch ?? getCurrentBranch(repo)
   } catch (err: any) {
     res.status(400).json({ error: `could not determine branch: ${err.message}` })
     return
@@ -81,7 +110,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     id: uuidv4(),
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
-    repo: body.repo,
+    repo,
     branch,
     prompt: body.prompt,
     status: 'queued',
