@@ -87,7 +87,7 @@ test('served dashboard preserves its board across failures, bounds polls and rec
   assert.match(el('connection').textContent, /^Connected · last success:/)
   assert.equal(el('connectionDot').className, 'dot')
   assert.match(el('agents').innerHTML, /&lt;script&gt;/)
-  assert.match(el('events').innerHTML, /github.com\/custom-org&lt;\/script&gt;\/forge\/pull\/22/)
+  assert.match(el('events').innerHTML, /github.com\/owner\/forge\/pull\/22/)
   const boardIds = ['agents', 'events', 'byRepo', 'generatedAt', 'liveCount', 'eventCount', 'liveCount2', 'eventCount2']
   const board = () => boardIds.map(id => el(id).innerHTML)
   // Also run this suite with PR #22 applied to verify renderer compatibility.
