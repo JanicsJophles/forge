@@ -14,8 +14,10 @@ export function decodeTail(bytes: Buffer | null): string {
 }
 
 export function readTaskProjection(db: Database.Database, id: string, view: TaskView) {
-  const provider = (db.pragma('table_info(tasks)') as { name: string }[])
-    .some(column => column.name === 'provider') ? ', provider' : ''
+  const columns = db.pragma('table_info(tasks)') as { name: string }[]
+  const provider = columns.some(column => column.name === 'provider') ? ', provider' : ''
+  const autoCommit = columns.some(column => column.name === 'auto_commit')
+    ? ', auto_commit AS autoCommit' : ''
   const detail = view === 'detail'
     ? `, repo, branch, prompt,
        substr(CAST(COALESCE(log, '') AS BLOB), -${LOG_TAIL_BYTES}) AS log_tail,
@@ -24,8 +26,9 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
   const row = db.prepare(`SELECT id, status, created_at AS createdAt,
     started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha,
     error_message AS errorMessage
-    ${provider}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
+    ${provider}${autoCommit}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) return undefined
+  row.autoCommit = row.autoCommit == null ? undefined : Boolean(row.autoCommit)
   if (view === 'detail') {
     row.log = decodeTail(row.log_tail as Buffer | null)
     row.log_truncated = Boolean(row.log_truncated)
