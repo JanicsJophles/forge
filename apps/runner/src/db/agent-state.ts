@@ -162,7 +162,10 @@ export interface CheckpointInput {
 const DEFAULT_TTL_SECONDS = 3600 // 1h — agents that go idle this long are stale
 
 export function checkpoint(input: CheckpointInput): AgentState {
-  const ttl = Math.max(60, input.ttlSeconds ?? DEFAULT_TTL_SECONDS)
+  const requestedTtl = input.ttlSeconds ?? DEFAULT_TTL_SECONDS
+  const ttl = Number.isFinite(requestedTtl)
+    ? Math.min(604800, Math.max(60, Math.floor(requestedTtl)))
+    : DEFAULT_TTL_SECONDS
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
   const existing = db.prepare('SELECT * FROM agent_state WHERE agent_id = ?').get(input.agentId) as AgentStateRow | undefined
