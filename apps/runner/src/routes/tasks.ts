@@ -19,6 +19,8 @@ import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
 
+import { streamTask } from './task-stream.js'
+
 export const tasksRouter = Router()
 // Versioned contract, not a claim that either CLI is authenticated.
 tasksRouter.get('/capabilities', (_req, res) => {
@@ -156,62 +158,7 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
     return
   }
 
-  // SSE headers
-  res.setHeader('Content-Type', 'text/event-stream')
-  res.setHeader('Cache-Control', 'no-cache')
-  res.setHeader('Connection', 'keep-alive')
-  res.setHeader('X-Accel-Buffering', 'no') // disable nginx buffering
-  res.flushHeaders()
-
-  function send(event: string, data: string) {
-    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-  }
-
-  // Catch-up: send existing log immediately for reconnects
-  if (task.log) {
-    send('log', task.log)
-  }
-
-  // If already terminal, send final status and close
-  if (task.status === 'completed' || task.status === 'failed') {
-    send(task.status === 'completed' ? 'complete' : 'error', task.status)
-    res.end()
-    return
-  }
-
-  const emitter = getEmitter(task.id)
-  if (!emitter) {
-    // Task was running but emitter is gone (e.g. process crashed) — close
-    send('error', 'task emitter not found — task may have crashed')
-    res.end()
-    return
-  }
-
-  // Ping every 15s to keep connection alive through proxies/load balancers
-  const ping = setInterval(() => {
-    res.write(': ping\n\n')
-  }, 15_000)
-
-  function onEvent(taskEvent: { type: string; data: string }) {
-    send(taskEvent.type, taskEvent.data)
-  }
-
-  function onDone() {
-    cleanup()
-    res.end()
-  }
-
-  function cleanup() {
-    clearInterval(ping)
-    emitter!.off('event', onEvent)
-    emitter!.off('done', onDone)
-  }
-
-  emitter.on('event', onEvent)
-  emitter.on('done', onDone)
-
-  // Clean up if client disconnects early
-  req.on('close', cleanup)
+  streamTask(req, res, task, getEmitter(task.id))
 })
 
 // DELETE /tasks/:id — kill active task
