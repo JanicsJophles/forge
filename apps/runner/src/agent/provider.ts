@@ -2,11 +2,19 @@ import { execFileSync, spawn } from 'node:child_process'
 import { userInfo } from 'node:os'
 import type { AgentProvider } from '@forge/shared'
 
-export function providerCommand(provider: AgentProvider): { command: string; args: string[] } {
+export function providerCommand(provider: AgentProvider, model?: string): { command: string; args: string[] } {
   switch (provider) {
-    case 'claude': return { command: 'claude', args: ['--dangerously-skip-permissions', '-p'] }
+    // The model flag is a separate argv token (never a shell string) and only
+    // appears when a model is supplied; omitting it preserves the default args.
+    case 'claude': return {
+      command: 'claude',
+      args: ['--dangerously-skip-permissions', ...(model ? ['--model', model] : []), '-p'],
+    }
     // Stdin keeps user prompts out of argv; workspace-write preserves the sandbox.
-    case 'codex': return { command: 'codex', args: ['exec', '--sandbox', 'workspace-write', '-'] }
+    case 'codex': return {
+      command: 'codex',
+      args: ['exec', '--sandbox', 'workspace-write', ...(model ? ['-m', model] : []), '-'],
+    }
     default: throw new Error('Unsupported agent provider')
   }
 }

@@ -84,7 +84,7 @@ export async function runTask(
 
   let proc: ChildProcessWithoutNullStreams
   try {
-    const command = providerCommand(provider)
+    const command = providerCommand(provider, task.model)
     proc = deps.spawn(
       command.command,
       provider === 'claude' ? [...command.args, task.prompt] : command.args,
