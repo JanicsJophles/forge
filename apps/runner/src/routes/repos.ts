@@ -1,40 +1,56 @@
 import { Router, Response } from 'express'
 import { readdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import { config } from '../config.js'
 import { getCurrentBranch, hasUncommittedChanges } from '../agent/git.js'
 
 export const reposRouter = Router()
 
-// GET /repos — list all git repos inside ALLOWED_REPO_PATHS
-reposRouter.get('/', (_req, res: Response) => {
-  const repos: { name: string; path: string; currentBranch: string; dirty: boolean }[] = []
+interface RepoSummary {
+  name: string
+  path: string
+  currentBranch: string
+  dirty: boolean
+  statusError?: 'unavailable'
+}
 
-  for (const basePath of config.allowedRepoPaths) {
-    let entries
+// Accept git readers separately so discovery can be tested without a live runner.
+export function discoverRepos(
+  allowedPaths: string[],
+  git = { getCurrentBranch, hasUncommittedChanges },
+): RepoSummary[] {
+  const paths = new Set<string>()
+  for (const allowedPath of allowedPaths) {
+    const basePath = resolve(allowedPath)
+    if (existsSync(join(basePath, '.git'))) paths.add(basePath)
     try {
-      entries = readdirSync(basePath, { withFileTypes: true })
+      for (const entry of readdirSync(basePath, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        const fullPath = join(basePath, entry.name)
+        // .git may be a directory or a worktree's pointer file.
+        if (existsSync(join(fullPath, '.git'))) paths.add(fullPath)
+      }
     } catch {
-      continue  // basePath doesn't exist — skip silently
-    }
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const fullPath = join(basePath, entry.name)
-      if (!existsSync(join(fullPath, '.git'))) continue
-
-      let currentBranch = 'unknown'
-      try { currentBranch = getCurrentBranch(fullPath) } catch { /* empty */ }
-
-      // Fail-safe: if the dirty check throws, treat the repo as clean rather
-      // than failing the whole request — the flag is advisory for dispatchers.
-      let dirty = false
-      try { dirty = hasUncommittedChanges(fullPath) } catch { /* empty */ }
-
-      repos.push({ name: entry.name, path: fullPath, currentBranch, dirty })
+      // A missing or unreadable container must not hide other allowed roots.
     }
   }
 
-  repos.sort((a, b) => a.name.localeCompare(b.name))
-  res.json(repos)
+  const repos: RepoSummary[] = []
+  for (const path of paths) {
+    let currentBranch = 'unknown'
+    try { currentBranch = git.getCurrentBranch(path) } catch { /* empty */ }
+
+    // Dispatchers must never interpret an unavailable status as safe to use.
+    let dirty = true
+    let statusError: RepoSummary['statusError']
+    try { dirty = git.hasUncommittedChanges(path) } catch { statusError = 'unavailable' }
+    repos.push({ name: basename(path), path, currentBranch, dirty,
+      ...(statusError ? { statusError } : {}) })
+  }
+  return repos.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path))
+}
+
+// GET /repos — list allowed git checkout roots and their immediate children.
+reposRouter.get('/', (_req, res: Response) => {
+  res.json(discoverRepos(config.allowedRepoPaths))
 })
