@@ -1,6 +1,6 @@
 import { realpathSync, statSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import type { AgentTask, RunRequest } from '@forge/shared'
@@ -107,18 +107,24 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
   // cannot read the filesystem — never crash the request over a stat error.
   const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
-  try {
-    const freeBytes = freeDiskBytes(repo)
-    if (freeBytes < minFreeBytes) {
-      res.status(507).json({
-        error: 'insufficient disk space to accept new tasks',
-        freeMb: Math.floor(freeBytes / (1024 * 1024)),
-        requiredMb: config.minFreeDiskMb,
-      })
-      return
+  for (const volume of ['repo', 'data'] as const) {
+    try {
+      // Resolve the open database itself so a symlinked forge.db checks the
+      // filesystem that actually stores SQLite and its adjacent WAL.
+      const directory = volume === 'repo' ? repo : dirname(realpathSync(db.name))
+      const freeBytes = freeDiskBytes(directory)
+      if (freeBytes < minFreeBytes) {
+        res.status(507).json({
+          error: 'insufficient disk space to accept new tasks',
+          volume,
+          freeMb: Math.floor(freeBytes / (1024 * 1024)),
+          requiredMb: config.minFreeDiskMb,
+        })
+        return
+      }
+    } catch (err: any) {
+      console.warn(`[runner] ${volume} disk-space check failed, measurement unknown: ${err.message}`)
     }
-  } catch (err: any) {
-    console.warn(`[runner] disk-space check failed for ${body.repo}, allowing task: ${err.message}`)
   }
 
   if (countActiveTasks() >= config.maxConcurrentTasks) {
