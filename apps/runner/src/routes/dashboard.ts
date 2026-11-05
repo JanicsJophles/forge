@@ -259,10 +259,13 @@ const HTML = `<!DOCTYPE html>
       return d.innerHTML;
     }
     function relTime(iso) {
-      if (!iso) return '';
-      const t = new Date(iso.replace(' ', 'T') + 'Z');
-      const now = new Date();
-      const sec = Math.floor((now - t) / 1000);
+      if (typeof iso !== 'string' || !iso.trim()) return '—';
+      let timestamp = iso.trim().replace(' ', 'T');
+      // SQLite timestamps are UTC but omit the zone. Preserve explicit ISO zones.
+      if (!/(Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(timestamp)) timestamp += 'Z';
+      const t = Date.parse(timestamp);
+      if (!Number.isFinite(t)) return '—';
+      const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
       if (sec < 60) return sec + 's ago';
       if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
