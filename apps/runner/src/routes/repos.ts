@@ -1,6 +1,6 @@
 import { Router, Response } from 'express'
-import { readdirSync, existsSync } from 'node:fs'
-import { basename, join, resolve } from 'node:path'
+import { readdirSync, existsSync, realpathSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import { config } from '../config.js'
 import { getCurrentBranch, hasUncommittedChanges } from '../agent/git.js'
 
@@ -20,15 +20,23 @@ export function discoverRepos(
   git = { getCurrentBranch, hasUncommittedChanges },
 ): RepoSummary[] {
   const paths = new Set<string>()
-  for (const allowedPath of allowedPaths) {
-    const basePath = resolve(allowedPath)
-    if (existsSync(join(basePath, '.git'))) paths.add(basePath)
+  const addCheckout = (candidate: string) => {
     try {
+      const path = realpathSync(candidate)
+      // .git may be a directory or a worktree's pointer file.
+      if (existsSync(join(path, '.git'))) paths.add(path)
+    } catch {
+      // A broken or disappearing alias must not hide other checkouts.
+    }
+  }
+  for (const allowedPath of allowedPaths) {
+    try {
+      const basePath = realpathSync(allowedPath)
+      addCheckout(basePath)
       for (const entry of readdirSync(basePath, { withFileTypes: true })) {
         if (!entry.isDirectory()) continue
         const fullPath = join(basePath, entry.name)
-        // .git may be a directory or a worktree's pointer file.
-        if (existsSync(join(fullPath, '.git'))) paths.add(fullPath)
+        addCheckout(fullPath)
       }
     } catch {
       // A missing or unreadable container must not hide other allowed roots.
