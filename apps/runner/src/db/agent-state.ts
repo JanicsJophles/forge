@@ -281,7 +281,7 @@ export function insertEvent(input: EventInput): AgentEvent {
 }
 
 export interface ListEventsFilter {
-  since?: string        // ISO timestamp lower bound
+  since?: string        // Inclusive ISO or SQLite UTC timestamp; invalid nonempty values match nothing
   repo?: string
   ticket?: string
   eventType?: string
@@ -292,7 +292,11 @@ export function listEvents(filter: ListEventsFilter = {}): AgentEvent[] {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (filter.since) {
-    where.push("created_at >= @since")
+    // Normalize the bound only, keeping the created_at index usable. SQLite
+    // handles Z/offsets and returns NULL for unparseable timestamps (no matches).
+    // Trim fractional zeroes so an exact second remains inclusive while a
+    // fractional bound still excludes events earlier within that second.
+    where.push("created_at >= rtrim(rtrim(strftime('%Y-%m-%d %H:%M:%f', @since), '0'), '.')")
     params.since = filter.since
   }
   if (filter.repo) {
