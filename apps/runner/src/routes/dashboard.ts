@@ -323,6 +323,17 @@ const HTML = `<!DOCTYPE html>
       if (element.open) openEventDetails.add(id);
       else openEventDetails.delete(id);
     }
+    function pullRequestUrl(repo, number) {
+      if (typeof repo !== 'string' || !Number.isSafeInteger(number) || number <= 0) return null;
+      // Only an explicit owner/repo supplies an owner; absolute checkout paths use the fallback.
+      const parts = repo.split('/');
+      const owner = parts.length === 2 && parts[0] ? parts[0] : GITHUB_ORG;
+      const name = parts[parts.length - 1];
+      if (repo.startsWith('//') || (!repo.startsWith('/') && parts.length > 2)) return null;
+      // Validate components before placing them in an HTML attribute or URL path.
+      if (!/^[a-zA-Z0-9_-]+$/.test(owner) || !/^[a-zA-Z0-9_.-]+$/.test(name) || name === '.' || name === '..') return null;
+      return 'https://github.com/' + encodeURIComponent(owner) + '/' + encodeURIComponent(name) + '/pull/' + number;
+    }
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
@@ -332,11 +343,10 @@ const HTML = `<!DOCTYPE html>
       root.innerHTML = events.map(e => {
         const typeClass = 'type-' + e.eventType.replace(/[^a-z_]/g, '');
         let prHtml = '';
-        if (e.prNumber && e.repo) {
-          const repoSlug = e.repo.replace(/^.*\\//, '');
-          prHtml = '<span class="pr"><a target="_blank" href="https://github.com/' + escape(GITHUB_ORG) + '/' + escape(repoSlug) + '/pull/' + escape(e.prNumber) + '">PR#' + escape(e.prNumber) + '</a></span>';
-        } else if (e.prNumber) {
-          prHtml = '<span class="pr">PR#' + escape(e.prNumber) + '</span>';
+        if (e.prNumber) {
+          const url = pullRequestUrl(e.repo, e.prNumber);
+          const label = 'PR#' + escape(e.prNumber);
+          prHtml = '<span class="pr">' + (url ? '<a target="_blank" href="' + escape(url) + '">' + label + '</a>' : label) + '</span>';
         }
         return [
           '<div class="event-row">',
