@@ -146,6 +146,7 @@ function rowToEvent(row: AgentEventRow): AgentEvent {
 
 // ---- upsert / read agent_state ---------------------------------------------
 
+// Nullable fields use patch semantics: undefined retains, null clears, values replace.
 export interface CheckpointInput {
   agentId: string
   agentType?: string
@@ -171,19 +172,26 @@ export function checkpoint(input: CheckpointInput): AgentState {
     db.prepare(`
       UPDATE agent_state SET
         agent_type    = COALESCE(@agent_type, agent_type),
-        repo          = COALESCE(@repo, repo),
-        branch        = COALESCE(@branch, branch),
-        intent        = COALESCE(@intent, intent),
-        files_touched = COALESCE(@files_touched, files_touched),
-        ticket        = COALESCE(@ticket, ticket),
-        status        = COALESCE(@status, status),
+        repo          = CASE WHEN @set_repo THEN @repo ELSE repo END,
+        branch        = CASE WHEN @set_branch THEN @branch ELSE branch END,
+        intent        = CASE WHEN @set_intent THEN @intent ELSE intent END,
+        files_touched = CASE WHEN @set_files_touched THEN @files_touched ELSE files_touched END,
+        ticket        = CASE WHEN @set_ticket THEN @ticket ELSE ticket END,
+        status        = CASE WHEN @set_status THEN @status ELSE status END,
         expires_at    = @expires_at,
         updated_at    = datetime('now'),
-        metadata      = COALESCE(@metadata, metadata)
+        metadata      = CASE WHEN @set_metadata THEN @metadata ELSE metadata END
       WHERE agent_id = @agent_id
     `).run({
       agent_id: input.agentId,
       agent_type: input.agentType ?? null,
+      set_repo: Number(input.repo !== undefined),
+      set_branch: Number(input.branch !== undefined),
+      set_intent: Number(input.intent !== undefined),
+      set_files_touched: Number(input.filesTouched !== undefined),
+      set_ticket: Number(input.ticket !== undefined),
+      set_status: Number(input.status !== undefined),
+      set_metadata: Number(input.metadata !== undefined),
       repo: input.repo ?? null,
       branch: input.branch ?? null,
       intent: input.intent ?? null,

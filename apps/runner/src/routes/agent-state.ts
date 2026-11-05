@@ -44,14 +44,14 @@ agentStateRouter.post('/agent-state/checkpoint', (req: Request, res: Response) =
   const input: CheckpointInput = {
     agentId: b.agentId.trim(),
     agentType: typeof b.agentType === 'string' ? b.agentType : undefined,
-    repo: typeof b.repo === 'string' ? b.repo : undefined,
-    branch: typeof b.branch === 'string' ? b.branch : undefined,
-    intent: typeof b.intent === 'string' ? b.intent : undefined,
-    filesTouched: Array.isArray(b.filesTouched) ? b.filesTouched.filter((x: unknown) => typeof x === 'string') as string[] : undefined,
-    ticket: typeof b.ticket === 'string' ? b.ticket : undefined,
-    status: typeof b.status === 'string' ? b.status : undefined,
+    repo: b.repo === null || typeof b.repo === 'string' ? b.repo : undefined,
+    branch: b.branch === null || typeof b.branch === 'string' ? b.branch : undefined,
+    intent: b.intent === null || typeof b.intent === 'string' ? b.intent : undefined,
+    filesTouched: b.filesTouched === null ? null : Array.isArray(b.filesTouched) ? b.filesTouched.filter((x: unknown) => typeof x === 'string') as string[] : undefined,
+    ticket: b.ticket === null || typeof b.ticket === 'string' ? b.ticket : undefined,
+    status: b.status === null || typeof b.status === 'string' ? b.status : undefined,
     ttlSeconds: typeof b.ttlSeconds === 'number' ? b.ttlSeconds : undefined,
-    metadata: b.metadata && typeof b.metadata === 'object' ? b.metadata : undefined,
+    metadata: b.metadata === null ? null : b.metadata && typeof b.metadata === 'object' ? b.metadata : undefined,
   }
   const result = checkpoint(input)
   res.json(result)
