@@ -2,11 +2,11 @@ import 'dotenv/config'
 import path from 'node:path'
 import { realpathSync } from 'node:fs'
 
-function positiveIntegerEnv(name: string, fallback: number): number {
+function positiveIntegerEnv(name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
   const raw = process.env[name]
   if (raw === undefined) return fallback
-  const parsed = parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = Number(raw)
+  if (!/^[0-9]+$/.test(raw) || !Number.isSafeInteger(parsed) || parsed <= 0 || parsed > maximum) {
     console.warn(`[config] Invalid ${name}; using default ${fallback}.`)
     return fallback
   }
@@ -33,11 +33,11 @@ if (!rawPaths.trim()) {
 }
 
 export const config = {
-  port: positiveIntegerEnv('PORT', 5000),
+  port: positiveIntegerEnv('PORT', 5000, 65535),
   taskTimeoutMs: taskTimeoutEnv(),
   host: process.env.HOST ?? '0.0.0.0',
   maxConcurrentTasks: positiveIntegerEnv('MAX_CONCURRENT_TASKS', 2),
-  minFreeDiskMb: positiveIntegerEnv('MIN_FREE_DISK_MB', 2048),
+  minFreeDiskMb: positiveIntegerEnv('MIN_FREE_DISK_MB', 2048, Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024))),
   allowedRepoPaths: rawPaths
     .split(',')
     .map(p => p.trim())
