@@ -1,6 +1,17 @@
 import 'dotenv/config'
 import path from 'node:path'
 
+function positiveIntegerEnv(name: string, fallback: number): number {
+  const raw = process.env[name]
+  if (raw === undefined) return fallback
+  const parsed = parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(`[config] Invalid ${name}; using default ${fallback}.`)
+    return fallback
+  }
+  return parsed
+}
+
 const rawPaths = process.env.ALLOWED_REPO_PATHS ?? ''
 if (!rawPaths.trim()) {
   console.error('[config] FATAL: ALLOWED_REPO_PATHS is not set. Refusing to start.')
@@ -8,10 +19,10 @@ if (!rawPaths.trim()) {
 }
 
 export const config = {
-  port: parseInt(process.env.PORT ?? '5000', 10),
+  port: positiveIntegerEnv('PORT', 5000),
   host: process.env.HOST ?? '0.0.0.0',
-  maxConcurrentTasks: parseInt(process.env.MAX_CONCURRENT_TASKS ?? '2', 10),
-  minFreeDiskMb: parseInt(process.env.MIN_FREE_DISK_MB ?? '2048', 10),
+  maxConcurrentTasks: positiveIntegerEnv('MAX_CONCURRENT_TASKS', 2),
+  minFreeDiskMb: positiveIntegerEnv('MIN_FREE_DISK_MB', 2048),
   allowedRepoPaths: rawPaths
     .split(',')
     .map(p => p.trim())
