@@ -95,6 +95,7 @@ const TASK_NEWEST_FIRST = 'julianday(created_at) DESC, rowid DESC'
 export interface TaskHistoryFilters {
   repo?: string
   status?: TaskStatus
+  before?: string
 }
 
 export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTask[] {
@@ -107,6 +108,11 @@ export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTa
   if (filters.status !== undefined) {
     conditions.push('status = ?')
     parameters.push(filters.status)
+  }
+  if (filters.before !== undefined) {
+    conditions.push(`(julianday(created_at), rowid) <
+      (SELECT julianday(created_at), rowid FROM tasks WHERE id = ?)`)
+    parameters.push(filters.before)
   }
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const rows = db.prepare(`
