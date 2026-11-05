@@ -16,6 +16,10 @@ import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 import { exitReason } from './exit-reason.js'
 
+// Bounds are UTF-16 code units, matching JavaScript string length.
+const MAX_PENDING_OUTPUT = 16 * 1024
+const DECODE_INPUT_BYTES = 1024
+
 // Active termination callbacks stay registered until the child closes.
 const activeProcs = new Map<string, () => void>()
 
@@ -128,7 +132,7 @@ export async function runTask(
   proc.stdin.on('error', () => { /* early process exit is handled below */ })
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
-  // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
+  // Flush at the pending limit and every 500ms for low-volume output.
   const stdoutDecoder = new StringDecoder('utf8')
   const stderrDecoder = new StringDecoder('utf8')
   const formatStderr = stderrLines()
@@ -145,10 +149,35 @@ export async function runTask(
     const chunk = buffer
     buffer = ''
     if (fullLog.length < MAX_CAPTURE_LOG) {
-      fullLog += chunk
+      fullLog += chunk.slice(0, MAX_CAPTURE_LOG - fullLog.length)
     }
     appendLog(task.id, chunk)
     emitter.emit('event', makeEvent('log', chunk))
+  }
+
+  function appendOutput(text: string) {
+    let offset = 0
+    while (offset < text.length) {
+      let end = Math.min(text.length, offset + MAX_PENDING_OUTPUT - buffer.length)
+      // Keep surrogate pairs together so each SSE chunk is independently valid.
+      const last = text.charCodeAt(end - 1)
+      if (end < text.length && last >= 0xd800 && last <= 0xdbff) end--
+      if (end === offset) {
+        flush()
+        continue
+      }
+      buffer += text.slice(offset, end)
+      offset = end
+      if (buffer.length === MAX_PENDING_OUTPUT) flush()
+    }
+  }
+
+  function receive(data: Buffer, decoder: StringDecoder, stderr = false) {
+    // Bound decoding and stderr prefix expansion even for a huge input chunk.
+    for (let offset = 0; offset < data.length; offset += DECODE_INPUT_BYTES) {
+      const text = decoder.write(data.subarray(offset, offset + DECODE_INPUT_BYTES))
+      appendOutput(stderr ? formatStderr(text) : text)
+    }
   }
 
   flushTimer = setInterval(flush, 500)
@@ -188,11 +217,11 @@ export async function runTask(
   proc.on('exit', () => { procExited = true })
 
   proc.stdout.on('data', (data: Buffer) => {
-    buffer += stdoutDecoder.write(data)
+    receive(data, stdoutDecoder)
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    buffer += formatStderr(stderrDecoder.write(data))
+    receive(data, stderrDecoder, true)
   })
 
   proc.on('close', async (code, signal) => {
@@ -201,8 +230,8 @@ export async function runTask(
     settled = true
     if (timeoutTimer) deps.clearTimeout(timeoutTimer)
     if (killTimer) deps.clearTimeout(killTimer)
-    buffer += stdoutDecoder.end()
-    buffer += formatStderr(stderrDecoder.end())
+    appendOutput(stdoutDecoder.end())
+    appendOutput(formatStderr(stderrDecoder.end()))
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     flush()
