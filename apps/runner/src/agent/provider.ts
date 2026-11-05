@@ -28,15 +28,52 @@ export function executionIdentity(username: string) {
   return { uid, gid, env }
 }
 
-export function checkCodexLogin(options: ReturnType<typeof executionIdentity>): Promise<void> {
+interface LoginProbeDependencies {
+  spawn: typeof spawn
+  setTimeout: (callback: () => void, milliseconds: number) => ReturnType<typeof setTimeout>
+  clearTimeout: (timer: ReturnType<typeof setTimeout>) => void
+}
+
+export function checkCodexLogin(
+  options: ReturnType<typeof executionIdentity>,
+  dependencies: LoginProbeDependencies = { spawn, setTimeout, clearTimeout },
+): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('codex', ['login', 'status'], { ...options, stdio: 'ignore' })
-    const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('Codex login check timed out')) }, 10_000)
-    proc.once('error', () => { clearTimeout(timer); reject(new Error('Codex CLI is unavailable for the configured runner account')) })
-    proc.once('close', code => {
-      clearTimeout(timer)
-      if (code === 0) resolve()
-      else reject(new Error('Codex is not signed in. Run codex login --device-auth as CODEX_RUN_USER on the runner host.'))
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = (error?: Error) => {
+      if (settled) return
+      settled = true
+      if (timer !== undefined) dependencies.clearTimeout(timer)
+      if (error) reject(error)
+      else resolve()
+    }
+    const unavailable = () => finish(new Error('Codex CLI is unavailable for the configured runner account'))
+    let proc: ReturnType<typeof spawn>
+    try {
+      proc = dependencies.spawn('codex', ['login', 'status'], { ...options, stdio: 'ignore' })
+    } catch {
+      unavailable()
+      return
+    }
+    proc.once('error', unavailable)
+    proc.once('close', (code, signal) => {
+      if (signal) {
+        // Only expose signal identifiers, never arbitrary child diagnostics.
+        const safeSignal = /^SIG[A-Z0-9]+$/.test(signal) ? signal : 'unknown'
+        finish(new Error(`Codex login probe failed (signal ${safeSignal})`))
+      } else if (code === 0) finish()
+      // Codex uses exit 1 for both missing auth and probe/configuration errors.
+      // Without a distinct unauthenticated status, do not claim credentials are missing.
+      else {
+        const safeCode = Number.isInteger(code) ? String(code) : 'unknown'
+        finish(new Error(`Codex login probe failed (exit code ${safeCode})`))
+      }
     })
+    timer = dependencies.setTimeout(() => {
+      if (settled) return
+      finish(new Error('Codex login check timed out'))
+      proc.kill('SIGKILL')
+    }, 10_000)
   })
 }
