@@ -73,6 +73,7 @@ const HTML = `<!DOCTYPE html>
     }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
     section {
+      min-width: 0;
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -192,6 +193,11 @@ const HTML = `<!DOCTYPE html>
       color: var(--text-mute);
       font-size: 11px;
     }
+    .event-row { overflow-wrap: anywhere; }
+    .event-details { margin-top: 6px; min-width: 0; }
+    .event-details summary { cursor: pointer; color: var(--text-dim); }
+    .event-details summary:focus-visible { outline: 2px solid var(--accent); }
+    .event-details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
     .by-repo {
       padding: 12px 16px;
       display: flex;
@@ -299,6 +305,14 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
+    const openEventDetails = new Set();
+    function rememberEventDetails(element) {
+      // Ignore queued toggle events from nodes replaced by a poll/filter render.
+      if (!element.isConnected) return;
+      const id = element.dataset.eventId;
+      if (element.open) openEventDetails.add(id);
+      else openEventDetails.delete(id);
+    }
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
@@ -322,6 +336,12 @@ const HTML = `<!DOCTYPE html>
             e.ticket ? '<span class="ticket">' + escape(e.ticket) + '</span>' : '',
             prHtml,
             e.agentId ? '<span class="agent">by ' + escape(e.agentId.slice(0, 24)) + '</span>' : '',
+            e.details && typeof e.details === 'object' && Object.keys(e.details).length
+              ? '<details class="event-details"' +
+                (Number.isSafeInteger(e.id) ? ' data-event-id="' + e.id + '" ontoggle="rememberEventDetails(this)"' : '') +
+                (openEventDetails.has(String(e.id)) ? ' open' : '') +
+                '><summary>Event details</summary><pre>' + escape(JSON.stringify(e.details, null, 2)) + '</pre></details>'
+              : '',
           '</div>'
         ].join('');
       }).join('');
@@ -342,6 +362,10 @@ const HTML = `<!DOCTYPE html>
     function renderSnapshot() {
       if (!latestSnapshot) return;
       const d = latestSnapshot;
+      const eventIds = new Set(d.recentEvents.map(e => String(e.id)));
+      for (const id of openEventDetails) {
+        if (!eventIds.has(id)) openEventDetails.delete(id);
+      }
       const repos = new Set([
         ...Object.keys(d.liveByRepo),
         ...d.liveAgents.map(a => a.repo),
