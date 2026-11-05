@@ -1,4 +1,5 @@
 import { realpathSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
@@ -18,6 +19,19 @@ import { getCurrentBranch } from '../agent/git.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
+
+// A worktree's top level is its lock identity; the shared Git common-dir is
+// deliberately unsuitable because linked worktrees can run independently.
+function checkoutRoot(directory: string): string {
+  const env = { ...process.env }
+  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_CEILING_DIRECTORIES']) {
+    delete env[key]
+  }
+  return realpathSync(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, env,
+  }).trim())
+}
 
 export const tasksRouter = Router()
 // Versioned contract, not a claim that either CLI is authenticated.
@@ -61,12 +75,26 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
+  try {
+    repo = checkoutRoot(repo)
+  } catch {
+    res.status(400).json({ error: 'repo must be inside a Git checkout with a discoverable root' })
+    return
+  }
+  if (!isRepoAllowed(repo)) {
+    res.status(400).json({ error: 'repo checkout root is not in ALLOWED_REPO_PATHS' })
+    return
+  }
+
   // Keep admission synchronous through insertTask: queued login probes also
   // own their checkout. Resolve older rows too, since they may contain aliases.
   const conflict = listActiveTasks().find(task => {
     let activeRepo: string
-    try { activeRepo = realpathSync(task.repo) }
-    catch { activeRepo = resolve(task.repo) }
+    try { activeRepo = checkoutRoot(task.repo) }
+    catch {
+      try { activeRepo = realpathSync(task.repo) }
+      catch { activeRepo = resolve(task.repo) }
+    }
     return activeRepo === repo
   })
   if (conflict) {
