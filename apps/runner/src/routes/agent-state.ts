@@ -26,12 +26,21 @@ import {
   type CheckpointInput,
   type EventInput,
 } from '../db/agent-state.js'
+import { db } from '../db/schema.js'
 import { listActiveTasks } from '../db/queries.js'
 
 export const agentStateRouter = Router()
 
 function badRequest(res: Response, msg: string): void {
   res.status(400).json({ error: msg })
+}
+
+// Use the same parser as listEvents, rather than Date.parse's different formats.
+function validSince(value: unknown): boolean {
+  if (value === undefined) return true
+  if (typeof value !== 'string' || !value.trim()) return false
+  const result = db.prepare("SELECT strftime('%Y-%m-%d %H:%M:%f', ?) AS timestamp").get(value) as { timestamp: string | null }
+  return result.timestamp !== null
 }
 
 // ---- agent_state -----------------------------------------------------------
@@ -112,6 +121,9 @@ agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
     }
     afterId = Number(rawAfterId)
   }
+  if (!validSince(req.query.since)) {
+    return badRequest(res, 'since must be a single parseable SQLite UTC or ISO timestamp')
+  }
   const since = typeof req.query.since === 'string' ? req.query.since : undefined
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
@@ -133,6 +145,9 @@ agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
 // ---- combined dashboard ----------------------------------------------------
 
 agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
+  if (!validSince(req.query.since)) {
+    return badRequest(res, 'since must be a single parseable SQLite UTC or ISO timestamp')
+  }
   const since = typeof req.query.since === 'string'
     ? req.query.since
     : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
