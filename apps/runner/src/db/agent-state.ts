@@ -292,6 +292,7 @@ export function insertEvent(input: EventInput): AgentEvent {
 }
 
 export interface ListEventsFilter {
+  agentId?: string      // Exact identity, applied before the bounded window
   afterId?: number     // Exclusive event ID cursor; oldest unseen events first
   since?: string        // Inclusive ISO or SQLite UTC timestamp; invalid nonempty values match nothing
   repo?: string
@@ -303,6 +304,10 @@ export interface ListEventsFilter {
 export function listEvents(filter: ListEventsFilter = {}): AgentEvent[] {
   const where: string[] = []
   const params: Record<string, unknown> = {}
+  if (filter.agentId !== undefined) {
+    where.push("agent_id = @agent_id")
+    params.agent_id = filter.agentId
+  }
   if (filter.afterId !== undefined) {
     where.push("id > @after_id")
     params.after_id = filter.afterId
