@@ -88,13 +88,17 @@ function listRowToTask(row: TaskListRow): AgentTask {
   }
 }
 
+// Normalize SQLite UTC and ISO timestamps only for sorting; retain the stored text.
+// rowid makes equal instants deterministic, with later insertions first.
+const TASK_NEWEST_FIRST = 'julianday(created_at) DESC, rowid DESC'
+
 export function listTasks(limit = 20): AgentTask[] {
   const rows = db.prepare(`
     SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
            error_message, commit_sha, provider, auto_commit,
            substr(CAST(COALESCE(log, '') AS BLOB), -${LIST_LOG_TAIL_BYTES}) AS log_tail,
            length(CAST(COALESCE(log, '') AS BLOB)) AS log_bytes
-    FROM tasks ORDER BY created_at DESC LIMIT ?
+    FROM tasks ORDER BY ${TASK_NEWEST_FIRST} LIMIT ?
   `).all(limit) as TaskListRow[]
   return rows.map(listRowToTask)
 }
@@ -151,7 +155,7 @@ export function listActiveTasks(): LiveTaskSummary[] {
     `SELECT id, repo, branch, status, provider, prompt, created_at
        FROM tasks
       WHERE status IN ('queued', 'running')
-      ORDER BY created_at DESC`
+      ORDER BY ${TASK_NEWEST_FIRST}`
   ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'prompt' | 'created_at'>>
 
   return rows.map(row => {
