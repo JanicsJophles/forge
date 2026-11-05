@@ -292,6 +292,7 @@ export function insertEvent(input: EventInput): AgentEvent {
 }
 
 export interface ListEventsFilter {
+  afterId?: number     // Exclusive event ID cursor; oldest unseen events first
   since?: string        // Inclusive ISO or SQLite UTC timestamp; invalid nonempty values match nothing
   repo?: string
   ticket?: string
@@ -302,6 +303,10 @@ export interface ListEventsFilter {
 export function listEvents(filter: ListEventsFilter = {}): AgentEvent[] {
   const where: string[] = []
   const params: Record<string, unknown> = {}
+  if (filter.afterId !== undefined) {
+    where.push("id > @after_id")
+    params.after_id = filter.afterId
+  }
   if (filter.since) {
     // Normalize the bound only, keeping the created_at index usable. SQLite
     // handles Z/offsets and returns NULL for unparseable timestamps (no matches).
@@ -325,7 +330,8 @@ export function listEvents(filter: ListEventsFilter = {}): AgentEvent[] {
   const limit = Math.min(Math.max(1, filter.limit ?? 100), 1000)
   params.limit = limit
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  const rows = db.prepare(`SELECT * FROM agent_events ${clause} ORDER BY created_at DESC, id DESC LIMIT @limit`).all(params) as AgentEventRow[]
+  const order = filter.afterId !== undefined ? 'id ASC' : 'created_at DESC, id DESC'
+  const rows = db.prepare(`SELECT * FROM agent_events ${clause} ORDER BY ${order} LIMIT @limit`).all(params) as AgentEventRow[]
   return rows.map(rowToEvent)
 }
 
