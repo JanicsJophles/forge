@@ -92,14 +92,30 @@ function listRowToTask(row: TaskListRow): AgentTask {
 // rowid makes equal instants deterministic, with later insertions first.
 const TASK_NEWEST_FIRST = 'julianday(created_at) DESC, rowid DESC'
 
-export function listTasks(limit = 20): AgentTask[] {
+export interface TaskHistoryFilters {
+  repo?: string
+  status?: TaskStatus
+}
+
+export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTask[] {
+  const conditions: string[] = []
+  const parameters: (string | number)[] = []
+  if (filters.repo !== undefined) {
+    conditions.push('repo = ?')
+    parameters.push(filters.repo)
+  }
+  if (filters.status !== undefined) {
+    conditions.push('status = ?')
+    parameters.push(filters.status)
+  }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const rows = db.prepare(`
     SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
            error_message, commit_sha, provider, auto_commit,
            substr(CAST(COALESCE(log, '') AS BLOB), -${LIST_LOG_TAIL_BYTES}) AS log_tail,
            length(CAST(COALESCE(log, '') AS BLOB)) AS log_bytes
-    FROM tasks ORDER BY ${TASK_NEWEST_FIRST} LIMIT ?
-  `).all(limit) as TaskListRow[]
+    FROM tasks ${where} ORDER BY ${TASK_NEWEST_FIRST} LIMIT ?
+  `).all(...parameters, limit) as TaskListRow[]
   return rows.map(listRowToTask)
 }
 
