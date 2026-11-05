@@ -14,13 +14,13 @@ import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 import { exitReason } from './exit-reason.js'
 
-// Active process handles keyed by taskId for SIGTERM support
-const activeProcs = new Map<string, ReturnType<typeof spawn>>()
+// Active termination callbacks stay registered until the child closes.
+const activeProcs = new Map<string, () => void>()
 
 export function killTask(taskId: string): boolean {
-  const proc = activeProcs.get(taskId)
-  if (!proc) return false
-  proc.kill('SIGTERM')
+  const terminate = activeProcs.get(taskId)
+  if (!terminate) return false
+  terminate()
   return true
 }
 
@@ -28,11 +28,15 @@ export function countActiveProcs(): number {
   return activeProcs.size
 }
 
-export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
+// Runtime injection keeps lifecycle tests independent of real agent processes.
+const runtime = { spawn, executionIdentity, gitPull, gitCommit, setTimeout, clearTimeout }
+export async function runTask(
+  task: AgentTask, emitter: EventEmitter, deps = runtime,
+): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
   try {
-    identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
+    identity = deps.executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
     if (provider === 'codex') await checkCodexLogin(identity)
   } catch (err) {
     const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
@@ -53,7 +57,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   }
   // --- git pull before starting ---
   try {
-    gitPull(task.repo, identity)
+    deps.gitPull(task.repo, identity)
     const pullMsg = `[forge] git pull completed\n`
     appendLog(task.id, pullMsg)
     emitter.emit('event', makeEvent('log', pullMsg))
@@ -76,7 +80,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   emitter.emit('event', makeEvent('log', startMsg))
 
   const command = providerCommand(provider)
-  const proc = spawn(
+  const proc = deps.spawn(
     command.command,
     provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
@@ -85,11 +89,12 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     }
   )
 
-  activeProcs.set(task.id, proc)
   let settled = false
   // Tracks whether the child has actually exited, so the SIGKILL escalation
   // can be skipped once SIGTERM succeeds.
   let procExited = false
+  let terminationReason: string | null = null
+  let spawnError: Error | null = null
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null
   let killTimer: ReturnType<typeof setTimeout> | null = null
   proc.stdin.on('error', () => { /* early process exit is handled below */ })
@@ -124,39 +129,33 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   const parsedTimeout = Number.parseInt(process.env.TASK_TIMEOUT_MS ?? '', 10)
   const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 1800000
   const KILL_GRACE_MS = 10000
-  timeoutTimer = setTimeout(() => {
-    if (settled) return
-    settled = true
-    if (flushTimer) clearInterval(flushTimer)
-    flush()
-
-    const termMsg = `[forge] ${provider} agent exceeded timeout of ${timeoutMs}ms — sending SIGTERM\n`
+  function terminate(reason: string) {
+    if (settled || procExited || terminationReason) return
+    terminationReason = reason
+    setErrorMessage(task.id, reason)
+    const termMsg = `[forge] ${reason} — sending SIGTERM\n`
     appendLog(task.id, termMsg)
     emitter.emit('event', makeEvent('log', termMsg))
-    proc.kill('SIGTERM')
-
-    // Escalate to SIGKILL if the child hasn't exited within the grace period.
-    killTimer = setTimeout(() => {
-      if (procExited) return
-      const killMsg = `[forge] agent did not exit after SIGTERM — sending SIGKILL\n`
-      appendLog(task.id, killMsg)
-      emitter.emit('event', makeEvent('log', killMsg))
+    // Install escalation before sending SIGTERM: even an immediate close can
+    // then clear the timer through the single completion path.
+    killTimer = deps.setTimeout(() => {
+      if (procExited || settled) return
+      const msg = '[forge] agent did not exit after SIGTERM — sending SIGKILL\n'
+      appendLog(task.id, msg)
+      emitter.emit('event', makeEvent('log', msg))
       proc.kill('SIGKILL')
     }, KILL_GRACE_MS)
-    if (typeof killTimer.unref === 'function') killTimer.unref()
-
-    // Free the concurrency slot immediately — the proc 'close' handler will
-    // early-return on the `settled` guard, so do the cleanup here.
-    activeProcs.delete(task.id)
-    const errMsg = `${provider} timed out after ${timeoutMs}ms`
-    appendLog(task.id, `[forge] ${errMsg}\n`)
-    setErrorMessage(task.id, errMsg)
-    updateTaskStatus(task.id, 'failed')
-    emitter.emit('event', makeEvent('error', `[forge] ${errMsg}\n`))
-    emitter.emit('done')
-    removeEmitter(task.id)
+    killTimer.unref?.()
+    proc.kill('SIGTERM')
+  }
+  activeProcs.set(task.id, () => terminate(`${provider} task cancelled`))
+  timeoutTimer = deps.setTimeout(() => {
+    terminate(`${provider} timed out after ${timeoutMs}ms`)
   }, timeoutMs)
-  if (typeof timeoutTimer.unref === 'function') timeoutTimer.unref()
+  timeoutTimer.unref?.()
+
+  // Exit confirms the agent cannot write; close also confirms stdio is drained.
+  proc.on('exit', () => { procExited = true })
 
   proc.stdout.on('data', (data: Buffer) => {
     buffer += data.toString()
@@ -169,21 +168,21 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
   proc.on('close', async (code, signal) => {
     procExited = true
-    if (timeoutTimer) clearTimeout(timeoutTimer)
-    if (killTimer) clearTimeout(killTimer)
     if (settled) return
     settled = true
+    if (timeoutTimer) deps.clearTimeout(timeoutTimer)
+    if (killTimer) deps.clearTimeout(killTimer)
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     flush()
 
     activeProcs.delete(task.id)
 
-    if (code === 0) {
+    if (code === 0 && !terminationReason && !spawnError) {
       // Auto-commit if enabled
       if (task.autoCommit ?? config.autoCommit) {
         try {
-          const sha = gitCommit(
+          const sha = deps.gitCommit(
             task.repo,
             `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`, identity
           )
@@ -207,7 +206,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       updateTaskStatus(task.id, 'completed')
       emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
     } else {
-      const reason = exitReason(provider, code, signal)
+      const reason = terminationReason
+        ? `${terminationReason}; ${exitReason(provider, code, signal)}`
+        : spawnError
+          ? `failed to spawn ${provider}: ${spawnError.message}. Check installation and login for the configured runner user.`
+          : exitReason(provider, code, signal)
       const errMsg = `[forge] ${reason}\n`
       appendLog(task.id, errMsg)
       setErrorMessage(task.id, reason)
@@ -220,22 +223,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     removeEmitter(task.id)
   })
 
-  proc.on('error', (err) => {
-    procExited = true
-    if (timeoutTimer) clearTimeout(timeoutTimer)
-    if (killTimer) clearTimeout(killTimer)
-    if (settled) return
-    settled = true
-    if (flushTimer) clearInterval(flushTimer)
-    flush()
-    activeProcs.delete(task.id)
-
-    const errMsg = `[forge] failed to spawn ${provider}: ${err.message}. Check installation and login for the configured runner user.\n`
-    appendLog(task.id, errMsg)
-    setErrorMessage(task.id, err.message)
-    updateTaskStatus(task.id, 'failed')
-    emitter.emit('event', makeEvent('error', errMsg))
-    emitter.emit('done')
-    removeEmitter(task.id)
-  })
+  // Node emits close after error too. An error after launch is not proof of
+  // exit (for example a failed kill), so only close releases capacity.
+  proc.on('error', (err) => { spawnError = err })
 }
