@@ -179,6 +179,7 @@ export async function runTask(
     activeProcs.delete(task.id)
 
     if (code === 0 && !terminationReason && !spawnError) {
+      let commitFailed = false
       // Auto-commit if enabled
       if (task.autoCommit ?? config.autoCommit) {
         try {
@@ -196,15 +197,21 @@ export async function runTask(
             appendLog(task.id, noopMsg)
             emitter.emit('event', makeEvent('log', noopMsg))
           }
-        } catch (err: any) {
-          const errMsg = `[forge] git commit failed: ${err.message}\n`
+        } catch (err: unknown) {
+          commitFailed = true
+          const reason = `git commit failed: ${err instanceof Error ? err.message : String(err)}`
+          const errMsg = `[forge] ${reason}\n`
           appendLog(task.id, errMsg)
-          emitter.emit('event', makeEvent('log', errMsg))
+          setErrorMessage(task.id, reason)
+          updateTaskStatus(task.id, 'failed')
+          emitter.emit('event', makeEvent('error', errMsg))
         }
       }
 
-      updateTaskStatus(task.id, 'completed')
-      emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
+      if (!commitFailed) {
+        updateTaskStatus(task.id, 'completed')
+        emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
+      }
     } else {
       const reason = terminationReason
         ? `${terminationReason}; ${exitReason(provider, code, signal)}`
