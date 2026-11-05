@@ -23,83 +23,105 @@ tasksRouter.get('/capabilities', (_req, res) => {
 })
 
 // POST /tasks — create and kick off a task
-tasksRouter.post('/', (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as RunRequest
+export function createTaskHandler(hooks = { insertTask, createEmitter, runTask }) {
+  return (req: Request, res: Response) => {
+    const body = (req.body ?? {}) as RunRequest
 
-  if (body.provider !== undefined && body.provider !== 'claude' && body.provider !== 'codex') {
-    res.status(400).json({ error: 'provider must be claude or codex' })
-    return
-  }
-  if (body.autoCommit !== undefined && typeof body.autoCommit !== 'boolean') {
-    res.status(400).json({ error: 'autoCommit must be a boolean' })
-    return
-  }
-
-  if (typeof body.repo !== 'string' || !body.repo.trim() || typeof body.prompt !== 'string' || !body.prompt.trim()) {
-    res.status(400).json({ error: 'repo and prompt are required' })
-    return
-  }
-
-  if (!isRepoAllowed(body.repo)) {
-    res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
-    return
-  }
-
-  // Disk guard: the runner git-pulls into the repo and the agent writes files
-  // there plus a growing SQLite WAL. If the disk fills, git and the agent
-  // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
-  // cannot read the filesystem — never crash the request over a stat error.
-  const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
-  try {
-    const freeBytes = freeDiskBytes(body.repo)
-    if (freeBytes < minFreeBytes) {
-      res.status(507).json({
-        error: 'insufficient disk space to accept new tasks',
-        freeMb: Math.floor(freeBytes / (1024 * 1024)),
-        requiredMb: config.minFreeDiskMb,
-      })
+    if (body.provider !== undefined && body.provider !== 'claude' && body.provider !== 'codex') {
+      res.status(400).json({ error: 'provider must be claude or codex' })
       return
     }
-  } catch (err: any) {
-    console.warn(`[runner] disk-space check failed for ${body.repo}, allowing task: ${err.message}`)
+    if (body.autoCommit !== undefined && typeof body.autoCommit !== 'boolean') {
+      res.status(400).json({ error: 'autoCommit must be a boolean' })
+      return
+    }
+
+    if (typeof body.repo !== 'string' || !body.repo.trim() || typeof body.prompt !== 'string' || !body.prompt.trim()) {
+      res.status(400).json({ error: 'repo and prompt are required' })
+      return
+    }
+
+    if (!isRepoAllowed(body.repo)) {
+      res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
+      return
+    }
+
+    // Disk guard: the runner git-pulls into the repo and the agent writes files
+    // there plus a growing SQLite WAL. If the disk fills, git and the agent
+    // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
+    // cannot read the filesystem — never crash the request over a stat error.
+    const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
+    try {
+      const freeBytes = freeDiskBytes(body.repo)
+      if (freeBytes < minFreeBytes) {
+        res.status(507).json({
+          error: 'insufficient disk space to accept new tasks',
+          freeMb: Math.floor(freeBytes / (1024 * 1024)),
+          requiredMb: config.minFreeDiskMb,
+        })
+        return
+      }
+    } catch (err: any) {
+      console.warn(`[runner] disk-space check failed for ${body.repo}, allowing task: ${err.message}`)
+    }
+
+    if (countActiveTasks() >= config.maxConcurrentTasks) {
+      res.status(429).json({ error: 'max concurrent tasks reached' })
+      return
+    }
+
+    let branch: string
+    try {
+      branch = getCurrentBranch(body.repo)
+    } catch (err: any) {
+      res.status(400).json({ error: `could not determine branch: ${err.message}` })
+      return
+    }
+
+    if (!branch || branch === 'HEAD') {
+      res.status(400).json({ error: 'repo checkout is detached HEAD; check out a named branch first' })
+      return
+    }
+    if (body.branch !== undefined) {
+      if (typeof body.branch !== 'string' || !body.branch.trim()) {
+        res.status(400).json({ error: 'branch must be a nonempty string' })
+        return
+      }
+      if (body.branch !== branch) {
+        res.status(409).json({
+          error: 'requested branch does not match the current checkout',
+          requested: body.branch,
+          actual: branch,
+        })
+        return
+      }
+    }
+
+    const task: AgentTask = {
+      id: uuidv4(),
+      provider: body.provider ?? 'claude',
+      autoCommit: body.autoCommit ?? config.autoCommit,
+      repo: body.repo,
+      branch,
+      prompt: body.prompt,
+      status: 'queued',
+      log: '',
+      createdAt: new Date().toISOString(),
+    }
+
+    hooks.insertTask(task)
+
+    const emitter = hooks.createEmitter(task.id)
+
+    // Run async — do not await here
+    hooks.runTask(task, emitter).catch((err) => {
+      console.error('[runner] uncaught error in runTask', err)
+    })
+
+    res.status(201).json({ taskId: task.id })
   }
-
-  if (countActiveTasks() >= config.maxConcurrentTasks) {
-    res.status(429).json({ error: 'max concurrent tasks reached' })
-    return
-  }
-
-  let branch: string
-  try {
-    branch = body.branch ?? getCurrentBranch(body.repo)
-  } catch (err: any) {
-    res.status(400).json({ error: `could not determine branch: ${err.message}` })
-    return
-  }
-
-  const task: AgentTask = {
-    id: uuidv4(),
-    provider: body.provider ?? 'claude',
-    autoCommit: body.autoCommit ?? config.autoCommit,
-    repo: body.repo,
-    branch,
-    prompt: body.prompt,
-    status: 'queued',
-    log: '',
-    createdAt: new Date().toISOString(),
-  }
-
-  insertTask(task)
-
-  const emitter = createEmitter(task.id)
-
-  // Run async — do not await here
-  runTask(task, emitter).catch((err) => {
-    console.error('[runner] uncaught error in runTask', err)
-  })
-
-  res.status(201).json({ taskId: task.id })
-})
+}
+tasksRouter.post('/', createTaskHandler())
 
 // GET /tasks — last 20
 tasksRouter.get('/', (_req: Request, res: Response) => {
