@@ -28,9 +28,11 @@ test('canonical checkout admission reserves queued probes and releases terminal 
   const originalSpawn = childProcess.spawn
   const originalExec = childProcess.execSync
   const originalExecFile = childProcess.execFileSync
-  // Fake provider login stays pending until explicitly failed. No real CLI,
-  // credential lookup, git mutation, or child process runs during admission.
-  childProcess.execFileSync = (() => 'fake:x:1234:1234::/tmp:/bin/sh') as typeof childProcess.execFileSync
+  // Fake provider login stays pending until explicitly failed. Only Git
+  // discovery runs real child processes, against these temporary repositories.
+  childProcess.execFileSync = ((file: string, args: string[], options: object) => file === 'git'
+    ? originalExecFile(file, args, options)
+    : 'fake:x:1234:1234::/tmp:/bin/sh') as typeof childProcess.execFileSync
   childProcess.execSync = (() => { gitCalls++; return '' }) as typeof childProcess.execSync
   childProcess.spawn = (() => {
     const probe = new EventEmitter()
