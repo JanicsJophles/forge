@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import type { EventEmitter } from 'node:events'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
@@ -28,11 +29,15 @@ export function countActiveProcs(): number {
   return activeProcs.size
 }
 
-export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
+// Match the runtime seam used by the termination lifecycle tests.
+const runtime = { spawn, executionIdentity, gitPull, gitCommit, setTimeout, clearTimeout }
+export async function runTask(
+  task: AgentTask, emitter: EventEmitter, deps = runtime,
+): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
   try {
-    identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
+    identity = deps.executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
     if (provider === 'codex') await checkCodexLogin(identity)
   } catch (err) {
     const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
@@ -53,7 +58,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   }
   // --- git pull before starting ---
   try {
-    gitPull(task.repo, identity)
+    deps.gitPull(task.repo, identity)
     const pullMsg = `[forge] git pull completed\n`
     appendLog(task.id, pullMsg)
     emitter.emit('event', makeEvent('log', pullMsg))
@@ -76,7 +81,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   emitter.emit('event', makeEvent('log', startMsg))
 
   const command = providerCommand(provider)
-  const proc = spawn(
+  const proc = deps.spawn(
     command.command,
     provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
@@ -96,7 +101,15 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
+  const stdoutDecoder = new StringDecoder('utf8')
+  const stderrDecoder = new StringDecoder('utf8')
+  const tagStderr = (text: string) => text.split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
   let buffer = ''
+
+  function drainDecoders() {
+    buffer += stdoutDecoder.end()
+    buffer += tagStderr(stderrDecoder.end())
+  }
   let flushTimer: ReturnType<typeof setInterval> | null = null
   // Full accumulated log, kept in-memory so the stuckpoint-capture hook can
   // read the whole transcript at close without a DB round-trip. Capped to
@@ -128,6 +141,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     if (settled) return
     settled = true
     if (flushTimer) clearInterval(flushTimer)
+    drainDecoders()
     flush()
 
     const termMsg = `[forge] ${provider} agent exceeded timeout of ${timeoutMs}ms — sending SIGTERM\n`
@@ -159,11 +173,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   if (typeof timeoutTimer.unref === 'function') timeoutTimer.unref()
 
   proc.stdout.on('data', (data: Buffer) => {
-    buffer += data.toString()
+    buffer += stdoutDecoder.write(data)
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    const text = data.toString().split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
+    const text = tagStderr(stderrDecoder.write(data))
     buffer += text
   })
 
@@ -175,6 +189,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     settled = true
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
+    drainDecoders()
     flush()
 
     activeProcs.delete(task.id)
@@ -183,7 +198,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       // Auto-commit if enabled
       if (task.autoCommit ?? config.autoCommit) {
         try {
-          const sha = gitCommit(
+          const sha = deps.gitCommit(
             task.repo,
             `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`, identity
           )
@@ -227,6 +242,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     if (settled) return
     settled = true
     if (flushTimer) clearInterval(flushTimer)
+    drainDecoders()
     flush()
     activeProcs.delete(task.id)
 
