@@ -31,15 +31,16 @@ export function countActiveProcs(): number {
 }
 
 // Runtime injection keeps lifecycle tests independent of real agent processes.
-const runtime = { spawn, executionIdentity, gitPull, gitCommit, setTimeout, clearTimeout }
+const runtime = { spawn, executionIdentity, gitPull, gitCommit, setTimeout, clearTimeout, checkCodexLogin }
 export async function runTask(
-  task: AgentTask, emitter: EventEmitter, deps = runtime,
+  task: AgentTask, emitter: EventEmitter,
+  deps: Omit<typeof runtime, 'checkCodexLogin'> & { checkCodexLogin?: typeof checkCodexLogin } = runtime,
 ): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
   try {
     identity = deps.executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
-    if (provider === 'codex') await checkCodexLogin(identity)
+    if (provider === 'codex') await (deps.checkCodexLogin ?? checkCodexLogin)(identity)
   } catch (err) {
     const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
     appendLog(task.id, message + '\n')
@@ -125,8 +126,6 @@ export async function runTask(
   let spawnError: Error | null = null
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null
   let killTimer: ReturnType<typeof setTimeout> | null = null
-  proc.stdin.on('error', () => { /* early process exit is handled below */ })
-  proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
   const stdoutDecoder = new StringDecoder('utf8')
@@ -264,4 +263,25 @@ export async function runTask(
   // Node emits close after error too. An error after launch is not proof of
   // exit (for example a failed kill), so only close releases capacity.
   proc.on('error', (err) => { spawnError = err })
+
+  // Install the entire lifecycle before writing: end can throw or synchronously
+  // report failure, and SIGTERM may immediately close the child in either case.
+  function promptDeliveryFailed() {
+    // A closed pipe after cancellation/exit is expected. Keep the first reason
+    // authoritative and never persist raw errors, which may contain the prompt.
+    if (provider !== 'codex' || settled || procExited || terminationReason || spawnError) return
+    terminate('codex prompt delivery failed')
+  }
+  proc.stdin.on('error', promptDeliveryFailed)
+  try {
+    if (provider === 'codex') {
+      proc.stdin.end(task.prompt, (error?: Error | null) => {
+        if (error) promptDeliveryFailed()
+      })
+    } else {
+      proc.stdin.end()
+    }
+  } catch {
+    promptDeliveryFailed()
+  }
 }
