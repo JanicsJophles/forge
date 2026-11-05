@@ -66,7 +66,7 @@ test('repository selection uses the latest cached snapshot through absence, fail
   next = snapshot('forge')
   await vm.runInContext('refresh()', context)
   assert.equal(el('repoFilter').value, hostile)
-  assert.match(el('agents').innerHTML, /no matching live agents/)
+  assert.match(el('agents').innerHTML, /no matching agent checkpoints/)
   assert.match(el('events').innerHTML, /no matching events/)
   assert.equal(el('liveCount').textContent, '0')
   assert.ok(el('repoFilter').innerHTML.includes('&lt;script&gt;'))
