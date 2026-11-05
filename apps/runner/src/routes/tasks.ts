@@ -231,7 +231,7 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
 
 // DELETE /tasks/:id — kill active task
 tasksRouter.delete('/:id', (req: Request, res: Response) => {
-  const task = getTask(req.params.id)
+  const task = readTaskProjection(db, req.params.id, 'status') as { status: TaskStatus } | undefined
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
@@ -242,12 +242,12 @@ tasksRouter.delete('/:id', (req: Request, res: Response) => {
     return
   }
 
-  const killed = killTask(task.id)
+  const killed = killTask(req.params.id)
   if (!killed) {
     // Persist the reason now; runTask owns terminal events and setup cleanup.
     db.transaction(() => {
-      setErrorMessage(task.id, 'Task cancelled before launch')
-      updateTaskStatus(task.id, 'failed')
+      setErrorMessage(req.params.id, 'Task cancelled before launch')
+      updateTaskStatus(req.params.id, 'failed')
     })()
   }
 
