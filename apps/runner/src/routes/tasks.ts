@@ -18,14 +18,12 @@ import { getCurrentBranch } from '../agent/git.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
+import { capabilitiesRouter } from './capabilities.js'
 
 import { streamTask } from './task-stream.js'
 
 export const tasksRouter = Router()
-// Versioned contract, not a claim that either CLI is authenticated.
-tasksRouter.get('/capabilities', (_req, res) => {
-  res.json({ providerSelectionVersion: 1, providers: ['claude', 'codex'] })
-})
+tasksRouter.use(capabilitiesRouter)
 
 // POST /tasks — create and kick off a task
 tasksRouter.post('/', (req: Request, res: Response) => {
