@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
@@ -79,15 +79,41 @@ export async function runTask(
   appendLog(task.id, startMsg)
   emitter.emit('event', makeEvent('log', startMsg))
 
-  const command = providerCommand(provider)
-  const proc = deps.spawn(
-    command.command,
-    provider === 'claude' ? [...command.args, task.prompt] : command.args,
-    {
-      cwd: task.repo,
-      ...identity,
+  let proc: ChildProcessWithoutNullStreams
+  try {
+    const command = providerCommand(provider)
+    proc = deps.spawn(
+      command.command,
+      provider === 'claude' ? [...command.args, task.prompt] : command.args,
+      {
+        cwd: task.repo,
+        ...identity,
+      }
+    )
+  } catch (err) {
+    // Spawn errors can include arguments (including the prompt). Persist only
+    // known codes and static guidance, never the raw message or thrown value.
+    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
+    const reasons: Record<string, string> = {
+      EACCES: 'EACCES: check executable permissions and the configured runner user',
+      EPERM: 'EPERM: check executable permissions and the configured runner user',
+      ENOENT: 'ENOENT: check the provider installation and repository directory',
+      EINVAL: 'EINVAL: check provider launch options',
+      ERR_INVALID_ARG_TYPE: 'ERR_INVALID_ARG_TYPE: check provider launch option types',
+      ERR_INVALID_ARG_VALUE: 'ERR_INVALID_ARG_VALUE: check provider launch option values',
+      ERR_OUT_OF_RANGE: 'ERR_OUT_OF_RANGE: check provider launch option ranges',
     }
-  )
+    const detail = code && Object.hasOwn(reasons, code)
+      ? reasons[code] : 'check provider installation, repository directory, and runner launch options'
+    const message = `[forge] failed to launch ${provider}: ${detail}`
+    appendLog(task.id, message + '\n')
+    setErrorMessage(task.id, message)
+    updateTaskStatus(task.id, 'failed')
+    emitter.emit('event', makeEvent('error', message))
+    emitter.emit('done')
+    removeEmitter(task.id)
+    return
+  }
 
   let settled = false
   // Tracks whether the child has actually exited, so the SIGKILL escalation
