@@ -10,8 +10,8 @@
 //   GET  /agent-events              list recent events (filterable)
 //
 //   GET  /agent-context             combined snapshot: live agents +
-//                                   last 24h of events. The "one call that
-//                                   tells you everything" endpoint.
+//                                   up to 200 newest events from the last 24h,
+//                                   with explicit truncation metadata.
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -129,7 +129,8 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
   const live = listAgentState({})
-  const events = listEvents({ since, limit: 200 })
+  const eventWindow = listEvents({ since, limit: 201 })
+  const events = eventWindow.slice(0, 200)
   const liveTasks = listActiveTasks()
 
   // Sweep dust on every call. Cheap on small tables.
@@ -162,6 +163,9 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     liveTasksByRepo,
     recentEvents: events,
     recentEventsCount: events.length,
+    recentEventsTruncated: eventWindow.length > 200,
+    // Snapshot boundary only: timestamp ordering means this is not a paging cursor.
+    recentEventsOldestId: events.at(-1)?.id ?? null,
     since,
   })
 })
