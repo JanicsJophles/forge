@@ -101,9 +101,16 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   res.status(201).json({ taskId: task.id })
 })
 
-// GET /tasks — last 20
-tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+// GET /tasks — bounded history, defaulting to the last 20
+tasksRouter.get('/', (req: Request, res: Response) => {
+  const rawLimit = req.query.limit
+  const parsedLimit = typeof rawLimit === 'string' && rawLimit.trim() !== ''
+    ? Number(rawLimit)
+    : NaN
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(100, Math.max(1, Math.floor(parsedLimit)))
+    : 20
+  res.json(listTasks(limit))
 })
 
 // GET /tasks/:id — single task
