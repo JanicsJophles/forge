@@ -1,0 +1,79 @@
+import type { Request, Response } from 'express'
+import type { AgentTask } from '@forge/shared'
+import type { EventEmitter } from 'node:events'
+
+// No application queue: one bounded frame may enter Node's response buffer.
+// On backpressure destroy only this connection; never stall the task emitter.
+export function streamTask(
+  req: Request, res: Response, task: Pick<AgentTask, 'log' | 'status'>,
+  emitter?: EventEmitter,
+) {
+  let closed = false
+  let ping: ReturnType<typeof setInterval> | undefined
+  function cleanup() {
+    if (closed) return
+    closed = true
+    clearInterval(ping)
+    emitter?.off('event', onEvent)
+    emitter?.off('done', onDone)
+    req.off('close', cleanup)
+    res.off('close', cleanup)
+    res.off('error', cleanup)
+  }
+  function write(frame: string): boolean {
+    if (closed) return false
+    try {
+      if (res.write(frame)) return !closed
+    } catch {
+      // A broken socket must not throw through the shared task emitter.
+    }
+    cleanup()
+    res.destroy()
+    return false
+  }
+  function send(event: string, data: string): boolean {
+    // JSON escaping expands each code unit by at most six bytes (~12 KiB).
+    // Keep surrogate pairs together so concatenated log events round-trip.
+    const chunkSize = 2048
+    let offset = 0
+    do {
+      let end = Math.min(offset + chunkSize, data.length)
+      if (end < data.length && /[\uD800-\uDBFF]/.test(data[end - 1])) end--
+      if (!write(`event: ${event}\ndata: ${JSON.stringify(data.slice(offset, end))}\n\n`)) return false
+      offset = end
+    } while (offset < data.length)
+    return true
+  }
+  function onEvent(taskEvent: { type: string; data: string }) {
+    send(taskEvent.type, taskEvent.data)
+  }
+  function onDone() {
+    if (closed) return
+    cleanup()
+    res.end()
+  }
+
+  req.on('close', cleanup)
+  res.on('close', cleanup)
+  res.on('error', cleanup)
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.setHeader('X-Accel-Buffering', 'no')
+  res.flushHeaders()
+
+  if (task.log && !send('log', task.log)) return
+  if (task.status === 'completed' || task.status === 'failed') {
+    if (send(task.status === 'completed' ? 'complete' : 'error', task.status)) onDone()
+    return
+  }
+  if (!emitter) {
+    if (send('error', 'task emitter not found — task may have crashed')) onDone()
+    return
+  }
+  if (closed) return
+  emitter.on('event', onEvent)
+  emitter.on('done', onDone)
+  ping = setInterval(() => { write(': ping\n\n') }, 15_000)
+}
+
