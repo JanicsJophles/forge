@@ -317,7 +317,7 @@ export function listEvents(filter: ListEventsFilter = {}): AgentEvent[] {
   const limit = Math.min(Math.max(1, filter.limit ?? 100), 1000)
   params.limit = limit
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  const rows = db.prepare(`SELECT * FROM agent_events ${clause} ORDER BY created_at DESC LIMIT @limit`).all(params) as AgentEventRow[]
+  const rows = db.prepare(`SELECT * FROM agent_events ${clause} ORDER BY created_at DESC, id DESC LIMIT @limit`).all(params) as AgentEventRow[]
   return rows.map(rowToEvent)
 }
 
