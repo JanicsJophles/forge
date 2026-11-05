@@ -14,8 +14,32 @@ function exec(cmd: string, cwd: string, opts: RunOpts = {}): string {
   }).trim()
 }
 
+// Read probes run on the request thread: cap each at two seconds so a stuck
+// Git process (including a filesystem monitor hook) cannot block it indefinitely.
+const GIT_READ_TIMEOUT_MS = 2_000
+
+function readGit(args: string[], repoPath: string, operation: string, opts: RunOpts = {}): string {
+  try {
+    return execFileSync("git", args, {
+      cwd: repoPath,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_READ_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false",
+        SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" },
+      ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
+      ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
+    }).trim()
+  } catch {
+    // Never attach the original error: callers may persist or return this message,
+    // and child-process errors can contain stderr, paths, URLs, and credentials.
+    throw new Error(`Git ${operation} unavailable; read probe failed or exceeded 2000ms`)
+  }
+}
+
 export function getCurrentBranch(repoPath: string): string {
-  return exec("git rev-parse --abbrev-ref HEAD", repoPath)
+  return readGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath, "branch")
 }
 
 /**
@@ -103,6 +127,6 @@ export function gitCommit(repoPath: string, message: string, opts: RunOpts = {})
 }
 
 export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {
-  const output = exec("git status --porcelain", repoPath, opts)
+  const output = readGit(["status", "--porcelain"], repoPath, "status", opts)
   return output.length > 0
 }
