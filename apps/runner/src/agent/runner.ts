@@ -152,8 +152,7 @@ export async function runTask(
   // A hung `claude -p` / `codex` child would otherwise run forever, holding a
   // MAX_CONCURRENT_TASKS slot and blocking same-repo serialization until a
   // manual pm2 restart. On timeout we SIGTERM, wait a grace period, then SIGKILL.
-  const parsedTimeout = Number.parseInt(process.env.TASK_TIMEOUT_MS ?? '', 10)
-  const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 1800000
+  const timeoutMs = config.taskTimeoutMs
   const KILL_GRACE_MS = 10000
   function terminate(reason: string) {
     if (settled || procExited || terminationReason) return

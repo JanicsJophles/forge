@@ -13,6 +13,19 @@ function positiveIntegerEnv(name: string, fallback: number): number {
   return parsed
 }
 
+// Node clamps delays above the signed 32-bit timer limit to 1ms.
+function taskTimeoutEnv(): number {
+  const raw = process.env.TASK_TIMEOUT_MS
+  const fallback = 1800000
+  if (raw === undefined) return fallback
+  const parsed = Number(raw)
+  if (!/^\d+$/.test(raw) || !Number.isInteger(parsed) || parsed < 1 || parsed > 2147483647) {
+    console.warn(`[config] Invalid TASK_TIMEOUT_MS; using default ${fallback}.`)
+    return fallback
+  }
+  return parsed
+}
+
 const rawPaths = process.env.ALLOWED_REPO_PATHS ?? ''
 if (!rawPaths.trim()) {
   console.error('[config] FATAL: ALLOWED_REPO_PATHS is not set. Refusing to start.')
@@ -21,6 +34,7 @@ if (!rawPaths.trim()) {
 
 export const config = {
   port: positiveIntegerEnv('PORT', 5000),
+  taskTimeoutMs: taskTimeoutEnv(),
   host: process.env.HOST ?? '0.0.0.0',
   maxConcurrentTasks: positiveIntegerEnv('MAX_CONCURRENT_TASKS', 2),
   minFreeDiskMb: positiveIntegerEnv('MIN_FREE_DISK_MB', 2048),
