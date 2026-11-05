@@ -97,12 +97,24 @@ agentStateRouter.post('/agent-events', (req: Request, res: Response) => {
 })
 
 agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
+  const rawAfterId = req.query.afterId
+  let afterId: number | undefined
+  if (rawAfterId !== undefined) {
+    if (typeof rawAfterId !== 'string' || !/^[0-9]+$/.test(rawAfterId) ||
+        !Number.isSafeInteger(Number(rawAfterId))) {
+      return badRequest(res, 'afterId must be a single nonnegative safe integer decimal')
+    }
+    if (req.query.since !== undefined) {
+      return badRequest(res, 'since and afterId cannot be used together')
+    }
+    afterId = Number(rawAfterId)
+  }
   const since = typeof req.query.since === 'string' ? req.query.since : undefined
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
   const eventType = typeof req.query.type === 'string' ? req.query.type : undefined
   const limit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined
-  const rows = listEvents({ since, repo, ticket, eventType, limit: Number.isFinite(limit) ? limit : undefined })
+  const rows = listEvents({ since, afterId, repo, ticket, eventType, limit: Number.isFinite(limit) ? limit : undefined })
   res.json(rows)
 })
 
