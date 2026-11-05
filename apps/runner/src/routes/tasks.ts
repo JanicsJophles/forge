@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import type { AgentTask, RunRequest } from '@forge/shared'
+import type { AgentTask, RunRequest, TaskStatus } from '@forge/shared'
 import { config, isRepoAllowed } from '../config.js'
 import {
   insertTask,
@@ -165,9 +165,27 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   res.status(201).json({ taskId: task.id })
 })
 
-// GET /tasks — last 20
-tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+// GET /tasks — bounded history with optional exact stored-value filters
+tasksRouter.get('/', (req: Request, res: Response) => {
+  const repo = req.query.repo
+  const status = req.query.status
+  if (repo !== undefined && (typeof repo !== 'string' || !repo.trim())) {
+    res.status(400).json({ error: 'repo must be a non-empty string' })
+    return
+  }
+  const statuses: readonly TaskStatus[] = ['queued', 'running', 'completed', 'failed']
+  if (status !== undefined && (typeof status !== 'string' || !statuses.includes(status as TaskStatus))) {
+    res.status(400).json({ error: 'status must be queued, running, completed, or failed' })
+    return
+  }
+  const rawLimit = req.query.limit
+  const parsedLimit = typeof rawLimit === 'string' && rawLimit.trim() !== ''
+    ? Number(rawLimit)
+    : NaN
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(100, Math.max(1, Math.floor(parsedLimit)))
+    : 20
+  res.json(listTasks(limit, { repo, status: status as TaskStatus | undefined }))
 })
 
 // GET /tasks/:id — single task
