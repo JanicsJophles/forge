@@ -57,6 +57,9 @@ const HTML = `<!DOCTYPE html>
       box-shadow: 0 0 8px var(--accent);
       animation: pulse 2s infinite;
     }
+    h1 .dot.stale { background: var(--warn); box-shadow: none; animation: none; }
+    #connection { color: var(--warn); }
+    #connection.connected { color: var(--accent); }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     .meta { color: var(--text-dim); font-size: 12px; }
     .meta b { color: var(--text); font-weight: 600; }
@@ -222,8 +225,9 @@ const HTML = `<!DOCTYPE html>
 </head>
 <body>
   <header>
-    <h1><span class="dot"></span>forge · agent board</h1>
+    <h1><span class="dot stale" id="connectionDot"></span>forge · agent board</h1>
     <div class="meta">
+      <span id="connection" role="status" aria-live="polite">Connecting · last success: never</span> &middot;
       <span id="generatedAt">—</span> &middot;
       <b id="liveCount">0</b> live &middot;
       <b id="eventCount">0</b> events (24h)
@@ -319,10 +323,51 @@ const HTML = `<!DOCTYPE html>
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
     }
+    function validSnapshot(d) {
+      const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+      const count = v => Number.isSafeInteger(v) && v >= 0;
+      const fields = (v, names) => record(v) && names.every(k => v[k] == null || typeof v[k] === 'string');
+      const byRepo = v => record(v) && Object.values(v).every(count);
+      return record(d) && typeof d.generatedAt === 'string' && Number.isFinite(Date.parse(d.generatedAt)) &&
+        count(d.liveAgentsCount) && count(d.recentEventsCount) &&
+        Array.isArray(d.liveAgents) && d.liveAgents.every(a => fields(a, ['agentId', 'repo', 'ticket', 'status', 'intent', 'updatedAt'])) &&
+        Array.isArray(d.recentEvents) && d.recentEvents.every(e => fields(e, ['eventType', 'repo', 'ticket', 'agentId', 'createdAt']) && typeof e.eventType === 'string' && (e.prNumber == null || count(e.prNumber))) &&
+        byRepo(d.liveByRepo) &&
+        (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet'])))) &&
+        (d.liveTasksCount === undefined || count(d.liveTasksCount)) &&
+        (d.liveTasksByRepo === undefined || byRepo(d.liveTasksByRepo));
+    }
+    let inFlight = false;
+    let lastSuccess = null;
+    function connection(connected, reason) {
+      const el = document.getElementById('connection');
+      el.className = connected ? 'connected' : '';
+      el.textContent = (connected ? 'Connected' : 'Stale · ' + reason) +
+        ' · last success: ' + (lastSuccess ? lastSuccess.toLocaleTimeString() : 'never');
+      document.getElementById('connectionDot').className = connected ? 'dot' : 'dot stale';
+    }
     async function refresh() {
+      if (inFlight) return;
+      inFlight = true;
+      const controller = new AbortController();
+      let timeout;
       try {
-        const r = await fetch('/agent-context');
-        const d = await r.json();
+        const expired = new Promise((_, reject) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            reject(new Error('request timed out'));
+          }, 10000);
+        });
+        // Race the whole body read too; a late completion cannot render after timeout.
+        const d = await Promise.race([
+          (async () => {
+            const r = await fetch('/agent-context', { signal: controller.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return await r.json();
+          })(),
+          expired
+        ]);
+        if (!validSnapshot(d)) throw new Error('invalid snapshot');
         document.getElementById('generatedAt').textContent = 'generated ' + new Date(d.generatedAt).toLocaleTimeString();
         document.getElementById('liveCount').textContent = d.liveAgentsCount;
         document.getElementById('eventCount').textContent = d.recentEventsCount;
@@ -331,12 +376,17 @@ const HTML = `<!DOCTYPE html>
         renderAgents(d.liveAgents || []);
         renderEvents(d.recentEvents || []);
         renderByRepo(d.liveByRepo || {});
+        lastSuccess = new Date();
+        connection(true);
       } catch (e) {
-        document.getElementById('agents').innerHTML = '<div class="err">fetch failed: ' + escape(e.message) + '</div>';
+        connection(false, e.message);
+      } finally {
+        clearTimeout(timeout);
+        inFlight = false;
+        setTimeout(refresh, 5000);
       }
     }
     refresh();
-    setInterval(refresh, 5000);
   </script>
 </body>
 </html>`
