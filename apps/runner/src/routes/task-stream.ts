@@ -5,7 +5,7 @@ import type { EventEmitter } from 'node:events'
 // No application queue: one bounded frame may enter Node's response buffer.
 // On backpressure destroy only this connection; never stall the task emitter.
 export function streamTask(
-  req: Request, res: Response, task: Pick<AgentTask, 'log' | 'status'>,
+  req: Request, res: Response, task: Pick<AgentTask, 'log' | 'status' | 'errorMessage'>,
   emitter?: EventEmitter,
 ) {
   let closed = false
@@ -64,14 +64,15 @@ export function streamTask(
 
   if (task.log && !send('log', task.log)) return
   if (task.status === 'completed' || task.status === 'failed') {
-    if (send(task.status === 'completed' ? 'complete' : 'error', task.status)) onDone()
+    const data = task.status === 'failed' ? task.errorMessage ?? 'failed' : task.status
+    if (send(task.status === 'completed' ? 'complete' : 'error', data)) onDone()
     return
   }
   if (!emitter) {
     if (send('error', 'task emitter not found — task may have crashed')) onDone()
     return
   }
-  if (closed) return
+  if (!send('status', task.status)) return
   emitter.on('event', onEvent)
   emitter.on('done', onDone)
   ping = setInterval(() => { write(': ping\n\n') }, 15_000)
