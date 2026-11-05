@@ -5,7 +5,9 @@ export type TaskView = 'status' | 'detail'
 
 // SQLite projects the byte suffix before materializing it in Node. A suffix can
 // start inside a UTF-8 codepoint; omit only its leading continuation bytes.
-export function decodeTail(bytes: Buffer): string {
+export function decodeTail(bytes: Buffer | null): string {
+  // SQLite substr of an empty BLOB returns NULL, including COALESCE(log, '').
+  if (bytes === null) return ''
   let start = 0
   while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++
   return bytes.subarray(start).toString('utf8')
@@ -25,7 +27,7 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
     ${provider}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) return undefined
   if (view === 'detail') {
-    row.log = decodeTail(row.log_tail as Buffer)
+    row.log = decodeTail(row.log_tail as Buffer | null)
     row.log_truncated = Boolean(row.log_truncated)
     delete row.log_tail
   }
