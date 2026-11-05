@@ -122,8 +122,8 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
   gcAgentEvents()
 
   // Helpful denormalised summary so consumers don't reduce themselves.
-  const liveByRepo: Record<string, number> = {}
-  const liveByTicket: Record<string, number> = {}
+  const liveByRepo: Record<string, number> = Object.create(null)
+  const liveByTicket: Record<string, number> = Object.create(null)
   for (const a of live) {
     if (a.repo) liveByRepo[a.repo] = (liveByRepo[a.repo] ?? 0) + 1
     if (a.ticket) liveByTicket[a.ticket] = (liveByTicket[a.ticket] ?? 0) + 1
@@ -131,7 +131,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
 
   // Runner's own queued/running tasks, so agents can see a forge task is
   // already active in a repo (not just the checkpointed agent_state rows).
-  const liveTasksByRepo: Record<string, number> = {}
+  const liveTasksByRepo: Record<string, number> = Object.create(null)
   for (const t of liveTasks) {
     liveTasksByRepo[t.repo] = (liveTasksByRepo[t.repo] ?? 0) + 1
   }
