@@ -5,9 +5,22 @@ interface RunOpts {
   gid?: number
 }
 
+// Bind every Git subprocess to its supplied cwd, even when the runner was
+// launched from a Git hook or another checkout. Never alter the parent env.
+function gitEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of [
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
+  ]) delete env[key]
+  return { ...env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false",
+    SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" }
+}
+
 function exec(cmd: string, cwd: string, opts: RunOpts = {}): string {
   return execSync(cmd, {
     cwd,
+    env: gitEnvironment(),
     encoding: "utf8",
     ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
     ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
@@ -26,8 +39,7 @@ function readGit(args: string[], repoPath: string, operation: string, opts: RunO
       stdio: ["ignore", "pipe", "pipe"],
       timeout: GIT_READ_TIMEOUT_MS,
       killSignal: "SIGKILL",
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false",
-        SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" },
+      env: gitEnvironment(),
       ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
       ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
     }).trim()
@@ -81,8 +93,7 @@ export function gitPull(repoPath: string, opts: RunOpts = {}, timeoutMs = 30_000
         stdio: ["ignore", "pipe", "pipe"],
         timeout: timeoutMs,
         killSignal: "SIGKILL",
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false",
-          SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" },
+        env: gitEnvironment(),
         ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
         ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
       }).trim()
