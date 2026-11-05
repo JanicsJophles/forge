@@ -32,9 +32,22 @@ export function streamTask(
     return false
   }
   function send(event: string, data: string): boolean {
+    // Only logs are incremental. Other notifications are one semantic frame,
+    // capped at 2048 UTF-16 code units including the truncation marker. Preserve
+    // a useful prefix without splitting a surrogate pair; the task detail keeps
+    // the full persisted diagnostic (this transport never mutates it).
+    const chunkSize = 2048
+    if (event !== 'log') {
+      const marker = '… [truncated; see task detail]'
+      if (data.length > chunkSize) {
+        let end = chunkSize - marker.length
+        if (/[\uD800-\uDBFF]/.test(data[end - 1])) end--
+        data = data.slice(0, end) + marker
+      }
+      return write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    }
     // JSON escaping expands each code unit by at most six bytes (~12 KiB).
     // Keep surrogate pairs together so concatenated log events round-trip.
-    const chunkSize = 2048
     let offset = 0
     do {
       let end = Math.min(offset + chunkSize, data.length)
