@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
+import { stderrLines } from './stderr-lines.js'
 import type { EventEmitter } from 'node:events'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
@@ -127,6 +129,9 @@ export async function runTask(
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
+  const stdoutDecoder = new StringDecoder('utf8')
+  const stderrDecoder = new StringDecoder('utf8')
+  const formatStderr = stderrLines()
   let buffer = ''
   let flushTimer: ReturnType<typeof setInterval> | null = null
   // Full accumulated log, kept in-memory so the stuckpoint-capture hook can
@@ -183,12 +188,11 @@ export async function runTask(
   proc.on('exit', () => { procExited = true })
 
   proc.stdout.on('data', (data: Buffer) => {
-    buffer += data.toString()
+    buffer += stdoutDecoder.write(data)
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    const text = data.toString().split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
-    buffer += text
+    buffer += formatStderr(stderrDecoder.write(data))
   })
 
   proc.on('close', async (code, signal) => {
@@ -197,6 +201,8 @@ export async function runTask(
     settled = true
     if (timeoutTimer) deps.clearTimeout(timeoutTimer)
     if (killTimer) deps.clearTimeout(killTimer)
+    buffer += stdoutDecoder.end()
+    buffer += formatStderr(stderrDecoder.end())
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     flush()
