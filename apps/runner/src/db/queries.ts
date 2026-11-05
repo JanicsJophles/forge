@@ -114,7 +114,7 @@ export function updateTaskStatus(id: string, status: TaskStatus): void {
 }
 
 export function appendLog(id: string, chunk: string): void {
-  db.prepare(`UPDATE tasks SET log = log || ? WHERE id = ?`).run(chunk, id)
+  db.prepare(`UPDATE tasks SET log = COALESCE(log, '') || ? WHERE id = ?`).run(chunk, id)
 }
 
 export function setErrorMessage(id: string, message: string): void {
