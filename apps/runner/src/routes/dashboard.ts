@@ -213,7 +213,7 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
-    #repoFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #repoFilter, #activityFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -243,7 +243,7 @@ const HTML = `<!DOCTYPE html>
     <div class="meta">
       <span id="connection" role="status" aria-live="polite">Connecting · last success: never</span> &middot;
       <span id="generatedAt">—</span> &middot;
-      <b id="liveCount">0</b> live &middot;
+      <b id="liveCount">0</b> checkpoints shown &middot;
       <b id="eventCount">0</b> events (24h)
     </div>
   </header>
@@ -251,11 +251,17 @@ const HTML = `<!DOCTYPE html>
   <div class="by-repo">
     <label for="repoFilter">Repository</label>
     <select id="repoFilter"><option value="">All repositories</option></select>
+    <label for="activityFilter">Agent activity</label>
+    <select id="activityFilter">
+      <option value="all">All checkpoints</option>
+      <option value="working">Working</option>
+      <option value="finished">Finished</option>
+    </select>
   </div>
 
   <main>
     <section>
-      <h2>Live agents <span class="count" id="liveCount2">0</span></h2>
+      <h2>Agent checkpoints (unexpired) <span class="count" id="liveCount2">0</span></h2>
       <div id="agents"></div>
       <div class="by-repo" id="byRepo"></div>
     </section>
@@ -293,7 +299,7 @@ const HTML = `<!DOCTYPE html>
     function renderAgents(agents) {
       const root = document.getElementById('agents');
       if (!agents.length) {
-        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching live agents' : 'no live agents') + '</div>';
+        root.innerHTML = '<div class="empty">no matching agent checkpoints</div>';
         return;
       }
       root.innerHTML = agents.map(a => {
@@ -364,6 +370,12 @@ const HTML = `<!DOCTYPE html>
     }
     let latestSnapshot = null;
     let selectedRepo = '';
+    let selectedActivity = 'all';
+    const activityFilter = document.getElementById('activityFilter');
+    activityFilter.onchange = () => {
+      selectedActivity = activityFilter.value;
+      renderSnapshot();
+    };
     const repoFilter = document.getElementById('repoFilter');
     repoFilter.onchange = () => {
       selectedRepo = repoFilter.value;
@@ -386,9 +398,13 @@ const HTML = `<!DOCTYPE html>
         [...repos].sort().map(repo => '<option value="' + escape(repo).replace(/"/g, '&quot;') + '">' + escape(repo) + '</option>').join('');
       repoFilter.value = selectedRepo;
       const matches = row => !selectedRepo || row.repo === selectedRepo;
-      const agents = d.liveAgents.filter(matches);
+      const agents = d.liveAgents.filter(a => {
+        const finished = ['done', 'aborted', 'failed'].includes(a.status);
+        return matches(a) && (selectedActivity === 'all' ||
+          (selectedActivity === 'finished' ? finished : !finished));
+      });
       const events = d.recentEvents.filter(matches);
-      const liveCount = selectedRepo ? agents.length : d.liveAgentsCount;
+      const liveCount = agents.length;
       const eventCount = selectedRepo ? events.length : d.recentEventsCount;
       document.getElementById('liveCount').textContent = liveCount;
       document.getElementById('eventCount').textContent = eventCount;
@@ -396,7 +412,11 @@ const HTML = `<!DOCTYPE html>
       document.getElementById('eventCount2').textContent = eventCount;
       renderAgents(agents);
       renderEvents(events);
-      renderByRepo(Object.fromEntries(Object.entries(d.liveByRepo).filter(([repo]) => !selectedRepo || repo === selectedRepo)));
+      const byRepo = Object.create(null);
+      for (const agent of agents) {
+        if (agent.repo) byRepo[agent.repo] = (byRepo[agent.repo] || 0) + 1;
+      }
+      renderByRepo(byRepo);
     }
     function validSnapshot(d) {
       const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
