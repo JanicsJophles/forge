@@ -66,7 +66,7 @@ test('status failure is conservative and does not hide healthy repositories', t 
     },
   })
   assert.deepEqual(repos, [
-    { name: 'bad', path: bad, currentBranch: 'unknown', dirty: true, statusError: 'unavailable' },
+    { name: 'bad', path: bad, currentBranch: 'unknown', dirty: true, branchError: 'unavailable', statusError: 'unavailable' },
     { name: 'good', path: good, currentBranch: 'main', dirty: false },
   ])
 })

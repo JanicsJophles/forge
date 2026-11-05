@@ -11,6 +11,7 @@ interface RepoSummary {
   path: string
   currentBranch: string
   dirty: boolean
+  branchError?: 'unavailable'
   statusError?: 'unavailable'
 }
 
@@ -46,13 +47,15 @@ export function discoverRepos(
   const repos: RepoSummary[] = []
   for (const path of paths) {
     let currentBranch = 'unknown'
-    try { currentBranch = git.getCurrentBranch(path) } catch { /* empty */ }
+    let branchError: RepoSummary['branchError']
+    try { currentBranch = git.getCurrentBranch(path) } catch { branchError = 'unavailable' }
 
     // Dispatchers must never interpret an unavailable status as safe to use.
     let dirty = true
     let statusError: RepoSummary['statusError']
     try { dirty = git.hasUncommittedChanges(path) } catch { statusError = 'unavailable' }
     repos.push({ name: basename(path), path, currentBranch, dirty,
+      ...(branchError ? { branchError } : {}),
       ...(statusError ? { statusError } : {}) })
   }
   return repos.sort((a, b) => a.name.localeCompare(b.name) || a.path.localeCompare(b.path))
