@@ -213,7 +213,7 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
-    #repoFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #repoFilter, #ticketFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -251,6 +251,8 @@ const HTML = `<!DOCTYPE html>
   <div class="by-repo">
     <label for="repoFilter">Repository</label>
     <select id="repoFilter"><option value="">All repositories</option></select>
+    <label for="ticketFilter">Ticket (agents and events only)</label>
+    <select id="ticketFilter"><option value="">All tickets</option></select>
   </div>
 
   <main>
@@ -293,7 +295,7 @@ const HTML = `<!DOCTYPE html>
     function renderAgents(agents) {
       const root = document.getElementById('agents');
       if (!agents.length) {
-        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching live agents' : 'no live agents') + '</div>';
+        root.innerHTML = '<div class="empty">' + ((selectedRepo || selectedTicket) ? 'no matching live agents' : 'no live agents') + '</div>';
         return;
       }
       root.innerHTML = agents.map(a => {
@@ -326,7 +328,7 @@ const HTML = `<!DOCTYPE html>
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
-        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching events' : 'no events in last 24h') + '</div>';
+        root.innerHTML = '<div class="empty">' + ((selectedRepo || selectedTicket) ? 'no matching events' : 'no events in last 24h') + '</div>';
         return;
       }
       root.innerHTML = events.map(e => {
@@ -364,6 +366,12 @@ const HTML = `<!DOCTYPE html>
     }
     let latestSnapshot = null;
     let selectedRepo = '';
+    let selectedTicket = '';
+    const ticketFilter = document.getElementById('ticketFilter');
+    ticketFilter.onchange = () => {
+      selectedTicket = ticketFilter.value;
+      renderSnapshot();
+    };
     const repoFilter = document.getElementById('repoFilter');
     repoFilter.onchange = () => {
       selectedRepo = repoFilter.value;
@@ -385,18 +393,30 @@ const HTML = `<!DOCTYPE html>
       repoFilter.innerHTML = '<option value="">All repositories</option>' +
         [...repos].sort().map(repo => '<option value="' + escape(repo).replace(/"/g, '&quot;') + '">' + escape(repo) + '</option>').join('');
       repoFilter.value = selectedRepo;
-      const matches = row => !selectedRepo || row.repo === selectedRepo;
+      const tickets = new Set([
+        ...d.liveAgents.map(a => a.ticket),
+        ...d.recentEvents.map(e => e.ticket),
+        ...(selectedTicket ? [selectedTicket] : [])
+      ].filter(ticket => typeof ticket === 'string' && ticket.length));
+      ticketFilter.innerHTML = '<option value="">All tickets</option>' +
+        [...tickets].sort().map(ticket => '<option value="' + escape(ticket).replace(/"/g, '&quot;') + '">' + escape(ticket) + '</option>').join('');
+      ticketFilter.value = selectedTicket;
+      const matches = row => (!selectedRepo || row.repo === selectedRepo) &&
+        (!selectedTicket || row.ticket === selectedTicket);
       const agents = d.liveAgents.filter(matches);
       const events = d.recentEvents.filter(matches);
-      const liveCount = selectedRepo ? agents.length : d.liveAgentsCount;
-      const eventCount = selectedRepo ? events.length : d.recentEventsCount;
+      const liveCount = (selectedRepo || selectedTicket) ? agents.length : d.liveAgentsCount;
+      const eventCount = (selectedRepo || selectedTicket) ? events.length : d.recentEventsCount;
       document.getElementById('liveCount').textContent = liveCount;
       document.getElementById('eventCount').textContent = eventCount;
       document.getElementById('liveCount2').textContent = liveCount;
       document.getElementById('eventCount2').textContent = eventCount;
       renderAgents(agents);
       renderEvents(events);
-      renderByRepo(Object.fromEntries(Object.entries(d.liveByRepo).filter(([repo]) => !selectedRepo || repo === selectedRepo)));
+      const byRepo = selectedTicket
+        ? Object.fromEntries([...new Set(agents.map(a => a.repo))].map(repo => [repo, agents.filter(a => a.repo === repo).length]))
+        : Object.fromEntries(Object.entries(d.liveByRepo).filter(([repo]) => !selectedRepo || repo === selectedRepo));
+      renderByRepo(byRepo);
     }
     function validSnapshot(d) {
       const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
