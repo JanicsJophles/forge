@@ -22,6 +22,7 @@ test('root and legacy discovery return the same static contract; unknown paths s
     // Import only after isolating the database; never import the production listener.
     const { tasksRouter } = await import('./tasks.js')
     const { db } = await import('../db/schema.js')
+    const { config } = await import('../config.js')
     try {
       const app = express()
       app.use(capabilitiesRouter)
@@ -35,9 +36,27 @@ test('root and legacy discovery return the same static contract; unknown paths s
           const response = await fetch(base + route)
           assert.equal(response.status, 200)
           assert.match(response.headers.get('content-type') ?? '', /application\/json/)
-          assert.deepEqual(await response.json(), {
-            providerSelectionVersion: 1, providers: ['claude', 'codex'],
-          })
+          const body = await response.json() as {
+            providerSelectionVersion: number
+            providers: string[]
+            version: string
+            limits: {
+              maxConcurrentTasks: number
+              taskTimeoutMs: number
+              minFreeDiskMb: number
+              autoCommit: boolean
+            }
+          }
+          // Existing contract fields stay byte-for-byte stable.
+          assert.equal(body.providerSelectionVersion, 1)
+          assert.deepEqual(body.providers, ['claude', 'codex'])
+          // New observability fields: live build version + admission limits.
+          assert.equal(typeof body.version, 'string')
+          assert.ok(body.version.length > 0)
+          assert.equal(body.limits.maxConcurrentTasks, config.maxConcurrentTasks)
+          assert.equal(body.limits.taskTimeoutMs, config.taskTimeoutMs)
+          assert.equal(body.limits.minFreeDiskMb, config.minFreeDiskMb)
+          assert.equal(body.limits.autoCommit, config.autoCommit)
         }
         for (const route of ['/unknown', '/capabilities/unknown', '/tasks/capabilities/unknown']) {
           const response = await fetch(base + route)
