@@ -11,6 +11,7 @@ import {
   countActiveTasks,
   listActiveTasks,
   updateTaskStatus,
+  setErrorMessage,
 } from '../db/queries.js'
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
@@ -174,8 +175,11 @@ tasksRouter.delete('/:id', (req: Request, res: Response) => {
 
   const killed = killTask(task.id)
   if (!killed) {
-    // Queued but not started yet — just mark failed
-    updateTaskStatus(task.id, 'failed')
+    // Persist the reason now; runTask owns terminal events and setup cleanup.
+    db.transaction(() => {
+      setErrorMessage(task.id, 'Task cancelled before launch')
+      updateTaskStatus(task.id, 'failed')
+    })()
   }
 
   res.json({ ok: true })
