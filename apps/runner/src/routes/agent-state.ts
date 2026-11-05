@@ -116,8 +116,17 @@ agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
   const eventType = typeof req.query.type === 'string' ? req.query.type : undefined
-  const limit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : undefined
-  const rows = listEvents({ since, afterId, repo, ticket, eventType, limit: Number.isFinite(limit) ? limit : undefined })
+  const rawLimit = req.query.limit
+  let limit: number | undefined
+  if (rawLimit !== undefined) {
+    if (typeof rawLimit !== 'string' || !/^[0-9]+$/.test(rawLimit) ||
+        !Number.isSafeInteger(Number(rawLimit)) || Number(rawLimit) <= 0) {
+      return badRequest(res, 'limit must be a single positive safe integer decimal')
+    }
+    // listEvents defaults to 100 and caps valid larger limits at 1000.
+    limit = Number(rawLimit)
+  }
+  const rows = listEvents({ since, afterId, repo, ticket, eventType, limit })
   res.json(rows)
 })
 
