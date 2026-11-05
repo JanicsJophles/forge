@@ -84,6 +84,9 @@ agentStateRouter.post('/agent-events', (req: Request, res: Response) => {
   if (typeof b.eventType !== 'string' || !b.eventType.trim()) {
     return badRequest(res, 'eventType is required')
   }
+  if (b.prNumber != null && (!Number.isSafeInteger(b.prNumber) || b.prNumber <= 0)) {
+    return badRequest(res, 'prNumber must be a positive safe integer')
+  }
   const input: EventInput = {
     eventType: b.eventType.trim(),
     repo: typeof b.repo === 'string' ? b.repo : undefined,
