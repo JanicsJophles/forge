@@ -5,6 +5,7 @@ import express from 'express'
 import { dashboardRouter } from './dashboard.js'
 
 class Element {
+  querySelectorAll() { return [] }
   private text = ''
   innerHTML = ''
   className = ''
@@ -87,7 +88,7 @@ test('agent branch and claimed files render as text and refresh from snapshots',
   await h.success({ ...snapshot(), liveAgents: [agent] })
   const html = () => h.elements.get('agents')!.innerHTML
   assert.match(html(), /branch: &lt;img/)
-  assert.match(html(), /<details class="claimed-files"><summary>Claimed files \(2\)<\/summary><ul>/)
+  assert.match(html(), /<details class="claimed-files" data-agent-id="worker"><summary>Claimed files \(2\)<\/summary><ul>/)
   assert.match(html(), /<li>&lt;\/li&gt;&lt;script&gt;/)
   assert.ok(html().includes('&amp;' + 'long/'.repeat(100)))
   assert.ok(html().includes('onerror=&quot;alert(1)&quot;&gt;'))

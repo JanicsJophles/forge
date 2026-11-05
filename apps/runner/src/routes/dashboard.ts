@@ -285,8 +285,17 @@ const HTML = `<!DOCTYPE html>
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
     }
+    const claimedFilesOpen = new Map();
     function renderAgents(agents) {
       const root = document.getElementById('agents');
+      // Read the current DOM before replacing it, including toggles whose event is still queued.
+      for (const details of root.querySelectorAll('details.claimed-files')) {
+        claimedFilesOpen.set(details.dataset.agentId, details.open);
+      }
+      const liveIds = new Set(latestSnapshot.liveAgents.map(a => a.agentId));
+      for (const id of claimedFilesOpen.keys()) {
+        if (!liveIds.has(id)) claimedFilesOpen.delete(id);
+      }
       if (!agents.length) {
         root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching live agents' : 'no live agents') + '</div>';
         return;
@@ -302,7 +311,7 @@ const HTML = `<!DOCTYPE html>
               a.status ? '<span class="status ' + statusClass + '">' + escape(a.status) + '</span>' : '',
             '</div>',
             a.branch ? '<div class="branch">branch: ' + escape(a.branch) + '</div>' : '',
-            a.filesTouched && a.filesTouched.length ? '<details class="claimed-files"><summary>Claimed files (' + a.filesTouched.length + ')</summary><ul>' +
+            a.filesTouched && a.filesTouched.length ? '<details class="claimed-files" data-agent-id="' + escape(a.agentId) + '"' + (claimedFilesOpen.get(a.agentId) ? ' open' : '') + '><summary>Claimed files (' + a.filesTouched.length + ')</summary><ul>' +
               a.filesTouched.map(file => '<li>' + escape(file) + '</li>').join('') + '</ul></details>' : '',
             a.intent ? '<div class="intent">' + escape(a.intent) + '</div>' : '',
             '<div class="updated">updated ' + relTime(a.updatedAt) + '</div>',
