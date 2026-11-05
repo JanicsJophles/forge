@@ -98,6 +98,7 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | `POST` | `/tasks` | Create and start a task |
 | `GET` | `/tasks` | List recent tasks (last 20) |
 | `GET` | `/tasks/:id` | Get a single task |
+| `GET` | `/tasks/:id/log` | Retrieve a bounded base64 byte slice (see below) |
 | `GET` | `/tasks/:id/stream` | SSE stream (catches up on reconnect) |
 | `DELETE` | `/tasks/:id` | Kill a running task |
 | `GET` | `/repos` | List available git repos |
@@ -159,3 +160,47 @@ Express API (port 5000)
 ## License
 
 MIT
+
+### Retrieve a task log in byte slices
+
+`GET /tasks/:id/log?offset=0&limit=262144` returns
+`{"data":"<base64>","offset":0,"nextOffset":262144,"totalBytes":500000}`.
+`offset` is a zero-based byte offset (default `0`); `limit` is a positive byte
+count (default and maximum `262144`, 256 KiB). Both accept only decimal digits
+representing safe integers. Repeated, structured, malformed or out-of-range
+values return JSON 400; a missing task returns JSON 404.
+
+`data` contains at most `limit` bytes encoded as base64. `nextOffset` equals
+`offset` plus the decoded byte count; `totalBytes` is the log's byte length in
+the same SQLite snapshot. Empty/NULL logs and offsets at or past EOF return
+empty `data`, retaining the requested offset as `nextOffset`. Logs can grow:
+resume from `nextOffset` to fetch appended bytes. Poll again later when it
+reaches `totalBytes`. Slices may split UTF-8 characters; concatenate decoded
+bytes before decoding text (or use a streaming UTF-8 decoder).
+
+This Node.js example writes the current log snapshot without collecting it in
+memory. Set `offset` to a saved `nextOffset` and append to the same file to resume.
+
+```js
+import { open } from 'node:fs/promises';
+const taskId = 'abc-123';
+let offset = 0;
+const file = await open('task.log', 'a'); // use a new/empty file when offset is 0
+try {
+  let snapshotEnd;
+  do {
+    const response = await fetch(
+      `http://localhost:5000/tasks/${encodeURIComponent(taskId)}/log?offset=${offset}&limit=262144`
+    );
+    if (!response.ok) throw new Error(await response.text());
+    const slice = await response.json();
+    snapshotEnd ??= slice.totalBytes;
+    await file.writeFile(Buffer.from(slice.data, 'base64'));
+    if (slice.nextOffset === offset) break;
+    offset = slice.nextOffset; // persist this after successfully writing the bytes
+  } while (offset < snapshotEnd);
+} finally {
+  await file.close();
+}
+console.log({ nextOffset: offset });
+```

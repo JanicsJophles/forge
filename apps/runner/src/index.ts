@@ -3,6 +3,7 @@ import { config } from './config.js'
 import './db/schema.js'  // runs CREATE TABLE on import
 import { capabilitiesRouter } from './routes/capabilities.js'
 import { healthRouter } from './routes/health.js'
+import { taskLogRouter } from './routes/task-log.js'
 import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
@@ -26,6 +27,7 @@ process.on('uncaughtException', (err) => {
 // Routes
 app.use(healthRouter)
 app.use(capabilitiesRouter)
+app.use('/tasks', taskLogRouter)
 app.use('/tasks', tasksRouter)
 app.use('/repos', reposRouter)
 app.use(agentStateRouter)
