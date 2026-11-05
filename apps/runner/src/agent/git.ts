@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process"
+import { execFileSync, execSync } from "node:child_process"
 
 interface RunOpts {
   uid?: number
@@ -45,25 +45,39 @@ function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
   }
 }
 
-export function gitPull(repoPath: string, opts: RunOpts = {}): void {
+export function gitPull(repoPath: string, opts: RunOpts = {}, timeoutMs = 30_000): void {
   ensureRepoOwnership(repoPath, opts)
-  // If there is no upstream configured (e.g. fresh local repo), pulling
-  // is a no-op rather than a hard failure. We detect this by checking
-  // whether there is a remote tracking branch before attempting.
-  try {
-    const upstream = execSync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
-      cwd: repoPath,
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-      ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
-      ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
-    }).trim()
-    if (upstream) {
-      exec("git pull --ff-only", repoPath, opts)
+  // Do not expose Git's stderr (remote URLs can contain credentials) or attach
+  // its original error as a cause: runTask persists this error's message.
+  function git(args: string[], operation: string, allowMissing = false): string {
+    try {
+      return execFileSync("git", args, {
+        cwd: repoPath,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "/bin/false",
+          SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" },
+        ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
+        ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
+      }).trim()
+    } catch (error) {
+      const failure = error as { status?: number; code?: string }
+      if (allowMissing && failure.status === 1) return ""
+      const reason = failure.code === "ETIMEDOUT"
+        ? `timed out after ${timeoutMs}ms; check remote connectivity`
+        : "failed; check repository access, remote availability, and local changes/divergence"
+      throw new Error(`Git ${operation} ${reason}`)
     }
-  } catch {
-    // No upstream configured — skip pull silently
   }
+
+  // Inspect configuration, not resolution of @{u}: an upstream whose remote
+  // tracking ref is missing must still attempt the pull and surface failures.
+  const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], "branch detection")
+  const merge = git(["config", "--get", `branch.${branch}.merge`], "upstream detection", true)
+  if (!merge) return
+  git(["pull", "--ff-only"], "pull")
 }
 
 export function gitCommit(repoPath: string, message: string, opts: RunOpts = {}): string {
