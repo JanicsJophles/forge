@@ -73,6 +73,7 @@ const HTML = `<!DOCTYPE html>
     }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
     section {
+      min-width: 0;
       background: var(--panel);
       border: 1px solid var(--border);
       border-radius: 8px;
@@ -155,6 +156,13 @@ const HTML = `<!DOCTYPE html>
       font-size: 13px;
       line-height: 1.4;
     }
+    .agent-row .branch, .agent-row .claimed-files {
+      margin-top: 4px;
+      color: var(--text-dim);
+      overflow-wrap: anywhere;
+    }
+    .agent-row .claimed-files summary { cursor: pointer; }
+    .agent-row .claimed-files ul { margin: 6px 0 0; padding-left: 20px; }
     .agent-row .updated {
       color: var(--text-mute);
       font-size: 11px;
@@ -293,6 +301,9 @@ const HTML = `<!DOCTYPE html>
               a.ticket ? '<span class="ticket">' + escape(a.ticket) + '</span>' : '',
               a.status ? '<span class="status ' + statusClass + '">' + escape(a.status) + '</span>' : '',
             '</div>',
+            a.branch ? '<div class="branch">branch: ' + escape(a.branch) + '</div>' : '',
+            a.filesTouched && a.filesTouched.length ? '<details class="claimed-files"><summary>Claimed files (' + a.filesTouched.length + ')</summary><ul>' +
+              a.filesTouched.map(file => '<li>' + escape(file) + '</li>').join('') + '</ul></details>' : '',
             a.intent ? '<div class="intent">' + escape(a.intent) + '</div>' : '',
             '<div class="updated">updated ' + relTime(a.updatedAt) + '</div>',
           '</div>'
@@ -371,7 +382,9 @@ const HTML = `<!DOCTYPE html>
       const byRepo = v => record(v) && Object.values(v).every(count);
       return record(d) && typeof d.generatedAt === 'string' && Number.isFinite(Date.parse(d.generatedAt)) &&
         count(d.liveAgentsCount) && count(d.recentEventsCount) &&
-        Array.isArray(d.liveAgents) && d.liveAgents.every(a => fields(a, ['agentId', 'repo', 'ticket', 'status', 'intent', 'updatedAt'])) &&
+        Array.isArray(d.liveAgents) && d.liveAgents.every(a =>
+          fields(a, ['agentId', 'repo', 'ticket', 'status', 'intent', 'updatedAt', 'branch']) &&
+          (a.filesTouched == null || (Array.isArray(a.filesTouched) && a.filesTouched.every(file => typeof file === 'string')))) &&
         Array.isArray(d.recentEvents) && d.recentEvents.every(e => fields(e, ['eventType', 'repo', 'ticket', 'agentId', 'createdAt']) && typeof e.eventType === 'string' && (e.prNumber == null || count(e.prNumber))) &&
         byRepo(d.liveByRepo) &&
         (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet'])))) &&
