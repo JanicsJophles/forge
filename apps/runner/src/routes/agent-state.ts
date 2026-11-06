@@ -12,6 +12,8 @@
 //   GET  /agent-context             combined snapshot: live agents +
 //                                   up to 200 newest events from the last 24h,
 //                                   with explicit truncation metadata.
+//                                   ?repo=<name> narrows every collection and
+//                                   its counts to that repo.
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -148,14 +150,22 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
   if (!validSince(req.query.since)) {
     return badRequest(res, 'since must be a single parseable SQLite UTC or ISO timestamp')
   }
+  // Mirror the /tasks repo-filter validation: present-but-blank is rejected.
+  const rawRepo = req.query.repo
+  if (rawRepo !== undefined && (typeof rawRepo !== 'string' || !rawRepo.trim())) {
+    return badRequest(res, 'repo must be a non-empty string')
+  }
+  const repo = typeof rawRepo === 'string' ? rawRepo : undefined
   const since = typeof req.query.since === 'string'
     ? req.query.since
     : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
-  const live = listAgentState({})
-  const eventWindow = listEvents({ since, limit: 201 })
+  const live = listAgentState({ repo })
+  const eventWindow = listEvents({ since, repo, limit: 201 })
   const events = eventWindow.slice(0, 200)
-  const liveTasks = listActiveTasks()
+  const liveTasks = repo === undefined
+    ? listActiveTasks()
+    : listActiveTasks().filter(t => t.repo === repo)
 
   // Sweep dust on every call. Cheap on small tables.
   gcAgentState()
