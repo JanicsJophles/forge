@@ -6,7 +6,7 @@ import type { EventEmitter } from 'node:events'
 // On backpressure destroy only this connection; never stall the task emitter.
 export function streamTask(
   req: Request, res: Response, task: Pick<AgentTask, 'log' | 'status' | 'errorMessage'>,
-  emitter?: EventEmitter,
+  emitter?: EventEmitter, replay = true,
 ) {
   let closed = false
   let ping: ReturnType<typeof setInterval> | undefined
@@ -75,7 +75,9 @@ export function streamTask(
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders()
 
-  if (task.log && !send('log', task.log)) return
+  // ?replay=0 opts out of the stored-log catch-up frame; status and all live
+  // (and terminal) events below are still sent, so late consumers never hang.
+  if (replay && task.log && !send('log', task.log)) return
   if (task.status === 'completed' || task.status === 'failed') {
     const data = task.status === 'failed' ? task.errorMessage ?? 'failed' : task.status
     if (send(task.status === 'completed' ? 'complete' : 'error', data)) onDone()

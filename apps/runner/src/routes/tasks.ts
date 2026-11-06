@@ -226,7 +226,8 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
     return
   }
 
-  streamTask(req, res, task, getEmitter(task.id))
+  const replay = req.query.replay !== '0' && req.query.replay !== 'false'
+  streamTask(req, res, task, getEmitter(task.id), replay)
 })
 
 // DELETE /tasks/:id — kill active task
