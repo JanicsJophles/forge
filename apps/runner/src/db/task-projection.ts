@@ -5,12 +5,16 @@ export type TaskView = 'status' | 'detail'
 
 // SQLite projects the byte suffix before materializing it in Node. A suffix can
 // start inside a UTF-8 codepoint; omit only its leading continuation bytes.
-export function decodeTail(bytes: Buffer | null): string {
+function tailStart(bytes: Buffer | null): number {
   // SQLite substr of an empty BLOB returns NULL, including COALESCE(log, '').
-  if (bytes === null) return ''
+  if (bytes === null) return 0
   let start = 0
   while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) start++
-  return bytes.subarray(start).toString('utf8')
+  return start
+}
+
+export function decodeTail(bytes: Buffer | null): string {
+  return bytes?.subarray(tailStart(bytes)).toString('utf8') ?? ''
 }
 
 export function readTaskProjection(db: Database.Database, id: string, view: TaskView) {
@@ -21,6 +25,7 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
   const detail = view === 'detail'
     ? `, repo, branch, prompt,
        substr(CAST(COALESCE(log, '') AS BLOB), -${LOG_TAIL_BYTES}) AS log_tail,
+       length(CAST(COALESCE(log, '') AS BLOB)) AS logBytes,
        length(CAST(COALESCE(log, '') AS BLOB)) > ${LOG_TAIL_BYTES} AS log_truncated`
     : ''
   const row = db.prepare(`SELECT id, status, created_at AS createdAt,
@@ -30,7 +35,12 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
   if (!row) return undefined
   row.autoCommit = row.autoCommit == null ? undefined : Boolean(row.autoCommit)
   if (view === 'detail') {
-    row.log = decodeTail(row.log_tail as Buffer | null)
+    const tail = row.log_tail as Buffer | null
+    // logBytes is the complete UTF-8 BLOB length (including embedded NULs).
+    // logTailOffset is the zero-based byte position of the first complete
+    // codepoint returned in log, after skipping any continuation bytes.
+    row.logTailOffset = Math.max(0, (row.logBytes as number) - LOG_TAIL_BYTES) + tailStart(tail)
+    row.log = decodeTail(tail)
     row.log_truncated = Boolean(row.log_truncated)
     delete row.log_tail
   }
