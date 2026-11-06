@@ -28,9 +28,16 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
        length(CAST(COALESCE(log, '') AS BLOB)) AS logBytes,
        length(CAST(COALESCE(log, '') AS BLOB)) > ${LOG_TAIL_BYTES} AS log_truncated`
     : ''
+  // durationMs is derived from the stored SQLite datetime strings via julianday
+  // (days) scaled to ms: finished tasks measure completed_at - started_at, running
+  // tasks measure now - started_at, and still-queued tasks (no started_at) are null.
+  // Clamp to 0 so clock skew never yields a negative elapsed time.
+  const duration = `CASE WHEN started_at IS NULL THEN NULL ELSE
+    MAX(0, CAST(ROUND((julianday(COALESCE(completed_at, 'now'))
+      - julianday(started_at)) * 86400000.0) AS INTEGER)) END AS durationMs`
   const row = db.prepare(`SELECT id, status, created_at AS createdAt,
     started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha,
-    error_message AS errorMessage
+    error_message AS errorMessage, ${duration}
     ${provider}${autoCommit}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) return undefined
   row.autoCommit = row.autoCommit == null ? undefined : Boolean(row.autoCommit)
