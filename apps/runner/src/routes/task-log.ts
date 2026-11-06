@@ -15,6 +15,15 @@ taskLogRouter.get('/:id/log', (req, res) => {
     const value = Number(values[0])
     return Number.isSafeInteger(value) && value >= minimum ? value : undefined
   }
+  // format selects the response encoding: absent => base64 JSON (default),
+  // 'text' => the raw decoded bytes. Repeated/array/unknown values are rejected.
+  const formats = query.getAll('format')
+  const structuredFormat = [...query.keys()].some(key => key.startsWith('format['))
+  if (structuredFormat || formats.length > 1 || (formats.length === 1 && formats[0] !== 'text')) {
+    res.status(400).json({ error: "format must be omitted or 'text'" })
+    return
+  }
+  const asText = formats[0] === 'text'
   const offset = integer('offset', 0, 0)
   const limit = integer('limit', MAX_LOG_SLICE_BYTES, 1)
   if (offset === undefined || limit === undefined || limit > MAX_LOG_SLICE_BYTES) {
@@ -26,5 +35,12 @@ taskLogRouter.get('/:id/log', (req, res) => {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  res.json(slice)
+  if (asText) {
+    res.setHeader('X-Total-Bytes', String(slice.totalBytes))
+    res.setHeader('X-Next-Offset', String(slice.nextOffset))
+    res.type('text/plain; charset=utf-8').send(slice.bytes)
+    return
+  }
+  res.json({ data: slice.bytes.toString('base64'), offset: slice.offset,
+    nextOffset: slice.nextOffset, totalBytes: slice.totalBytes })
 })
