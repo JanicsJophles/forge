@@ -20,6 +20,33 @@ import { exitReason } from './exit-reason.js'
 const MAX_PENDING_OUTPUT = 16 * 1024
 const DECODE_INPUT_BYTES = 1024
 
+// Never persist provider diagnostics, arguments, paths, or arbitrary codes.
+function launchFailureDetail(err: unknown): string {
+  const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
+  const reasons: Record<string, string> = {
+    EACCES: 'EACCES: check executable permissions and the configured runner user',
+    EPERM: 'EPERM: check executable permissions and the configured runner user',
+    ENOENT: 'ENOENT: check the provider installation and repository directory',
+    EINVAL: 'EINVAL: check provider launch options',
+    ERR_INVALID_ARG_TYPE: 'ERR_INVALID_ARG_TYPE: check provider launch option types',
+    ERR_INVALID_ARG_VALUE: 'ERR_INVALID_ARG_VALUE: check provider launch option values',
+    ERR_OUT_OF_RANGE: 'ERR_OUT_OF_RANGE: check provider launch option ranges',
+  }
+  const detail = code && Object.hasOwn(reasons, code)
+    ? reasons[code] : 'check provider installation, repository directory, and runner launch options'
+  return detail
+}
+
+function loginFailureDetail(err: unknown): string {
+  const message = err instanceof Error ? err.message : ''
+  // checkCodexLogin constructs these reasons without child output.
+  if (message === 'Codex CLI is unavailable for the configured runner account' ||
+      message === 'Codex login check timed out' ||
+      /^Codex login probe failed \(exit code (?:-?\d+|unknown)\)$/.test(message) ||
+      /^Codex login probe failed \(signal (?:SIG[A-Z0-9]+|unknown)\)$/.test(message)) return message
+  return 'Codex login probe failed; check CLI installation and login for the configured runner account'
+}
+
 // Active termination callbacks stay registered until the child closes.
 const activeProcs = new Map<string, () => void>()
 
@@ -42,11 +69,26 @@ export async function runTask(
 ): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
+  let setupOperation = 'runner identity'
   try {
     identity = deps.executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
-    if (provider === 'codex') await (deps.checkCodexLogin ?? checkCodexLogin)(identity)
+    if (provider === 'codex') {
+      setupOperation = 'Codex login probe'
+      await (deps.checkCodexLogin ?? checkCodexLogin)(identity)
+    }
   } catch (err) {
-    const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
+    // Cancellation while awaiting setup remains authoritative.
+    const status = getTask(task.id)?.status
+    if (status === 'failed' || status === 'completed') {
+      emitter.emit('event', makeEvent('error', 'Task cancelled before launch'))
+      emitter.emit('done')
+      removeEmitter(task.id)
+      return
+    }
+    const detail = setupOperation === 'runner identity'
+      ? `runner identity failed; check the configured non-root runner account (${launchFailureDetail(err)})`
+      : loginFailureDetail(err)
+    const message = `[forge] ${provider} setup failed: ${detail}`
     appendLog(task.id, message + '\n')
     setErrorMessage(task.id, message)
     updateTaskStatus(task.id, 'failed')
@@ -100,19 +142,7 @@ export async function runTask(
   } catch (err) {
     // Spawn errors can include arguments (including the prompt). Persist only
     // known codes and static guidance, never the raw message or thrown value.
-    const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined
-    const reasons: Record<string, string> = {
-      EACCES: 'EACCES: check executable permissions and the configured runner user',
-      EPERM: 'EPERM: check executable permissions and the configured runner user',
-      ENOENT: 'ENOENT: check the provider installation and repository directory',
-      EINVAL: 'EINVAL: check provider launch options',
-      ERR_INVALID_ARG_TYPE: 'ERR_INVALID_ARG_TYPE: check provider launch option types',
-      ERR_INVALID_ARG_VALUE: 'ERR_INVALID_ARG_VALUE: check provider launch option values',
-      ERR_OUT_OF_RANGE: 'ERR_OUT_OF_RANGE: check provider launch option ranges',
-    }
-    const detail = code && Object.hasOwn(reasons, code)
-      ? reasons[code] : 'check provider installation, repository directory, and runner launch options'
-    const message = `[forge] failed to launch ${provider}: ${detail}`
+    const message = `[forge] failed to launch ${provider}: ${launchFailureDetail(err)}`
     appendLog(task.id, message + '\n')
     setErrorMessage(task.id, message)
     updateTaskStatus(task.id, 'failed')
@@ -127,7 +157,7 @@ export async function runTask(
   // can be skipped once SIGTERM succeeds.
   let procExited = false
   let terminationReason: string | null = null
-  let spawnError: Error | null = null
+  let spawnError: string | null = null
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null
   let killTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -237,7 +267,7 @@ export async function runTask(
 
     activeProcs.delete(task.id)
 
-    if (code === 0 && !terminationReason && !spawnError) {
+    if (code === 0 && !terminationReason && spawnError === null) {
       let commitFailed = false
       // Auto-commit if enabled
       if (task.autoCommit ?? config.autoCommit) {
@@ -274,8 +304,8 @@ export async function runTask(
     } else {
       const reason = terminationReason
         ? `${terminationReason}; ${exitReason(provider, code, signal)}`
-        : spawnError
-          ? `failed to spawn ${provider}: ${spawnError.message}. Check installation and login for the configured runner user.`
+        : spawnError !== null
+          ? `failed to launch ${provider}: ${spawnError}`
           : exitReason(provider, code, signal)
       const errMsg = `[forge] ${reason}\n`
       appendLog(task.id, errMsg)
@@ -291,7 +321,7 @@ export async function runTask(
 
   // Node emits close after error too. An error after launch is not proof of
   // exit (for example a failed kill), so only close releases capacity.
-  proc.on('error', (err) => { spawnError = err })
+  proc.on('error', (err) => { spawnError = launchFailureDetail(err) })
 
   // Install the entire lifecycle before writing: end can throw or synchronously
   // report failure, and SIGTERM may immediately close the child in either case.
