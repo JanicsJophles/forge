@@ -2,7 +2,7 @@ import { Router, Response } from 'express'
 import { readdirSync, existsSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { config } from '../config.js'
-import { getCurrentBranch, hasUncommittedChanges } from '../agent/git.js'
+import { getCurrentBranch, getHeadCommit, hasUncommittedChanges, HeadCommit } from '../agent/git.js'
 
 export const reposRouter = Router()
 
@@ -12,13 +12,14 @@ interface RepoSummary {
   currentBranch: string
   dirty: boolean
   branchError?: 'unavailable'
+  head: HeadCommit | null
   statusError?: 'unavailable'
 }
 
 // Accept git readers separately so discovery can be tested without a live runner.
 export function discoverRepos(
   allowedPaths: string[],
-  git = { getCurrentBranch, hasUncommittedChanges },
+  git = { getCurrentBranch, getHeadCommit, hasUncommittedChanges },
 ): RepoSummary[] {
   const paths = new Set<string>()
   const addCheckout = (candidate: string) => {
@@ -54,7 +55,13 @@ export function discoverRepos(
     let dirty = true
     let statusError: RepoSummary['statusError']
     try { dirty = git.hasUncommittedChanges(path) } catch { statusError = 'unavailable' }
-    repos.push({ name: basename(path), path, currentBranch, dirty,
+
+    // A failed head probe (e.g. an empty repo with no commits) yields null and
+    // must not hide other repos or crash the request.
+    let head: HeadCommit | null = null
+    try { head = git.getHeadCommit(path) } catch { /* no resolvable HEAD */ }
+
+    repos.push({ name: basename(path), path, currentBranch, dirty, head,
       ...(branchError ? { branchError } : {}),
       ...(statusError ? { statusError } : {}) })
   }

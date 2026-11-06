@@ -54,6 +54,28 @@ export function getCurrentBranch(repoPath: string): string {
   return readGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath, "branch")
 }
 
+export interface HeadCommit {
+  sha: string
+  subject: string
+}
+
+// Read the checkout's current HEAD so a dispatcher can tell a stale clone from a
+// current one. Throws (via readGit) when HEAD cannot be resolved — e.g. an empty
+// repository with no commits — so callers can represent that as an absent head.
+export function getHeadCommit(repoPath: string): HeadCommit {
+  // %h = short SHA, %s = subject (the message's first line, so never multiline).
+  // %x00 separates them to stay robust if a short SHA ever abuts the subject.
+  const output = readGit(
+    ["log", "-1", "--no-color", "--format=%h%x00%s", "HEAD"],
+    repoPath,
+    "head",
+  )
+  const separator = output.indexOf("\0")
+  const sha = separator === -1 ? output : output.slice(0, separator)
+  const subject = separator === -1 ? "" : output.slice(separator + 1)
+  return { sha, subject }
+}
+
 /**
  * Best-effort: make sure the .git/ subtree is owned by the user that will
  * subsequently run as. The runner historically spawned `git pull` as root,
