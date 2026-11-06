@@ -8,6 +8,7 @@ import { discoverRepos } from './repos.js'
 
 const cleanGit = {
   getCurrentBranch: () => 'main',
+  getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
   hasUncommittedChanges: () => false,
 }
 
@@ -28,7 +29,8 @@ test('includes an allowed checkout root and preserves response fields', t => {
   const { checkout } = fixture(t)
   const path = checkout('repo')
   assert.deepEqual(discoverRepos([path], cleanGit), [
-    { name: 'repo', path, currentBranch: 'main', dirty: false },
+    { name: 'repo', path, currentBranch: 'main', dirty: false,
+      head: { sha: 'abc1234', subject: 'initial' } },
   ])
 })
 
@@ -60,14 +62,36 @@ test('status failure is conservative and does not hide healthy repositories', t 
       if (path === bad) throw new Error('branch unavailable')
       return 'main'
     },
+    getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
     hasUncommittedChanges: path => {
       if (path === bad) throw new Error('sensitive stderr must not be exposed')
       return false
     },
   })
   assert.deepEqual(repos, [
-    { name: 'bad', path: bad, currentBranch: 'unknown', dirty: true, branchError: 'unavailable', statusError: 'unavailable' },
-    { name: 'good', path: good, currentBranch: 'main', dirty: false },
+    { name: 'bad', path: bad, currentBranch: 'unknown', dirty: true,
+      head: { sha: 'abc1234', subject: 'initial' }, branchError: 'unavailable', statusError: 'unavailable' },
+    { name: 'good', path: good, currentBranch: 'main', dirty: false,
+      head: { sha: 'abc1234', subject: 'initial' } },
+  ])
+})
+
+test('a failed head probe yields head null without hiding healthy repositories', t => {
+  const { root, checkout } = fixture(t)
+  const empty = checkout('empty')
+  const ready = checkout('ready')
+  const repos = discoverRepos([root], {
+    getCurrentBranch: () => 'main',
+    getHeadCommit: path => {
+      if (path === empty) throw new Error('head unavailable; no commits yet')
+      return { sha: 'def5678', subject: 'second commit' }
+    },
+    hasUncommittedChanges: () => false,
+  })
+  assert.deepEqual(repos, [
+    { name: 'empty', path: empty, currentBranch: 'main', dirty: false, head: null },
+    { name: 'ready', path: ready, currentBranch: 'main', dirty: false,
+      head: { sha: 'def5678', subject: 'second commit' } },
   ])
 })
 
@@ -82,6 +106,9 @@ test('real git reads recognize clean and dirty worktrees', t => {
   assert.deepEqual(discoverRepos([root]).map(r => [r.currentBranch, r.dirty]), [
     ['main', false], ['work', false],
   ])
+  const expectedSha = execFileSync('git', ['-C', repo, 'rev-parse', '--short', 'HEAD'],
+    { encoding: 'utf8' }).trim()
+  assert.deepEqual(discoverRepos([repo])[0].head, { sha: expectedSha, subject: 'initial' })
   writeFileSync(join(worktree, 'untracked'), 'dirty')
   assert.equal(discoverRepos([worktree])[0].dirty, true)
 })

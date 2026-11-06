@@ -19,6 +19,7 @@ function fixture(t: { after: (fn: () => void) => void }) {
 
 const cleanGit = {
   getCurrentBranch: () => 'main',
+  getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
   hasUncommittedChanges: () => false,
 }
 
@@ -34,9 +35,11 @@ test('direct aliases and overlapping containers yield one canonical entry and Gi
     const reads: string[] = []
     assert.deepEqual(discoverRepos(roots, {
       getCurrentBranch: path => { reads.push(path); return 'main' },
+      getHeadCommit: path => { reads.push(path); return { sha: 'abc1234', subject: 'initial' } },
       hasUncommittedChanges: path => { reads.push(path); return false },
-    }), [{ name: 'repo', path: repo, currentBranch: 'main', dirty: false }])
-    assert.deepEqual(reads, [repo, repo])
+    }), [{ name: 'repo', path: repo, currentBranch: 'main', dirty: false,
+      head: { sha: 'abc1234', subject: 'initial' } }])
+    assert.deepEqual(reads, [repo, repo, repo])
   }
 })
 
