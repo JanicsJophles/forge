@@ -109,6 +109,10 @@ agentStateRouter.post('/agent-events', (req: Request, res: Response) => {
 })
 
 agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
+  const agentId = req.query.agentId
+  if (agentId !== undefined && (typeof agentId !== 'string' || !agentId.trim())) {
+    return badRequest(res, 'agentId must be a single nonempty string')
+  }
   const rawAfterId = req.query.afterId
   let afterId: number | undefined
   if (rawAfterId !== undefined) {
@@ -138,7 +142,7 @@ agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
     // listEvents defaults to 100 and caps valid larger limits at 1000.
     limit = Number(rawLimit)
   }
-  const rows = listEvents({ since, afterId, repo, ticket, eventType, limit })
+  const rows = listEvents({ since, afterId, repo, ticket, eventType, agentId, limit })
   res.json(rows)
 })
 
