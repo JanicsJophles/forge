@@ -213,7 +213,7 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
-    #repoFilter, #activityFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #repoFilter, #activityFilter, #eventTypeFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -244,7 +244,7 @@ const HTML = `<!DOCTYPE html>
       <span id="connection" role="status" aria-live="polite">Connecting · last success: never</span> &middot;
       <span id="generatedAt">—</span> &middot;
       <b id="liveCount">0</b> checkpoints shown &middot;
-      <b id="eventCount">0</b> events (24h)
+      <b id="eventCount">0</b> events shown (recent snapshot)
     </div>
   </header>
 
@@ -257,6 +257,11 @@ const HTML = `<!DOCTYPE html>
       <option value="working">Working</option>
       <option value="finished">Finished</option>
     </select>
+  </div>
+
+  <div class="by-repo">
+    <label for="eventTypeFilter">Event type</label>
+    <select id="eventTypeFilter"><option value="">All event types</option></select>
   </div>
 
   <main>
@@ -343,7 +348,7 @@ const HTML = `<!DOCTYPE html>
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
-        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching events' : 'no events in last 24h') + '</div>';
+        root.innerHTML = '<div class="empty">' + ((selectedRepo || selectedEventType) ? 'no matching events in recent snapshot' : 'no events in recent snapshot') + '</div>';
         return;
       }
       root.innerHTML = events.map(e => {
@@ -380,6 +385,12 @@ const HTML = `<!DOCTYPE html>
     }
     let latestSnapshot = null;
     let selectedRepo = '';
+    let selectedEventType = '';
+    const eventTypeFilter = document.getElementById('eventTypeFilter');
+    eventTypeFilter.onchange = () => {
+      selectedEventType = eventTypeFilter.value;
+      renderSnapshot();
+    };
     let selectedActivity = 'all';
     const activityFilter = document.getElementById('activityFilter');
     activityFilter.onchange = () => {
@@ -413,9 +424,16 @@ const HTML = `<!DOCTYPE html>
         return matches(a) && (selectedActivity === 'all' ||
           (selectedActivity === 'finished' ? finished : !finished));
       });
-      const events = d.recentEvents.filter(matches);
+      const eventTypes = new Set([
+        ...d.recentEvents.map(e => e.eventType),
+        ...(selectedEventType ? [selectedEventType] : [])
+      ]);
+      eventTypeFilter.innerHTML = '<option value="">All event types</option>' +
+        [...eventTypes].sort().map(type => '<option value="' + escape(type).replace(/"/g, '&quot;') + '">' + escape(type) + '</option>').join('');
+      eventTypeFilter.value = selectedEventType;
+      const events = d.recentEvents.filter(matches).filter(e => !selectedEventType || e.eventType === selectedEventType);
       const liveCount = agents.length;
-      const eventCount = selectedRepo ? events.length : d.recentEventsCount;
+      const eventCount = events.length;
       document.getElementById('liveCount').textContent = liveCount;
       document.getElementById('eventCount').textContent = eventCount;
       document.getElementById('liveCount2').textContent = liveCount;
