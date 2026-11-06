@@ -52,6 +52,21 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     res.status(400).json({ error: 'autoCommit must be a boolean' })
     return
   }
+  // Validate the optional model before any task is created. The pattern rejects
+  // empty strings and a leading '-' (which could masquerade as a CLI flag); the
+  // length cap bounds the argv token we hand to the provider.
+  if (body.model !== undefined) {
+    if (
+      typeof body.model !== 'string' ||
+      body.model.length > 100 ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(body.model)
+    ) {
+      res.status(400).json({
+        error: 'model must be 1-100 characters matching /^[A-Za-z0-9][A-Za-z0-9._-]*$/',
+      })
+      return
+    }
+  }
 
   if (typeof body.repo !== 'string' || !body.repo.trim() || typeof body.prompt !== 'string' || !body.prompt.trim()) {
     res.status(400).json({ error: 'repo and prompt are required' })
@@ -145,6 +160,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     id: uuidv4(),
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
+    model: body.model,
     repo,
     branch,
     prompt: body.prompt,

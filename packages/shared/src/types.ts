@@ -4,6 +4,8 @@ export type AgentProvider = 'claude' | 'codex'
 export interface AgentTask {
   provider?: AgentProvider
   autoCommit?: boolean
+  /** Optional provider model override; passed as `--model`/`-m` when set. */
+  model?: string
   id: string
   repo: string
   branch: string
@@ -33,4 +35,6 @@ export interface RunRequest {
   branch?: string
   prompt: string
   autoCommit?: boolean
+  /** Optional provider model override (validated server-side before dispatch). */
+  model?: string
 }
