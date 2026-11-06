@@ -27,7 +27,9 @@ test('DELETE projects status without selecting stored transcripts for any task s
   db.prepare = function (sql: string) {
     if (inspect && /^\s*SELECT\b/i.test(sql)) {
       selects.push(sql)
-      assert.doesNotMatch(sql, /\*|\blog\b|\blog_tail\b|\bprompt\b/i)
+      // Guard against SELECT * and loading stored transcripts; arithmetic '*'
+      // (e.g. durationMs scaling) is fine, so only a select-list star is barred.
+      assert.doesNotMatch(sql, /SELECT\s+\*|\blog\b|\blog_tail\b|\bprompt\b/i)
     }
     if (inspectQueuedWrites && /^\s*UPDATE tasks/i.test(sql)) {
       assert.equal(db.inTransaction, true)

@@ -28,6 +28,9 @@ for (const modern of [true, false]) {
             id, status: 'completed', createdAt: 'created', startedAt: 'started',
             completedAt: 'completed', commitSha: 'sha', errorMessage: null,
             autoCommit: modern && choice !== null ? Boolean(choice) : undefined,
+            // started_at/completed_at are non-datetime literals here, so julianday
+            // yields NULL and durationMs comes back null.
+            durationMs: null,
             read_projection_version: 1,
           }
           if (modern) expected.provider = 'codex'
