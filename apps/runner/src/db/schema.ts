@@ -49,13 +49,18 @@ if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
 
-// Indexes for the two hot queries over tasks: listTasks() does
-// ORDER BY created_at DESC LIMIT, and countActiveTasks() filters on status.
-// Without these both full-scan a table that grows unbounded (no retention
-// sweep). Mirrors the purpose-built indexes on agent_state/agent_events.
+// Ascending expression indexes include rowid as the implicit final key, so
+// reverse scans satisfy julianday(created_at) DESC, rowid DESC without sorting.
+// The partial index keeps the exact live-task predicate in chronological order.
+// The partial index also serves countActiveTasks(). Remove the old status-only
+// index: SQLite otherwise prefers its IN lookup plus a temporary chronological
+// sort over scanning the already ordered live subset (without ANALYZE stats).
 db.exec(`
   CREATE INDEX IF NOT EXISTS tasks_created_idx ON tasks(created_at DESC);
-  CREATE INDEX IF NOT EXISTS tasks_status_idx  ON tasks(status);
+  CREATE INDEX IF NOT EXISTS tasks_chronological_idx ON tasks(julianday(created_at));
+  CREATE INDEX IF NOT EXISTS tasks_live_chronological_idx ON tasks(julianday(created_at))
+    WHERE status IN ('queued', 'running');
+  DROP INDEX IF EXISTS tasks_status_idx;
 `)
 
 console.log(`[db] SQLite open: ${DB_PATH}`)
