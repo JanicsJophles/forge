@@ -135,6 +135,25 @@ export function updateTaskStatus(id: string, status: TaskStatus): void {
   }
 }
 
+/**
+ * Age in whole seconds of the longest-running task — floor(now - MIN(started_at))
+ * over tasks with status='running' — or null when nothing is running. Used by
+ * GET /health as an early warning that a task is approaching the SIGTERM timeout.
+ * A single self-contained read; any failure degrades to null rather than throwing.
+ */
+export function oldestRunningTaskAgeSeconds(): number | null {
+  try {
+    const row = db.prepare(
+      `SELECT (julianday('now') - julianday(MIN(started_at))) * 86400 AS age
+         FROM tasks WHERE status = 'running' AND started_at IS NOT NULL`
+    ).get() as { age: number | null } | undefined
+    if (!row || row.age == null) return null
+    return Math.max(0, Math.floor(row.age))
+  } catch {
+    return null
+  }
+}
+
 export function appendLog(id: string, chunk: string): void {
   db.prepare(`UPDATE tasks SET log = COALESCE(log, '') || ? WHERE id = ?`).run(chunk, id)
 }

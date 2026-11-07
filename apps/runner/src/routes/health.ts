@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { countActiveProcs } from '../agent/runner.js'
-import { countActiveTasks } from '../db/queries.js'
+import { countActiveTasks, oldestRunningTaskAgeSeconds } from '../db/queries.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { config } from '../config.js'
 
@@ -23,5 +23,6 @@ healthRouter.get('/health', (_req, res) => {
     freeDiskMb,
     diskOk,
     uptimeSeconds: Math.floor(process.uptime()),
+    oldestRunningTaskAgeSeconds: oldestRunningTaskAgeSeconds(),
   })
 })
