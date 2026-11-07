@@ -4,7 +4,7 @@ import type { spawn } from 'node:child_process'
 import test from 'node:test'
 import { checkCodexLogin } from './provider.js'
 
-function probe(throws = false) {
+function probe(throws: boolean | Error = false) {
   const child = new EventEmitter() as EventEmitter & { kill: (signal: string) => boolean }
   const kills: string[] = []
   child.kill = signal => { kills.push(signal); return true }
@@ -17,7 +17,7 @@ function probe(throws = false) {
       assert.equal(command, 'codex')
       assert.deepEqual(args, ['login', 'status'])
       assert.deepEqual(actualOptions, { ...options, stdio: 'ignore' })
-      if (throws) throw new Error('secret spawn diagnostics')
+      if (throws) throw throws instanceof Error ? throws : new Error('secret spawn diagnostics')
       return child
     }) as typeof spawn,
     setTimeout: (callback, milliseconds) => {
@@ -68,6 +68,28 @@ test('spawn error is static and survives a later close', async () => {
 test('synchronous spawn failure is also sanitized', async () => {
   const p = probe(true)
   await assert.rejects(p.result, { message: 'Codex CLI is unavailable for the configured runner account' })
+  assert.equal(p.scheduled(), 0)
+})
+
+test('ENOENT error event names a missing Codex CLI', async () => {
+  const p = probe()
+  const err = Object.assign(new Error('secret spawn diagnostics'), { code: 'ENOENT' })
+  p.child.emit('error', err)
+  await assert.rejects(p.result, { message: 'Codex CLI was not found on PATH for the configured runner user' })
+  assert.equal(p.cleared(), 1)
+})
+
+test('non-ENOENT error event keeps the generic unavailable message', async () => {
+  const p = probe()
+  const err = Object.assign(new Error('secret spawn diagnostics'), { code: 'EACCES' })
+  p.child.emit('error', err)
+  await assert.rejects(p.result, { message: 'Codex CLI is unavailable for the configured runner account' })
+  assert.equal(p.cleared(), 1)
+})
+
+test('synchronous ENOENT throw names a missing Codex CLI', async () => {
+  const p = probe(Object.assign(new Error('secret spawn diagnostics'), { code: 'ENOENT' }))
+  await assert.rejects(p.result, { message: 'Codex CLI was not found on PATH for the configured runner user' })
   assert.equal(p.scheduled(), 0)
 })
 
