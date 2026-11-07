@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
+import { MAX_LOG_SLICE_BYTES } from '../db/task-log.js'
 
 test('log HTTP slices are bounded, lossless, resumable and strictly validated', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'forge-log-'))
@@ -85,4 +86,29 @@ test('log HTTP slices are bounded, lossless, resumable and strictly validated', 
   await get('unicode', '?limit=262145', 400)
   const one = await get('unicode', '?offset=2&limit=1')
   assert.deepEqual(Buffer.from(one.data, 'base64'), expected.subarray(2, 3))
+
+  // format=text returns the decoded bytes verbatim with paging headers.
+  async function getRaw(id: string, query = '', status = 200) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/tasks/${id}/log${query}`)
+    assert.equal(response.status, status, query)
+    return response
+  }
+  const fullAppended = Buffer.concat([expected, Buffer.from(appended)])
+  const text = await getRaw('unicode', '?format=text')
+  assert.equal(text.headers.get('content-type'), 'text/plain; charset=utf-8')
+  assert.equal(text.headers.get('x-total-bytes'), String(fullAppended.length))
+  assert.equal(text.headers.get('x-next-offset'), String(MAX_LOG_SLICE_BYTES))
+  assert.deepEqual(Buffer.from(await text.arrayBuffer()), fullAppended.subarray(0, MAX_LOG_SLICE_BYTES))
+  const sliceText = await getRaw('unicode', '?format=text&offset=2&limit=1')
+  assert.equal(sliceText.headers.get('x-next-offset'), '3')
+  assert.equal(sliceText.headers.get('x-total-bytes'), String(fullAppended.length))
+  assert.deepEqual(Buffer.from(await sliceText.arrayBuffer()), fullAppended.subarray(2, 3))
+  const nulText = await getRaw('unicode', '?format=text&offset=10&limit=1')
+  const nulBytes = Buffer.from(await nulText.arrayBuffer())
+  assert.deepEqual(nulBytes, fullAppended.subarray(10, 11))
+  assert.equal(nulBytes[0], 0)
+  assert.deepEqual(await get('missing', '?format=text', 404), await get('missing', '', 404))
+  for (const bad of ['?format=', '?format=json', '?format=TEXT', '?format=text&format=text', '?format[]=text']) {
+    assert.equal(typeof (await get('unicode', bad, 400)).error, 'string')
+  }
 })

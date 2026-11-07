@@ -14,6 +14,7 @@ export function readTaskLog(db: Database.Database, id: string, offset: number, l
     { bytes: Buffer | null; totalBytes: number } | undefined
   if (!row) return undefined
   const bytes = row.bytes ?? Buffer.alloc(0)
-  return { data: bytes.toString('base64'), offset,
-    nextOffset: offset + bytes.length, totalBytes: row.totalBytes }
+  // Return the raw bytes; callers choose base64 (JSON) or send the Buffer as-is
+  // (text) so embedded NULs and UTF-8 sequences are never re-encoded.
+  return { bytes, offset, nextOffset: offset + bytes.length, totalBytes: row.totalBytes }
 }
