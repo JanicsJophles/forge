@@ -221,9 +221,16 @@ tasksRouter.get('/', (req: Request, res: Response) => {
   res.json(rows)
 })
 
-// GET /tasks/:id — single task
+// GET /tasks/:id — single task. An absent view returns the full task; a present
+// view must be exactly one of the known projections. Reject anything else before
+// touching the DB so a typo (?view=statuss) cannot silently leak the full
+// transcript instead of the bounded projection the caller asked for.
 tasksRouter.get('/:id', (req: Request, res: Response) => {
   const view = req.query.view
+  if (view !== undefined && view !== 'status' && view !== 'detail') {
+    res.status(400).json({ error: 'view must be status or detail' })
+    return
+  }
   const task = view === 'status' || view === 'detail'
     ? readTaskProjection(db, req.params.id, view)
     : getTask(req.params.id)
