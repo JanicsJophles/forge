@@ -215,7 +215,7 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
-    #repoFilter, #activityFilter, #eventTypeFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #repoFilter, #activityFilter, #eventTypeFilter, #ticketFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -264,6 +264,8 @@ const HTML = `<!DOCTYPE html>
   <div class="by-repo">
     <label for="eventTypeFilter">Event type</label>
     <select id="eventTypeFilter"><option value="">All event types</option></select>
+    <label for="ticketFilter">Ticket (agents and events only)</label>
+    <select id="ticketFilter"><option value="">All tickets</option></select>
   </div>
 
   <main>
@@ -374,7 +376,7 @@ const HTML = `<!DOCTYPE html>
     function renderEvents(events) {
       const root = document.getElementById('events');
       if (!events.length) {
-        root.innerHTML = '<div class="empty">' + ((selectedRepo || selectedEventType) ? 'no matching events in recent snapshot' : 'no events in recent snapshot') + '</div>';
+        root.innerHTML = '<div class="empty">' + ((selectedRepo || selectedEventType || selectedTicket) ? 'no matching events in recent snapshot' : 'no events in recent snapshot') + '</div>';
         return;
       }
       root.innerHTML = events.map(e => {
@@ -439,6 +441,12 @@ const HTML = `<!DOCTYPE html>
       selectedEventType = eventTypeFilter.value;
       renderSnapshot();
     };
+    let selectedTicket = '';
+    const ticketFilter = document.getElementById('ticketFilter');
+    ticketFilter.onchange = () => {
+      selectedTicket = ticketFilter.value;
+      renderSnapshot();
+    };
     let selectedActivity = 'all';
     const activityFilter = document.getElementById('activityFilter');
     activityFilter.onchange = () => {
@@ -468,10 +476,19 @@ const HTML = `<!DOCTYPE html>
       repoFilter.innerHTML = '<option value="">All repositories</option>' +
         [...repos].sort().map(repo => '<option value="' + escape(repo).replace(/"/g, '&quot;') + '">' + escape(repo) + '</option>').join('');
       repoFilter.value = selectedRepo;
+      const tickets = new Set([
+        ...d.liveAgents.map(a => a.ticket),
+        ...d.recentEvents.map(e => e.ticket),
+        ...(selectedTicket ? [selectedTicket] : [])
+      ].filter(ticket => typeof ticket === 'string' && ticket.length));
+      ticketFilter.innerHTML = '<option value="">All tickets</option>' +
+        [...tickets].sort().map(ticket => '<option value="' + escape(ticket).replace(/"/g, '&quot;') + '">' + escape(ticket) + '</option>').join('');
+      ticketFilter.value = selectedTicket;
       const matches = row => !selectedRepo || row.repo === selectedRepo;
+      const ticketMatches = row => !selectedTicket || row.ticket === selectedTicket;
       const agents = d.liveAgents.filter(a => {
         const finished = ['done', 'aborted', 'failed'].includes(a.status);
-        return matches(a) && (selectedActivity === 'all' ||
+        return matches(a) && ticketMatches(a) && (selectedActivity === 'all' ||
           (selectedActivity === 'finished' ? finished : !finished));
       });
       const eventTypes = new Set([
@@ -481,7 +498,7 @@ const HTML = `<!DOCTYPE html>
       eventTypeFilter.innerHTML = '<option value="">All event types</option>' +
         [...eventTypes].sort().map(type => '<option value="' + escape(type).replace(/"/g, '&quot;') + '">' + escape(type) + '</option>').join('');
       eventTypeFilter.value = selectedEventType;
-      const events = d.recentEvents.filter(matches).filter(e => !selectedEventType || e.eventType === selectedEventType);
+      const events = d.recentEvents.filter(matches).filter(ticketMatches).filter(e => !selectedEventType || e.eventType === selectedEventType);
       // Own tasks are always queued/running (i.e. "working"); hide them when the
       // activity filter narrows to finished agents.
       const tasks = selectedActivity === 'finished' ? [] : liveTasks.filter(matches);
