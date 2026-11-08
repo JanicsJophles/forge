@@ -56,15 +56,22 @@ export function checkCodexLogin(
       if (error) reject(error)
       else resolve()
     }
-    const unavailable = () => finish(new Error('Codex CLI is unavailable for the configured runner account'))
+    // Branch only on the Node error code so no raw diagnostics (argv, path,
+    // message) can leak; ENOENT means the codex binary is not on the runner's PATH.
+    const spawnFailed = (error?: unknown) => {
+      const notFound = (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+      finish(new Error(notFound
+        ? 'Codex CLI was not found on PATH for the configured runner user'
+        : 'Codex CLI is unavailable for the configured runner account'))
+    }
     let proc: ReturnType<typeof spawn>
     try {
       proc = dependencies.spawn('codex', ['login', 'status'], { ...options, stdio: 'ignore' })
-    } catch {
-      unavailable()
+    } catch (error) {
+      spawnFailed(error)
       return
     }
-    proc.once('error', unavailable)
+    proc.once('error', spawnFailed)
     proc.once('close', (code, signal) => {
       if (signal) {
         // Only expose signal identifiers, never arbitrary child diagnostics.
