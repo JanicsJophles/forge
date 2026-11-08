@@ -148,12 +148,38 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
+  // Validate the branch claim against the checkout so two callers cannot race
+  // the same working tree under mismatched branch assumptions. When the caller
+  // names a branch it must match the checkout's current branch; a provable
+  // mismatch is rejected with a static message — never raw Git output, which can
+  // carry paths or remote URLs. When the branch is omitted we record the
+  // checkout's current branch as before. An unborn checkout (no commits) has no
+  // resolvable branch to compare against, so a claim is accepted rather than
+  // invented: real work always runs on a checkout with commits.
   let branch: string
-  try {
-    branch = body.branch ?? getCurrentBranch(repo)
-  } catch (err: any) {
-    res.status(400).json({ error: `could not determine branch: ${err.message}` })
-    return
+  if (body.branch !== undefined) {
+    if (typeof body.branch !== 'string' || !body.branch.trim()) {
+      res.status(400).json({ error: 'branch must be a non-empty string' })
+      return
+    }
+    let checkoutBranch: string | null
+    try {
+      checkoutBranch = getCurrentBranch(repo)
+    } catch {
+      checkoutBranch = null
+    }
+    if (checkoutBranch !== null && checkoutBranch !== body.branch) {
+      res.status(409).json({ error: 'requested branch does not match the repository checkout' })
+      return
+    }
+    branch = body.branch
+  } else {
+    try {
+      branch = getCurrentBranch(repo)
+    } catch (err: any) {
+      res.status(400).json({ error: `could not determine branch: ${err.message}` })
+      return
+    }
   }
 
   const task: AgentTask = {
