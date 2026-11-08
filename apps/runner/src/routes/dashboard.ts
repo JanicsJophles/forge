@@ -107,15 +107,15 @@ const HTML = `<!DOCTYPE html>
       color: var(--text-mute);
       font-size: 12px;
     }
-    .agent-row, .event-row {
+    .agent-row, .event-row, .task-row {
       padding: 10px 16px;
       border-bottom: 1px solid var(--border);
       font-family: 'SF Mono', Menlo, monospace;
       font-size: 12px;
     }
-    .agent-row:last-child, .event-row:last-child { border-bottom: none; }
-    .agent-row .id { color: var(--accent); font-weight: 600; }
-    .agent-row .repo {
+    .agent-row:last-child, .event-row:last-child, .task-row:last-child { border-bottom: none; }
+    .agent-row .id, .task-row .id { color: var(--accent); font-weight: 600; }
+    .agent-row .repo, .task-row .repo {
       display: inline-block;
       background: var(--panel-2);
       color: var(--text-dim);
@@ -139,7 +139,8 @@ const HTML = `<!DOCTYPE html>
       text-transform: uppercase;
       margin-left: 6px;
     }
-    .status-starting { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
+    .status-starting,
+    .status-queued { background: rgba(245, 158, 11, 0.2); color: var(--warn); }
     .status-editing,
     .status-running,
     .status-testing,
@@ -148,7 +149,7 @@ const HTML = `<!DOCTYPE html>
     .status-merging { background: rgba(16, 185, 129, 0.2); color: var(--accent); }
     .status-aborted,
     .status-failed { background: rgba(239, 68, 68, 0.2); color: var(--fail); }
-    .agent-row .intent {
+    .agent-row .intent, .task-row .intent {
       display: block;
       margin-top: 4px;
       color: var(--text);
@@ -156,18 +157,19 @@ const HTML = `<!DOCTYPE html>
       font-size: 13px;
       line-height: 1.4;
     }
-    .agent-row .branch, .agent-row .claimed-files {
+    .agent-row .branch, .agent-row .claimed-files, .task-row .branch {
       margin-top: 4px;
       color: var(--text-dim);
       overflow-wrap: anywhere;
     }
     .agent-row .claimed-files summary { cursor: pointer; }
     .agent-row .claimed-files ul { margin: 6px 0 0; padding-left: 20px; }
-    .agent-row .updated {
+    .agent-row .updated, .task-row .age {
       color: var(--text-mute);
       font-size: 11px;
       margin-top: 4px;
     }
+    .full-span { grid-column: 1 / -1; }
     .event-row .time {
       display: inline-block;
       color: var(--text-mute);
@@ -275,6 +277,12 @@ const HTML = `<!DOCTYPE html>
       <h2>Recent event snapshot <span class="count" id="eventCount2">0</span></h2>
       <p id="eventCoverage" role="status" aria-live="polite"></p>
       <div id="events"></div>
+    </section>
+
+    <section class="full-span">
+      <h2>Runner tasks (own) <span class="count" id="taskCount2">0</span></h2>
+      <div id="tasks"></div>
+      <div class="by-repo" id="tasksByRepo"></div>
     </section>
   </main>
 
@@ -386,11 +394,33 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
-    function renderByRepo(by) {
-      const root = document.getElementById('byRepo');
+    function renderByRepo(by, rootId) {
+      const root = document.getElementById(rootId);
       const entries = Object.entries(by || {});
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
+    }
+    function renderTasks(tasks) {
+      const root = document.getElementById('tasks');
+      if (!tasks.length) {
+        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no matching runner tasks' : 'no active runner tasks') + '</div>';
+        return;
+      }
+      root.innerHTML = tasks.map(t => {
+        const statusClass = t.status ? 'status-' + t.status.replace(/[^a-z]/g, '') : '';
+        return [
+          '<div class="task-row">',
+            '<div>',
+              '<span class="id">' + escape(t.id) + '</span>',
+              t.repo ? '<span class="repo">' + escape(t.repo) + '</span>' : '',
+              t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
+            '</div>',
+            t.branch ? '<div class="branch">branch: ' + escape(t.branch) + '</div>' : '',
+            t.promptSnippet ? '<div class="intent">' + escape(t.promptSnippet) + '</div>' : '',
+            '<div class="age">created ' + relTime(t.createdAt) + '</div>',
+          '</div>'
+        ].join('');
+      }).join('');
     }
     let latestSnapshot = null;
     let selectedRepo = '';
@@ -418,10 +448,12 @@ const HTML = `<!DOCTYPE html>
       for (const id of openEventDetails) {
         if (!eventIds.has(id)) openEventDetails.delete(id);
       }
+      const liveTasks = Array.isArray(d.liveTasks) ? d.liveTasks : [];
       const repos = new Set([
         ...Object.keys(d.liveByRepo),
         ...d.liveAgents.map(a => a.repo),
         ...d.recentEvents.map(e => e.repo),
+        ...liveTasks.map(t => t.repo),
         ...(selectedRepo ? [selectedRepo] : [])
       ].filter(repo => typeof repo === 'string' && repo.length));
       repoFilter.innerHTML = '<option value="">All repositories</option>' +
@@ -441,20 +473,30 @@ const HTML = `<!DOCTYPE html>
         [...eventTypes].sort().map(type => '<option value="' + escape(type).replace(/"/g, '&quot;') + '">' + escape(type) + '</option>').join('');
       eventTypeFilter.value = selectedEventType;
       const events = d.recentEvents.filter(matches).filter(e => !selectedEventType || e.eventType === selectedEventType);
+      // Own tasks are always queued/running (i.e. "working"); hide them when the
+      // activity filter narrows to finished agents.
+      const tasks = selectedActivity === 'finished' ? [] : liveTasks.filter(matches);
       const liveCount = agents.length;
       const eventCount = events.length;
       document.getElementById('liveCount').textContent = liveCount;
       document.getElementById('eventCount').textContent = eventCount;
       document.getElementById('liveCount2').textContent = liveCount;
       document.getElementById('eventCount2').textContent = eventCount;
+      document.getElementById('taskCount2').textContent = tasks.length;
       renderAgents(agents);
       renderEvents(events);
+      renderTasks(tasks);
       renderEventCoverage(d);
       const byRepo = Object.create(null);
       for (const agent of agents) {
         if (agent.repo) byRepo[agent.repo] = (byRepo[agent.repo] || 0) + 1;
       }
-      renderByRepo(byRepo);
+      renderByRepo(byRepo, 'byRepo');
+      const tasksByRepo = Object.create(null);
+      for (const task of tasks) {
+        if (task.repo) tasksByRepo[task.repo] = (tasksByRepo[task.repo] || 0) + 1;
+      }
+      renderByRepo(tasksByRepo, 'tasksByRepo');
     }
     function validSnapshot(d) {
       const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -468,7 +510,7 @@ const HTML = `<!DOCTYPE html>
           (a.filesTouched == null || (Array.isArray(a.filesTouched) && a.filesTouched.every(file => typeof file === 'string')))) &&
         Array.isArray(d.recentEvents) && d.recentEvents.every(e => fields(e, ['eventType', 'repo', 'ticket', 'agentId', 'createdAt']) && typeof e.eventType === 'string' && (e.prNumber == null || count(e.prNumber))) &&
         byRepo(d.liveByRepo) &&
-        (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet'])))) &&
+        (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet', 'createdAt'])))) &&
         (d.liveTasksCount === undefined || count(d.liveTasksCount)) &&
         (d.liveTasksByRepo === undefined || byRepo(d.liveTasksByRepo));
     }
