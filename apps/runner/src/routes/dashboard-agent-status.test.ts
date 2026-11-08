@@ -5,6 +5,7 @@ import express from 'express'
 import { dashboardRouter } from './dashboard.js'
 
 class Element {
+  querySelectorAll() { return [] }
   innerHTML = ''
   value = ''
   className = ''
