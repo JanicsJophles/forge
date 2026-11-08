@@ -17,6 +17,7 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
+import { getChangedFiles } from '../agent/git-changes.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
@@ -270,6 +271,27 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
 
   const replay = req.query.replay !== '0' && req.query.replay !== 'false'
   streamTask(req, res, task, getEmitter(task.id), replay)
+})
+
+// GET /tasks/:id/changes — concrete file footprint of the task's checkout.
+// A distinct path segment from /:id/stream, so neither route shadows the other.
+tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
+  const task = getTask(req.params.id)
+  if (!task) {
+    res.status(404).json({ error: 'task not found' })
+    return
+  }
+
+  let changedFiles
+  try {
+    changedFiles = getChangedFiles(task.repo)
+  } catch {
+    // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
+    res.status(503).json({ error: 'could not inspect repository changes' })
+    return
+  }
+
+  res.json({ taskId: task.id, repo: task.repo, branch: task.branch, changedFiles })
 })
 
 // DELETE /tasks/:id — kill active task
