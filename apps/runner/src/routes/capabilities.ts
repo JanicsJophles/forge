@@ -29,6 +29,9 @@ capabilitiesRouter.get('/capabilities', (_req, res) => {
     providerSelectionVersion: 1,
     providers: ['claude', 'codex'],
     version,
+    // Whether a bearer token guards state-changing routes. Lets dispatchers
+    // decide up front whether they must send an Authorization header.
+    authRequired: config.authToken !== undefined,
     limits: {
       maxConcurrentTasks: config.maxConcurrentTasks,
       taskTimeoutMs: config.taskTimeoutMs,

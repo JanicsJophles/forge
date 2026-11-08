@@ -8,8 +8,19 @@ import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
+import { requireBearerAuth } from './routes/auth.js'
 
 const app = express()
+
+// Optional bearer-token gate on state-changing routes. Runs before the body
+// parser so an unauthenticated request body is never parsed. A pass-through when
+// no token is configured (auth off).
+if (config.authToken) {
+  console.log('[forge] bearer-token auth enabled on state-changing routes')
+} else {
+  console.warn('[forge] FORGE_AUTH_TOKEN not set — state-changing routes accept unauthenticated requests')
+}
+app.use(requireBearerAuth(config.authToken))
 
 // Explicit limit sized for large prompts (default is 100kb).
 app.use(express.json({ limit: '2mb' }))
