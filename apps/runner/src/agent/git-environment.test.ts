@@ -59,28 +59,42 @@ test('branch and status read the supplied checkout despite conflicting selectors
 })
 
 test('pull and commit receive isolated noninteractive environments', t => {
-  const calls: { command: unknown; options: childProcess.ExecSyncOptions }[] = []
-  t.mock.method(childProcess, 'execFileSync', (_file: unknown, args: string[], options: childProcess.ExecSyncOptions) => {
-    calls.push({ command: args, options })
-    return args[0] === 'symbolic-ref' ? 'main\n' : args[0] === 'config' ? 'refs/heads/main\n' : ''
-  })
-  t.mock.method(childProcess, 'execSync', (command: string, options: childProcess.ExecSyncOptions) => {
-    // Ownership handling is separate from Git and remains unchanged.
-    if (!command.startsWith('git ')) return ''
-    calls.push({ command, options })
-    return command === 'git rev-parse HEAD' ? 'abc123\n' : ''
+  const calls: { file: string; command: string[]; options: childProcess.ExecSyncOptions }[] = []
+  // Every subprocess — git AND chown — now runs shell-free via execFileSync, so
+  // a single mock captures the full argv for each call.
+  t.mock.method(childProcess, 'execFileSync', (file: string, args: string[], options: childProcess.ExecSyncOptions) => {
+    calls.push({ file, command: args, options })
+    if (file !== 'git') return '' // chown (ownership), not a Git call
+    return args[0] === 'symbolic-ref'
+      ? 'main\n'
+      : args[0] === 'config'
+        ? 'refs/heads/main\n'
+        : args[0] === 'rev-parse'
+          ? 'abc123\n'
+          : ''
   })
   syncBuiltinESMExports()
   try {
     withSelectors(Object.fromEntries(selectors.map(key => [key, '/conflicting/checkout'])), () => {
       gitPull('/supplied/checkout', { uid: 123, gid: 456 }, 789)
       assert.equal(gitCommit('/supplied/checkout', 'message', { uid: 123, gid: 456 }), 'abc123')
-      assert.equal(calls.length, 6)
-      assert.deepEqual(calls.slice(0, 3).map(call => call.command), [
-        ['symbolic-ref', '--quiet', '--short', 'HEAD'], ['config', '--get', 'branch.main.merge'], ['pull', '--ff-only'],
+
+      // Ownership is fixed without a shell: the repo path is a lone argv
+      // element, never interpolated into a command string.
+      const chown = calls.filter(call => call.file === 'chown')
+      assert.equal(chown.length, 1)
+      assert.deepEqual(chown[0].command, ['-R', '123:456', '/supplied/checkout'])
+
+      const git = calls.filter(call => call.file === 'git')
+      assert.deepEqual(git.map(call => call.command), [
+        ['symbolic-ref', '--quiet', '--short', 'HEAD'],
+        ['config', '--get', 'branch.main.merge'],
+        ['pull', '--ff-only'],
+        ['add', '-u'],
+        ['commit', '-m', 'message'],
+        ['rev-parse', 'HEAD'],
       ])
-      assert.deepEqual(calls.slice(3).map(call => call.command), ['git add -u', 'git commit -m "message"', 'git rev-parse HEAD'])
-      for (const { options } of calls) {
+      for (const { options } of git) {
         for (const key of selectors) assert.equal(Object.hasOwn(options.env!, key), false, key)
         assert.equal(options.cwd, '/supplied/checkout')
         assert.equal(options.uid, 123)
@@ -91,7 +105,8 @@ test('pull and commit receive isolated noninteractive environments', t => {
         assert.equal(options.env?.SSH_ASKPASS, '/bin/false')
         assert.equal(options.env?.GIT_SSH_COMMAND, 'ssh -oBatchMode=yes')
       }
-      for (const { options } of calls.slice(0, 3)) {
+      // The three read/pull probes stay bounded and hard-killed.
+      for (const { options } of git.slice(0, 3)) {
         assert.equal(options.timeout, 789)
         assert.equal(options.killSignal, 'SIGKILL')
       }
