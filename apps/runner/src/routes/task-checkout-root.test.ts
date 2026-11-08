@@ -19,6 +19,9 @@ test('checkout roots lock subdirectories and legacy aliases but isolate worktree
   fs.mkdirSync(path.join(repo, 'src'))
   const git = (...args: string[]) => childProcess.execFileSync('git', args, { cwd: repo, stdio: 'pipe' })
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'init')
+  // Give `other` a commit too so the (branchless) admission path can resolve its
+  // current branch when it is admitted as an independent checkout below.
+  childProcess.execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'init'], { cwd: other, stdio: 'pipe' })
   const worktree = path.join(root, 'worktree')
   git('worktree', 'add', '-qb', 'linked', worktree)
   const clone = path.join(root, 'clone')
@@ -63,7 +66,7 @@ test('checkout roots lock subdirectories and legacy aliases but isolate worktree
   async function post(candidate: string) {
     const response = await fetch(`http://127.0.0.1:${address.port}/tasks`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: candidate, prompt: 'test', branch: 'main', provider: 'codex' }),
+      body: JSON.stringify({ repo: candidate, prompt: 'test', provider: 'codex' }),
     })
     return { status: response.status, body: await response.json() as { taskId: string } }
   }
