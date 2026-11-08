@@ -40,6 +40,7 @@ test('root and legacy discovery return the same static contract; unknown paths s
             providerSelectionVersion: number
             providers: string[]
             version: string
+            authRequired: boolean
             limits: {
               maxConcurrentTasks: number
               taskTimeoutMs: number
@@ -50,6 +51,8 @@ test('root and legacy discovery return the same static contract; unknown paths s
           // Existing contract fields stay byte-for-byte stable.
           assert.equal(body.providerSelectionVersion, 1)
           assert.deepEqual(body.providers, ['claude', 'codex'])
+          // With no token configured, auth is off.
+          assert.equal(body.authRequired, false)
           // New observability fields: live build version + admission limits.
           assert.equal(typeof body.version, 'string')
           assert.ok(body.version.length > 0)

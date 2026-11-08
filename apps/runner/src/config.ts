@@ -48,6 +48,9 @@ export const config = {
   autoCommit: process.env.AUTO_COMMIT === 'true' || process.env.AUTO_COMMIT === '1',
   commitMessagePrefix: process.env.COMMIT_MESSAGE_PREFIX ?? '[forge]',
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  // Optional bearer token guarding state-changing routes. Unset or blank means
+  // auth is OFF and every route is open, exactly as before (see routes/auth.ts).
+  authToken: process.env.FORGE_AUTH_TOKEN?.trim() || undefined,
   // Short git SHA of the deployed build, appended to the reported version when
   // set. Optional: empty/unset means version is the package.json value alone.
   gitSha: process.env.FORGE_GIT_SHA?.trim() || undefined,
