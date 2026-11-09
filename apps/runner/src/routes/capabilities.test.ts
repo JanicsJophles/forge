@@ -43,6 +43,11 @@ test('root and legacy discovery return the same static contract; unknown paths s
             providers: string[]
             version: string
             authRequired: boolean
+            build: {
+              version: string
+              gitShaPinned: boolean
+              commitMessagePrefix: string
+            }
             limits: {
               maxConcurrentTasks: number
               taskTimeoutMs: number
@@ -66,6 +71,11 @@ test('root and legacy discovery return the same static contract; unknown paths s
           assert.equal(body.limits.taskTimeoutMs, config.taskTimeoutMs)
           assert.equal(body.limits.minFreeDiskMb, config.minFreeDiskMb)
           assert.equal(body.limits.autoCommit, config.autoCommit)
+          // Build block: version mirrors the top-level field, gitShaPinned is a
+          // boolean (never the raw SHA), and the commit prefix is the public one.
+          assert.equal(body.build.version, body.version)
+          assert.equal(body.build.gitShaPinned, config.gitSha !== undefined)
+          assert.equal(body.build.commitMessagePrefix, config.commitMessagePrefix)
           // Logging bounds mirror the constants the log routes enforce, so
           // pagination clients can self-configure instead of hard-coding caps.
           assert.equal(body.logging.maxSliceBytes, MAX_LOG_SLICE_BYTES)
