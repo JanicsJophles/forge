@@ -91,6 +91,8 @@ test('runner own tasks render with escaped fields and track the repo + activity 
   assert.match(tasks(), /<span class="repo">owner\/forge<\/span>/)
   assert.match(tasks(), /branch: fleet\/forge\/x/)
   assert.match(tasks(), /<span class="status status-running">running<\/span>/)
+  assert.match(tasks(), /<span class="provider">claude<\/span>/)
+  assert.match(tasks(), /<a class="log" target="_blank" rel="noopener" href="\/tasks\/task-1\/log\?format=text">log<\/a>/)
   assert.match(tasks(), /<div class="intent">do a thing<\/div>/)
   assert.match(tasks(), /class="age">created \d+[smhd] ago/)
   assert.equal(h.el('taskCount2').textContent, '1')
@@ -131,4 +133,21 @@ test('runner own tasks render with escaped fields and track the repo + activity 
   await h.success(noTasks)
   assert.match(tasks(), /no active runner tasks/)
   assert.match(h.el('connection').textContent, /^Connected/)
+})
+
+test('runner tasks render without a provider and encode the id in the log link', async () => {
+  const h = await harness(await servedScript())
+  const tasks = () => h.el('tasks').innerHTML
+  await h.success({
+    ...snapshot(),
+    liveTasks: [{
+      id: 'task a/b', repo: 'owner/forge', branch: 'fleet/forge/x',
+      status: 'running', provider: '', promptSnippet: 'do a thing',
+      createdAt: '2026-11-05T06:59:00Z',
+    }],
+  })
+  // No provider → no badge, but the row (and its log link) still render.
+  assert.match(tasks(), /class="task-row"/)
+  assert.ok(!tasks().includes('class="provider"'))
+  assert.match(tasks(), /href="\/tasks\/task%20a%2Fb\/log\?format=text"/)
 })

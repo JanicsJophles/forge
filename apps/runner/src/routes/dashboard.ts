@@ -177,6 +177,25 @@ const HTML = `<!DOCTYPE html>
       font-weight: 600;
       font-variant-numeric: tabular-nums;
     }
+    .task-row .provider {
+      display: inline-block;
+      background: var(--panel-2);
+      color: var(--text-dim);
+      padding: 1px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .task-row .log {
+      display: inline-block;
+      margin-left: 6px;
+      color: var(--running);
+      text-decoration: none;
+      font-size: 11px;
+    }
+    .task-row .log:hover { text-decoration: underline; }
     .full-span { grid-column: 1 / -1; }
     .event-row .time {
       display: inline-block;
@@ -445,13 +464,16 @@ const HTML = `<!DOCTYPE html>
         // Only in-flight tasks get a live timer; anything else degrades to no label.
         const running = t.status === 'running' || t.status === 'queued';
         const elapsedLabel = running ? elapsed(t.createdAt) : '';
+        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log?format=text';
         return [
           '<div class="task-row">',
             '<div>',
               '<span class="id">' + escape(t.id) + '</span>',
               t.repo ? '<span class="repo">' + escape(t.repo) + '</span>' : '',
               t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
+              t.provider ? '<span class="provider">' + escape(t.provider) + '</span>' : '',
               elapsedLabel ? '<span class="elapsed">' + escape(elapsedLabel) + '</span>' : '',
+              '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>',
             '</div>',
             t.branch ? '<div class="branch">branch: ' + escape(t.branch) + '</div>' : '',
             t.promptSnippet ? '<div class="intent">' + escape(t.promptSnippet) + '</div>' : '',
