@@ -63,6 +63,8 @@ test('GET /health reports acceptingTasks matching admission', async () => {
     assert.equal(body.dataDiskOk, true)
     assert.equal(body.queuedOrRunning, 0)
     assert.equal(body.acceptingTasks, true)
+    // Accepting → the reason code is null (purely additive to acceptingTasks).
+    assert.equal(body.notAcceptingReason, null)
 
     // At/over concurrency: fill the 2 slots. Disk is fine but there is no room,
     // so admission would refuse → acceptingTasks is false.
@@ -75,6 +77,8 @@ test('GET /health reports acceptingTasks matching admission', async () => {
     assert.equal(body.diskOk, true)
     assert.equal(body.dataDiskOk, true)
     assert.equal(body.acceptingTasks, false)
+    // Both disks healthy, only slots are full → 'concurrency'.
+    assert.equal(body.notAcceptingReason, 'concurrency')
     db.prepare('DELETE FROM tasks').run()
 
     // Low disk: a reading below MIN_FREE_DISK_MB → acceptingTasks false even
@@ -86,6 +90,20 @@ test('GET /health reports acceptingTasks matching admission', async () => {
     assert.equal(body.diskOk, false)
     assert.equal(body.queuedOrRunning, 0)
     assert.equal(body.acceptingTasks, false)
+    // Repo volume is the one below the floor → 'disk'.
+    assert.equal(body.notAcceptingReason, 'disk')
+
+    // Low data disk: repo volume healthy but the sqlite volume is below the floor
+    // → 'dataDisk', distinguishing the two volumes a dispatcher would otherwise
+    // have to tell apart from diskOk/dataDiskOk itself.
+    repoMb = 200
+    dataMb = 99
+    body = await getHealth()
+    assert.equal(body.status, 'ok')
+    assert.equal(body.diskOk, true)
+    assert.equal(body.dataDiskOk, false)
+    assert.equal(body.acceptingTasks, false)
+    assert.equal(body.notAcceptingReason, 'dataDisk')
 
     // Unknown disk: a null (stat failure) reading is fail-safe — we do not claim
     // capacity we cannot verify, so acceptingTasks is false.
@@ -95,6 +113,8 @@ test('GET /health reports acceptingTasks matching admission', async () => {
     assert.equal(body.status, 'ok')
     assert.equal(body.dataDiskOk, null)
     assert.equal(body.acceptingTasks, false)
+    // A null/unverifiable reading reports 'unknown' — never silently healthy.
+    assert.equal(body.notAcceptingReason, 'unknown')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
     db.close()
