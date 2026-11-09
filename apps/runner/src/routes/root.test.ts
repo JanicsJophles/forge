@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
+import { runInNewContext } from 'node:vm'
 import express from 'express'
 import { rootRouter, acceptingLabel } from './root.js'
 import { version } from '../version.js'
@@ -127,4 +128,66 @@ test('GET / stays open (200) even when a bearer token is configured', async () =
   } finally {
     await close()
   }
+})
+
+async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network') {
+  const app = express()
+  app.use(rootRouter)
+  const { ready, close } = startApp(app)
+  let body: string
+  try {
+    body = await (await fetch((await ready) + '/')).text()
+  } finally {
+    await close()
+  }
+  assert.match(body, /<h2>Recent tasks<\/h2>/)
+  assert.match(body, /<li>recent tasks unavailable<\/li>/)
+  assert.doesNotMatch(body, /innerHTML|outerHTML|insertAdjacentHTML/)
+  class Element {
+    textContent = ''
+    children: Element[] = []
+    appendChild(child: Element) { this.children.push(child) }
+  }
+  const list = new Element()
+  const requests: string[] = []
+  runInNewContext(body.match(/<script>([\s\S]*?)<\/script>/)![1], {
+    document: {
+      getElementById: (id: string) => id === 'recent-tasks' ? list : new Element(),
+      createElement: (tag: string) => {
+        assert.equal(tag, 'li')
+        return new Element()
+      },
+    },
+    fetch: async (url: string) => {
+      requests.push(url)
+      if (url === '/health') return { ok: true, json: async () => ({}) }
+      if (failure === 'network') throw new Error('offline')
+      return { ok: failure !== 'http', status: 503, json: async () => payload }
+    },
+  })
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.deepEqual(requests, ['/tasks?limit=5', '/health'])
+  return list
+}
+
+test('landing script renders five compact task rows as literal text', async () => {
+  const task = { id: '12345678-abcd', repo: '/opt/repos/<img src=x onerror=alert(1)>/', status: '<b>running</b>' }
+  const list = await renderRecentTasks(Array.from({ length: 6 }, () => task))
+  assert.equal(list.children.length, 5)
+  assert.equal(list.children[0].textContent, '12345678 — <img src=x onerror=alert(1)> — <b>running</b>')
+})
+
+test('landing script handles an empty task list', async () => {
+  const list = await renderRecentTasks([])
+  assert.equal(list.children.length, 1)
+  assert.equal(list.children[0].textContent, 'No recent tasks')
+})
+
+test('landing script handles task request and payload failures', async () => {
+  for (const failure of ['http', 'network'] as const) {
+    const list = await renderRecentTasks([], failure)
+    assert.equal(list.textContent, 'recent tasks unavailable')
+  }
+  const list = await renderRecentTasks({ error: 'unexpected response' })
+  assert.equal(list.textContent, 'recent tasks unavailable')
 })
