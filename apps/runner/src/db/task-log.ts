@@ -35,33 +35,37 @@ export function readTaskStatusMeta(
   return { status: row.status ?? '', errorMessage: row.errorMessage ?? null }
 }
 
-// Return the last `lines` newline-delimited lines of the task's log, scanning
-// backward from the end. A trailing newline terminates the final line (it is
-// not treated as introducing an empty trailing line); a log with no trailing
-// newline still yields its final line. Fewer than `lines` lines returns the
-// whole log. The full blob is read because an accurate line tail must scan from
-// the end; the result shares readTaskLog's shape so the route sends it the same
-// way. Returns undefined when the task does not exist.
+// Scan backward in bounded BLOB slices, keeping at most MAX_LOG_SLICE_BYTES.
+// A terminating newline belongs to the final line. If the byte cap truncates
+// a line, offset exposes the omitted prefix. One snapshot keeps all slices and
+// totalBytes consistent while other connections append to the transcript.
 export function readTaskLogTail(db: Database.Database, id: string, lines: number) {
-  const row = db.prepare(`SELECT CAST(COALESCE(log, '') AS BLOB) AS bytes,
-    length(CAST(COALESCE(log, '') AS BLOB)) AS totalBytes
-    FROM tasks WHERE id = ?`).get(id) as
-    { bytes: Buffer | null; totalBytes: number } | undefined
-  if (!row) return undefined
-  const full = row.bytes ?? Buffer.alloc(0)
-  let start = 0
-  if (full.length > 0) {
-    // Skip the final terminating newline so it does not count as a separator.
-    let index = full.length - 1
-    if (full[index] === 0x0a) index--
+  return db.transaction(() => {
+    const row = db.prepare(`SELECT length(CAST(COALESCE(log, '') AS BLOB)) AS totalBytes
+      FROM tasks WHERE id = ?`).get(id) as { totalBytes: number } | undefined
+    if (!row) return undefined
+    const { totalBytes } = row
+    const floor = Math.max(0, totalBytes - MAX_LOG_SLICE_BYTES)
+    const slice = db.prepare(`SELECT substr(CAST(COALESCE(log, '') AS BLOB), ?, ?) AS bytes
+      FROM tasks WHERE id = ?`)
+    const chunks: Buffer[] = []
+    let cursor = totalBytes
     let seen = 0
-    for (; index >= 0; index--) {
-      if (full[index] === 0x0a && ++seen === lines) {
-        start = index + 1
-        break
+    while (cursor > floor) {
+      const start = Math.max(floor, cursor - 16384)
+      const { bytes } = slice.get(BigInt(start) + 1n, cursor - start, id) as { bytes: Buffer }
+      for (let index = bytes.length - 1; index >= 0; index--) {
+        // Ignore only the final newline, including when a chunk ends in one.
+        if (start + index === totalBytes - 1 && bytes[index] === 0x0a) continue
+        if (bytes[index] === 0x0a && ++seen === lines) {
+          chunks.push(bytes.subarray(index + 1))
+          const offset = start + index + 1
+          return { bytes: Buffer.concat(chunks.reverse()), offset, nextOffset: totalBytes, totalBytes }
+        }
       }
+      chunks.push(bytes)
+      cursor = start
     }
-  }
-  const bytes = full.subarray(start)
-  return { bytes, offset: start, nextOffset: full.length, totalBytes: row.totalBytes }
+    return { bytes: Buffer.concat(chunks.reverse()), offset: floor, nextOffset: totalBytes, totalBytes }
+  })()
 }
