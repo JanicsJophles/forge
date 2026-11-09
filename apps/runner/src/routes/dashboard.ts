@@ -223,6 +223,36 @@ const HTML = `<!DOCTYPE html>
       color: var(--fail);
       font-size: 11px;
     }
+    .task-row .retry {
+      margin-left: 6px;
+      background: rgba(16, 185, 129, 0.12);
+      color: var(--accent);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      border-radius: 4px;
+      padding: 1px 8px;
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .task-row .retry:hover:not(:disabled) { background: rgba(16, 185, 129, 0.2); }
+    .task-row .retry:disabled { opacity: 0.6; cursor: default; }
+    .task-row .commit {
+      display: inline-block;
+      margin-left: 6px;
+      color: var(--merged);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
+    .task-row .error-message {
+      display: block;
+      margin-top: 4px;
+      color: var(--fail);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .task-row .retry-msg { margin-left: 6px; font-size: 11px; }
+    .task-row .retry-msg.ok { color: var(--accent); }
+    .task-row .retry-msg.err { color: var(--fail); overflow-wrap: anywhere; }
     .full-span { grid-column: 1 / -1; }
     .event-row .time {
       display: inline-block;
@@ -408,6 +438,11 @@ const HTML = `<!DOCTYPE html>
       <h2>Runner tasks (own) <span class="count" id="taskCount2">0</span></h2>
       <div id="tasks"></div>
       <div class="by-repo" id="tasksByRepo"></div>
+    </section>
+
+    <section class="full-span">
+      <h2>Recent tasks <span class="count" id="recentCount">0</span></h2>
+      <div id="recentTasks"></div>
     </section>
   </main>
 
@@ -671,6 +706,87 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
+    async function retryTask(button) {
+      // data-task-id is already encodeURIComponent'd, so it is a safe URL path
+      // segment and a safe HTML attribute value.
+      const encodedId = button.dataset.taskId;
+      if (!encodedId) return;
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = 'retrying…';
+      // Clear any stale feedback left from a previous attempt on this row.
+      const row = button.closest ? button.closest('.task-row') : null;
+      const prev = row ? row.querySelector('.retry-msg') : null;
+      if (prev) prev.remove();
+      const feedback = (cls, text) => {
+        const span = document.createElement('span');
+        span.className = 'retry-msg ' + cls;
+        span.textContent = text;
+        button.insertAdjacentElement('afterend', span);
+      };
+      try {
+        const r = await fetch('/tasks/' + encodedId + '/retry', { method: 'POST' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // 201: a fresh task was queued; the next history poll surfaces it on top.
+        feedback('ok', 're-dispatched');
+      } catch (e) {
+        // Non-2xx (401 under FORGE_AUTH_TOKEN, 409 if the task is not terminal) or
+        // a network error: surface it inline — never a silent no-op.
+        feedback('err', 'retry failed: ' + e.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+    function renderRecentTasks(tasks) {
+      const root = document.getElementById('recentTasks');
+      const rows = Array.isArray(tasks) ? tasks : [];
+      document.getElementById('recentCount').textContent = rows.length;
+      if (!rows.length) {
+        root.innerHTML = '<div class="empty">no recent tasks</div>';
+        return;
+      }
+      root.innerHTML = rows.map(t => {
+        const statusClass = t.status ? 'status-' + String(t.status).replace(/[^a-z]/g, '') : '';
+        // Terminal rows are the only ones that carry a commit / error line or a
+        // retry control; queued/running ones are still in flight.
+        const terminal = t.status === 'completed' || t.status === 'failed';
+        const hasId = t.id != null && t.id !== '';
+        const shortSha = typeof t.commitSha === 'string' ? t.commitSha.slice(0, 7) : '';
+        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log?format=text';
+        return [
+          '<div class="task-row">',
+            '<div>',
+              '<span class="id">' + escape(t.id) + '</span>',
+              t.repo ? '<span class="repo">' + escape(t.repo) + '</span>' : '',
+              t.provider ? '<span class="provider">' + escape(t.provider) + '</span>' : '',
+              t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
+              t.status === 'completed' && shortSha ? '<span class="commit">' + escape(shortSha) + '</span>' : '',
+              hasId ? '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>' : '',
+              hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)">retry</button>' : '',
+            '</div>',
+            t.status === 'failed' && t.errorMessage ? '<div class="error-message">' + escape(t.errorMessage) + '</div>' : '',
+            '<div class="age">created ' + relTime(t.createdAt) + '</div>',
+          '</div>'
+        ].join('');
+      }).join('');
+    }
+    async function refreshRecentTasks() {
+      // Independent of the 5s /agent-context poll: GET /tasks is task history
+      // (terminal rows included), a read endpoint so never auth-gated. On any
+      // failure keep the last good render in place and try again next tick.
+      try {
+        const r = await fetch('/tasks?limit=15');
+        if (r.ok) {
+          const rows = await r.json();
+          if (Array.isArray(rows)) renderRecentTasks(rows);
+        }
+      } catch (e) {
+        // swallow — the panel degrades to its last successful render
+      } finally {
+        setTimeout(refreshRecentTasks, 5000);
+      }
+    }
     let latestSnapshot = null;
     let selectedRepo = '';
     let selectedEventType = '';
@@ -834,7 +950,13 @@ const HTML = `<!DOCTYPE html>
     // in a bare VM with no window, so this keeps the one-poll-in-flight invariant
     // (dashboard-refresh asserts a single fetch at load); those tests drive the
     // launcher functions directly.
-    if (typeof window !== 'undefined') wireNewTaskForm();
+    if (typeof window !== 'undefined') {
+      wireNewTaskForm();
+      // Defer the first history fetch one tick. A real browser runs the 0ms timer
+      // immediately; the headless unit harnesses define window but never run
+      // timers, so they never see a /tasks GET racing a launcher /tasks POST.
+      setTimeout(refreshRecentTasks, 0);
+    }
     refresh();
   </script>
 </body>
