@@ -36,16 +36,27 @@ healthRouter.get('/health', (_req, res) => {
   }
   const dataDiskOk = dataFreeDiskMb === null ? null : dataFreeDiskMb >= config.minFreeDiskMb
 
+  // One go/no-go that mirrors admitCheckout (tasks.ts): a new task is refused
+  // when EITHER disk volume is below MIN_FREE_DISK_MB or concurrency is full.
+  // Expose the same combined verdict so dispatchers stop re-deriving it from the
+  // raw fields and drifting from the real admission rule. An unknown (null) disk
+  // reading is treated as not-accepting: fail-safe rather than claim capacity we
+  // cannot verify. This is a readiness hint only — status stays 'ok' (liveness).
+  const queuedOrRunning = countActiveTasks()
+  const acceptingTasks =
+    diskOk === true && dataDiskOk === true && queuedOrRunning < config.maxConcurrentTasks
+
   res.json({
     status: 'ok',
     version,
     activeTasks: countActiveProcs(),
-    queuedOrRunning: countActiveTasks(),
+    queuedOrRunning,
     maxConcurrentTasks: config.maxConcurrentTasks,
     freeDiskMb,
     diskOk,
     dataFreeDiskMb,
     dataDiskOk,
+    acceptingTasks,
     uptimeSeconds: Math.floor(process.uptime()),
     oldestRunningTaskAgeSeconds: oldestRunningTaskAgeSeconds(),
   })
