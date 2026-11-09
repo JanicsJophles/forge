@@ -11,6 +11,7 @@ test('GET/HEAD /:id/log surface a failed task reason via X-Task-Error', async t 
   process.env.DOTENV_CONFIG_PATH = path.join(directory, 'no-env-file')
   t.after(() => rm(directory, { recursive: true, force: true }))
   const { taskLogRouter } = await import('./task-log.js')
+  const { tasksRouter } = await import('./tasks.js')
   const { db } = await import('../db/schema.js')
   t.after(() => db.close())
   const insert = db.prepare(
@@ -23,7 +24,17 @@ test('GET/HEAD /:id/log surface a failed task reason via X-Task-Error', async t 
   insert.run('failed-nomsg', 'failed', 'log body\n', null)
   insert.run('done', 'done', 'log body\n', null)
 
-  const app = express().use('/tasks', taskLogRouter)
+  const cases = [
+    ['emoji', 'agent 💥 failed', 'agent   failed'],
+    ['dash', 'agent—failed', 'agent failed'],
+    ['nul', 'agent\0failed', 'agent failed'],
+    ['controls', 'agent\t\x01\x7f failed', 'agent  failed'],
+    ['ascii', 'exit 1: [failed]!', 'exit 1: [failed]!'],
+    ['unicode-long', '💥'.repeat(300) + 'x'.repeat(300), 'x'.repeat(199)],
+  ]
+  for (const [id, original] of cases) insert.run(id, 'failed', 'log body\n', original)
+
+  const app = express().use('/tasks', taskLogRouter).use('/tasks', tasksRouter)
   const server = app.listen(0, '127.0.0.1')
   await new Promise<void>(resolve => server.once('listening', resolve))
   t.after(() => new Promise<void>((resolve, reject) => {
@@ -34,21 +45,27 @@ test('GET/HEAD /:id/log surface a failed task reason via X-Task-Error', async t 
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}/tasks`
 
+  for (const [id, original] of [...cases, ['failed-newline', injection]]) {
+    const detail = await fetch(`${base}/${id}`)
+    assert.equal(detail.status, 200)
+    assert.equal((await detail.json()).errorMessage, original)
+  }
+
   for (const method of ['GET', 'HEAD'] as const) {
     async function fetchLog(id: string) {
-      const response = await fetch(`${base}/${id}/log`, { method })
+      const response = await fetch(`${base}/${id}`, { method })
       assert.equal(response.status, 200, `${method} ${id}`)
       await response.arrayBuffer()
       return response
     }
 
     // Failed with a stored message: header present, carries the message.
-    const failed = await fetchLog('failed')
+    const failed = await fetchLog('failed/log')
     assert.equal(failed.headers.get('x-task-status'), 'failed')
     assert.equal(failed.headers.get('x-task-error'), 'agent process exited with code 1')
 
     // Newline-bearing message: single line (no CR/LF), bounded, no injected header.
-    const newline = await fetchLog('failed-newline')
+    const newline = await fetchLog('failed-newline/log')
     const value = newline.headers.get('x-task-error')
     assert.ok(value, `${method} expected X-Task-Error`)
     assert.ok(!/[\r\n]/.test(value), `${method} X-Task-Error must be single-line`)
@@ -56,13 +73,22 @@ test('GET/HEAD /:id/log surface a failed task reason via X-Task-Error', async t 
     assert.equal(value, ('boom X-Injected: evil second line' + 'a'.repeat(300)).slice(0, 200))
     assert.equal(newline.headers.get('x-injected'), null)
 
+    for (const [id, , expected] of cases) {
+      for (const query of ['', '?format=text', '?format=text&download=1', '?tailLines=1', '?tailLines=1&format=text']) {
+        const response = await fetchLog(id + '/log' + query)
+        assert.equal(response.headers.get('x-task-status'), 'failed')
+        assert.equal(response.headers.get('x-task-error'), expected)
+        assert.ok(/^[\x20-\x7e]{1,200}$/.test(response.headers.get('x-task-error')!))
+      }
+    }
+
     // Failed but no stored message: header absent.
-    const noMessage = await fetchLog('failed-nomsg')
+    const noMessage = await fetchLog('failed-nomsg/log')
     assert.equal(noMessage.headers.get('x-task-status'), 'failed')
     assert.equal(noMessage.headers.get('x-task-error'), null)
 
     // Non-failed task: header absent even though status is terminal.
-    const done = await fetchLog('done')
+    const done = await fetchLog('done/log')
     assert.equal(done.headers.get('x-task-status'), 'done')
     assert.equal(done.headers.get('x-task-error'), null)
   }

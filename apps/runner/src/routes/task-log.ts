@@ -8,15 +8,16 @@ export const taskLogRouter = Router()
 // Reflect a task's status into X-Task-Status and, for a failed task with a
 // stored message, its reason into X-Task-Error — so a tail-follow poller learns
 // both completion and the failure cause without a second request. The message
-// is sanitized to a single line (CR/LF collapsed to a space) and bounded to 200
-// chars so a message containing newlines cannot inject extra response headers.
+// uses printable ASCII only (other character runs become a space) and is
+// bounded to 200 bytes. Keep the original diagnostic in task detail; arbitrary
+// Unicode and controls are not safe for Node response headers.
 // The task is known to exist at every call site (the readers 404 otherwise), so
 // a missing meta falls back to an empty status.
 function setTaskStatusHeaders(res: Response, id: string): void {
   const meta = readTaskStatusMeta(db, id)
   res.setHeader('X-Task-Status', meta?.status ?? '')
   if (meta?.status === 'failed' && meta.errorMessage) {
-    res.setHeader('X-Task-Error', meta.errorMessage.replace(/[\r\n]+/g, ' ').slice(0, 200))
+    res.setHeader('X-Task-Error', meta.errorMessage.replace(/[^\x20-\x7e]+/gu, ' ').slice(0, 200))
   }
 }
 
