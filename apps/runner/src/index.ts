@@ -8,6 +8,7 @@ import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
+import { rootRouter } from './routes/root.js'
 import { requireBearerAuth } from './routes/auth.js'
 
 const app = express()
@@ -36,6 +37,7 @@ process.on('uncaughtException', (err) => {
 })
 
 // Routes
+app.use(rootRouter)
 app.use(healthRouter)
 app.use(capabilitiesRouter)
 app.use('/tasks', taskLogRouter)
