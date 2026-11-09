@@ -133,6 +133,7 @@ function viewHtml(id: string, status: string): string {
       <a href="/dashboard">dashboard</a>
     </header>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
+    <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log"><span id="empty">waiting for output…</span></pre>
     <footer>Live tail via <code>/tasks/:id/stream</code> · scroll up to pause autoscroll</footer>
     <script>
@@ -254,6 +255,7 @@ function viewHtml(id: string, status: string): string {
             return data;
           }
         }
+        var opened = false;
         var source;
         try {
           source = new EventSource(STREAM_URL);
@@ -262,7 +264,20 @@ function viewHtml(id: string, status: string): string {
           return;
         }
         source.addEventListener('open', function () {
-          if (!done) setStatus('streaming', '');
+          if (done) return;
+          if (opened) {
+            // Each connection starts with a fresh server tail, not a resume.
+            // Clear text in place so a retained transcript node (DOM cap) stays valid.
+            Array.from(logEl.childNodes).forEach(function (node, index) {
+              if (index === 0) node.textContent = '';
+              else node.remove();
+            });
+            document.getElementById('replayNotice').hidden = false;
+            var omitted = document.getElementById('omitted');
+            if (omitted) omitted.hidden = true;
+          }
+          opened = true;
+          setStatus('streaming', '');
         });
         source.addEventListener('log', function (e) {
           appendLog(parse(e.data));
