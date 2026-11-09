@@ -127,3 +127,66 @@ test('recorded commit probes ignore later commits and dirty worktrees, including
     fs.rmSync(repo, { recursive: true, force: true })
   }
 })
+
+for (const helper of ['external diff', 'textconv']) {
+  test(`change inspection suppresses configured ${helper} helpers`, async () => {
+    const { execFileSync } = await import('node:child_process')
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const path = await import('node:path')
+    const { getChangedFiles, getChangesPatch } = await import('./git-changes.js')
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-diff-helpers-'))
+    const marker = path.join(repo, '.git', 'helper-ran')
+    const git = (...args: string[]) => execFileSync('git', [
+      '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', ...args,
+    ], { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim()
+    const write = (name: string, content: string) => fs.writeFileSync(path.join(repo, name), content)
+    try {
+      git('init', '-q')
+      write('sample.txt', 'original\n')
+      git('add', 'sample.txt')
+      git('commit', '-qm', 'root')
+      const root = git('rev-parse', 'HEAD')
+      git('checkout', '-qb', 'side')
+      write('side.txt', 'side\n')
+      git('add', 'side.txt')
+      git('commit', '-qm', 'side')
+      git('checkout', '-qb', 'task', root)
+      write('sample.txt', 'recorded\n')
+      git('add', 'sample.txt')
+      git('commit', '-qm', 'task')
+      const recorded = git('rev-parse', 'HEAD')
+      git('merge', '--no-ff', '-qm', 'merge', 'side')
+      const merge = git('rev-parse', 'HEAD')
+      write('sample.txt', 'working tree\n')
+
+      // Record native results before enabling helpers, including root and
+      // first-parent merge behavior. Keep helper files inside .git so status
+      // does not include test machinery.
+      const revisions = [undefined, root, recorded, merge]
+      const expected = revisions.map(sha => ({
+        files: getChangedFiles(repo, sha), patch: getChangesPatch(repo, sha),
+      }))
+      write('.git/helper.sh', '#!/bin/sh\nprintf ran > .git/helper-ran\nprintf "converted output\\n"\n')
+      fs.chmodSync(path.join(repo, '.git/helper.sh'), 0o755)
+      if (helper === 'external diff') {
+        git('config', 'diff.external', '.git/helper.sh')
+      } else {
+        write('.git/info/attributes', '*.txt diff=marker\n')
+        git('config', 'diff.marker.textconv', '.git/helper.sh')
+      }
+      // Positive control: ordinary Git really invokes the configured helper.
+      git('diff', '--ext-diff', '--textconv', 'HEAD')
+      assert.equal(fs.existsSync(marker), true)
+      fs.unlinkSync(marker)
+      revisions.forEach((sha, index) => {
+        assert.deepEqual(getChangedFiles(repo, sha), expected[index].files)
+        assert.equal(fs.existsSync(marker), false, `name-status helper ran for ${sha}`)
+        assert.deepEqual(getChangesPatch(repo, sha), expected[index].patch)
+        assert.equal(fs.existsSync(marker), false, `patch helper ran for ${sha}`)
+      })
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true })
+    }
+  })
+}
