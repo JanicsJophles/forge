@@ -169,6 +169,14 @@ const HTML = `<!DOCTYPE html>
       font-size: 11px;
       margin-top: 4px;
     }
+    .task-row .elapsed {
+      display: inline-block;
+      margin-left: 6px;
+      color: var(--running);
+      font-size: 11px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
     .full-span { grid-column: 1 / -1; }
     .event-row .time {
       display: inline-block;
@@ -312,6 +320,21 @@ const HTML = `<!DOCTYPE html>
       if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
       return Math.floor(sec / 86400) + 'd ago';
     }
+    function elapsed(iso) {
+      // Compact running duration since createdAt, e.g. '12m 03s' / '1h 04m 09s'.
+      // Returns '' for missing/malformed input so the caller can omit the label.
+      if (typeof iso !== 'string' || !iso.trim()) return '';
+      let timestamp = iso.trim().replace(' ', 'T');
+      if (!/(Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(timestamp)) timestamp += 'Z';
+      const t = Date.parse(timestamp);
+      if (!Number.isFinite(t)) return '';
+      const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      const pad = n => String(n).padStart(2, '0');
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      return h > 0 ? h + 'h ' + pad(m) + 'm ' + pad(s) + 's' : m + 'm ' + pad(s) + 's';
+    }
     const claimedFilesOpen = new Map();
     function renderAgents(agents) {
       const root = document.getElementById('agents');
@@ -419,12 +442,16 @@ const HTML = `<!DOCTYPE html>
       }
       root.innerHTML = tasks.map(t => {
         const statusClass = t.status ? 'status-' + t.status.replace(/[^a-z]/g, '') : '';
+        // Only in-flight tasks get a live timer; anything else degrades to no label.
+        const running = t.status === 'running' || t.status === 'queued';
+        const elapsedLabel = running ? elapsed(t.createdAt) : '';
         return [
           '<div class="task-row">',
             '<div>',
               '<span class="id">' + escape(t.id) + '</span>',
               t.repo ? '<span class="repo">' + escape(t.repo) + '</span>' : '',
               t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
+              elapsedLabel ? '<span class="elapsed">' + escape(elapsedLabel) + '</span>' : '',
             '</div>',
             t.branch ? '<div class="branch">branch: ' + escape(t.branch) + '</div>' : '',
             t.promptSnippet ? '<div class="intent">' + escape(t.promptSnippet) + '</div>' : '',
