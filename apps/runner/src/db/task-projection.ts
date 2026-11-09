@@ -1,3 +1,4 @@
+import { StringDecoder } from 'node:string_decoder'
 import type Database from 'better-sqlite3'
 
 export const LOG_TAIL_BYTES = 262144
@@ -15,6 +16,15 @@ function tailStart(bytes: Buffer | null): number {
 
 export function decodeTail(bytes: Buffer | null): string {
   return bytes?.subarray(tailStart(bytes)).toString('utf8') ?? ''
+}
+
+// SQLite projects a leading byte prefix (substr(blob, 1, N)) before Node sees it.
+// That prefix can end inside a UTF-8 codepoint; StringDecoder.write() emits only the
+// complete codepoints and withholds any trailing partial sequence, so the returned
+// head is byte-safe (never a split multibyte char).
+export function decodeHead(bytes: Buffer | null): string {
+  if (bytes === null) return ''
+  return new StringDecoder('utf8').write(bytes)
 }
 
 export function readTaskProjection(db: Database.Database, id: string, view: TaskView) {
