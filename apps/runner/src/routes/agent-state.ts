@@ -13,10 +13,12 @@
 //                                   up to 200 newest events from the last 24h,
 //                                   with explicit truncation metadata, plus a
 //                                   runner-wide `capacity` block (active tasks,
-//                                   max concurrency, available slots).
+//                                   max concurrency, available slots) and a
+//                                   `disk` block (free MiB + ok flag, like
+//                                   /health).
 //                                   ?repo=<name> narrows every collection and
-//                                   its counts to that repo — but NOT capacity,
-//                                   since concurrency is global.
+//                                   its counts to that repo — but NOT capacity
+//                                   or disk, since both are global.
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -33,6 +35,7 @@ import {
 } from '../db/agent-state.js'
 import { db } from '../db/schema.js'
 import { listActiveTasks, countActiveTasks } from '../db/queries.js'
+import { freeDiskBytes } from '../agent/disk.js'
 import { config } from '../config.js'
 
 export const agentStateRouter = Router()
@@ -205,6 +208,21 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     availableSlots: Math.max(0, maxConcurrentTasks - activeTasks),
   }
 
+  // Disk headroom, computed exactly like /health and also global (admission in
+  // tasks.ts refuses new work below MIN_FREE_DISK_MB), so a dispatcher can read
+  // "can I launch another task now?" — slots AND disk — from this one call. A
+  // filesystem stat failure fails open to nulls rather than 500-ing the snapshot.
+  let freeDiskMb: number | null = null
+  try {
+    freeDiskMb = Math.floor(freeDiskBytes(config.allowedRepoPaths[0]) / 1048576)
+  } catch {
+    freeDiskMb = null
+  }
+  const disk = {
+    freeDiskMb,
+    diskOk: freeDiskMb === null ? null : freeDiskMb >= config.minFreeDiskMb,
+  }
+
   res.json({
     generatedAt: new Date().toISOString(),
     liveAgents: live,
@@ -215,6 +233,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     liveTasksCount: liveTasks.length,
     liveTasksByRepo,
     capacity,
+    disk,
     recentEvents: events,
     recentEventsCount: events.length,
     recentEventsTruncated: eventWindow.length > 200,
