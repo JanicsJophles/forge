@@ -7,14 +7,14 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
   res.type('html').send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Forge task history</title>
-<style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.6rem;border-bottom:1px solid #aaa;overflow-wrap:anywhere}input,select,button{font:inherit;margin:.3rem}td:nth-child(4){white-space:pre-wrap}button:disabled{opacity:.5}</style>
+<style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.6rem;border-bottom:1px solid #aaa;overflow-wrap:anywhere}input,select,button{font:inherit;margin:.3rem}td:nth-child(4){white-space:pre-wrap}.failure-reason{white-space:pre-wrap}button:disabled{opacity:.5}</style>
 </head><body><nav><a href="/dashboard">Dashboard</a> · <a href="/">Home</a></nav>
 <h1>Task history</h1>
 <form id="filters"><label>Repository (exact path) <input id="repo" type="text"></label>
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
-<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th></tr></thead><tbody id="rows"></tbody></table>
+<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th></tr></thead><tbody id="rows"></tbody></table>
 <button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 <script>
 const repo = document.getElementById('repo');
@@ -63,12 +63,29 @@ async function load(targetCursors) {
         cell.textContent = value == null ? '' : String(value);
         row.appendChild(cell);
       }
+      if (task.status === 'failed' && typeof task.errorMessage === 'string' && task.errorMessage) {
+        const reason = document.createElement('div');
+        reason.className = 'failure-reason';
+        reason.textContent = task.errorMessage;
+        row.children[0].appendChild(reason);
+      }
       const cell = document.createElement('td');
       const link = document.createElement('a');
       link.href = '/tasks/' + encodeURIComponent(task.id) + '/log/view';
       link.textContent = 'View logs';
       cell.appendChild(link);
       row.appendChild(cell);
+      const commit = document.createElement('td');
+      commit.textContent = typeof task.commitSha === 'string' ? task.commitSha.slice(0, 7) : '';
+      row.appendChild(commit);
+      const changes = document.createElement('td');
+      if (typeof task.id === 'string' && /^[a-zA-Z0-9_-]+$/.test(task.id)) {
+        const link = document.createElement('a');
+        link.href = '/tasks/' + encodeURIComponent(task.id) + '/changes/view';
+        link.textContent = 'Changes';
+        changes.appendChild(link);
+      }
+      row.appendChild(changes);
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);
