@@ -299,7 +299,8 @@ const HTML = `<!DOCTYPE html>
       border-top: 1px solid var(--border);
       background: var(--panel-2);
     }
-    #repoFilter, #activityFilter, #eventTypeFilter, #ticketFilter { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #repoFilter, #activityFilter, #eventTypeFilter, #ticketFilter, #authToken { background: var(--panel); color: var(--text); border: 1px solid var(--border); padding: 4px 8px; }
+    #authToken { min-width: 280px; font-family: 'SF Mono', Menlo, monospace; }
     .by-repo .pill {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -382,6 +383,11 @@ const HTML = `<!DOCTYPE html>
     </div>
   </header>
 
+  <div class="by-repo" id="authTokenRow" style="display: none;">
+    <label for="authToken">Auth token</label>
+    <input type="password" id="authToken" placeholder="Bearer token — required for cancel / retry / launch" autocomplete="off" />
+  </div>
+
   <div class="by-repo">
     <label for="repoFilter">Repository</label>
     <select id="repoFilter"><option value="">All repositories</option></select>
@@ -452,6 +458,58 @@ const HTML = `<!DOCTYPE html>
 
   <script>
     const GITHUB_ORG = __GITHUB_ORG__;
+    // --- Bearer-token auth for state-changing controls -----------------------
+    // When the runner is started with FORGE_AUTH_TOKEN, POST/DELETE routes answer
+    // 401 without an Authorization header. The token input (revealed only when
+    // /capabilities reports authRequired) feeds authHeaders(), which is spread
+    // into the three state-changing fetches and NO read fetch. The token lives in
+    // sessionStorage so a reload keeps the operator signed in for the tab only.
+    const AUTH_TOKEN_KEY = 'forge.authToken';
+    function readStoredToken() {
+      try {
+        return (typeof sessionStorage !== 'undefined' && sessionStorage.getItem(AUTH_TOKEN_KEY)) || '';
+      } catch (e) {
+        return '';
+      }
+    }
+    function persistToken(value) {
+      try {
+        if (typeof sessionStorage === 'undefined') return;
+        if (value) sessionStorage.setItem(AUTH_TOKEN_KEY, value);
+        else sessionStorage.removeItem(AUTH_TOKEN_KEY);
+      } catch (e) {
+        // Storage disabled (private mode / quota): the in-memory input still
+        // works for the life of this tab; we just can't survive a reload.
+      }
+    }
+    function authHeaders() {
+      const input = document.getElementById('authToken');
+      const token = input && input.value ? String(input.value).trim() : readStoredToken();
+      return token ? { Authorization: 'Bearer ' + token } : {};
+    }
+    function wireAuthToken() {
+      const input = document.getElementById('authToken');
+      if (!input) return;
+      input.value = readStoredToken();
+      input.oninput = () => persistToken(String(input.value || '').trim());
+    }
+    async function revealAuthIfRequired() {
+      // /capabilities is a read endpoint, never auth-gated. authRequired true means
+      // the runner has a token configured, so reveal the input; otherwise it stays
+      // hidden and authHeaders() stays a no-op.
+      try {
+        const r = await fetch('/capabilities');
+        if (!r.ok) return;
+        const c = await r.json();
+        if (c && c.authRequired === true) {
+          const row = document.getElementById('authTokenRow');
+          if (row && row.style) row.style.display = '';
+        }
+      } catch (e) {
+        // Unreachable capabilities: leave the input hidden (same as auth-off). The
+        // launcher/cancel/retry controls still render and will surface a 401 inline.
+      }
+    }
     function escape(s) {
       const d = document.createElement('div');
       d.textContent = s == null ? '' : String(s);
@@ -597,7 +655,7 @@ const HTML = `<!DOCTYPE html>
       const prevErr = row ? row.querySelector('.cancel-err') : null;
       if (prevErr) prevErr.remove();
       try {
-        const r = await fetch('/tasks/' + encodedId, { method: 'DELETE' });
+        const r = await fetch('/tasks/' + encodedId, { method: 'DELETE', headers: authHeaders() });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         // 2xx: the task leaves the active set; the next 5s poll drops the row.
         if (row) row.classList.add('cancelling');
@@ -653,7 +711,7 @@ const HTML = `<!DOCTYPE html>
       try {
         const r = await fetch('/tasks', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify({ repo, prompt, provider, autoCommit }),
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -725,7 +783,7 @@ const HTML = `<!DOCTYPE html>
         button.insertAdjacentElement('afterend', span);
       };
       try {
-        const r = await fetch('/tasks/' + encodedId + '/retry', { method: 'POST' });
+        const r = await fetch('/tasks/' + encodedId + '/retry', { method: 'POST', headers: authHeaders() });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         // 201: a fresh task was queued; the next history poll surfaces it on top.
         feedback('ok', 're-dispatched');
@@ -951,6 +1009,8 @@ const HTML = `<!DOCTYPE html>
     // (dashboard-refresh asserts a single fetch at load); those tests drive the
     // launcher functions directly.
     if (typeof window !== 'undefined') {
+      wireAuthToken();
+      revealAuthIfRequired();
       wireNewTaskForm();
       // Defer the first history fetch one tick. A real browser runs the 0ms timer
       // immediately; the headless unit harnesses define window but never run
