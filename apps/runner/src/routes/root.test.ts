@@ -50,6 +50,37 @@ test('GET / returns an HTML landing page with version and a dashboard link', asy
   }
 })
 
+test('GET / embeds a client-side fetch of /health and keeps the static fallback', async () => {
+  const app = express()
+  app.use(rootRouter)
+  const { ready, close } = startApp(app)
+  try {
+    const base = await ready
+    const response = await fetch(base + '/')
+    assert.equal(response.status, 200)
+    const body = await response.text()
+    // The live status block fetches /health on each page load.
+    assert.match(body, /fetch\('\/health'/, 'landing page fetches /health client-side')
+    // The rendered fields the script fills in are present as targets.
+    for (const id of ['accepting', 'slots', 'uptime', 'live-version']) {
+      assert.ok(body.includes(`id="${id}"`), `status field #${id} is present`)
+    }
+    // Server values are written via textContent (never innerHTML) so a hostile
+    // /health payload cannot inject markup.
+    assert.match(body, /textContent/, 'script renders values with textContent')
+    assert.doesNotMatch(body, /innerHTML/, 'script never uses innerHTML')
+    // Static fallback: version + every documented endpoint still render without
+    // JS, so a failed fetch (or JS off) never leaves a blank page.
+    assert.ok(body.includes(version), 'static render still lists the build version')
+    for (const path of ['/health', '/capabilities', '/tasks', '/repos', '/agent-context']) {
+      assert.ok(body.includes(path), `landing page links ${path}`)
+    }
+    assert.match(body, /href="\/dashboard"/, 'dashboard link preserved')
+  } finally {
+    await close()
+  }
+})
+
 test('GET / stays open (200) even when a bearer token is configured', async () => {
   const app = express()
   // Mirror production ordering: the bearer gate runs before every route.
