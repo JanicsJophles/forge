@@ -1,18 +1,27 @@
 import { Router } from 'express'
 import type { Response } from 'express'
 import { db } from '../db/schema.js'
-import { MAX_LOG_SLICE_BYTES, readTaskLog, readTaskLogTail } from '../db/task-log.js'
+import { MAX_LOG_SLICE_BYTES, readTaskLog, readTaskLogTail, readTaskStatus } from '../db/task-log.js'
 
 export const taskLogRouter = Router()
 
 // Send a {bytes, offset, nextOffset, totalBytes} slice as either the raw
 // decoded text (format=text) or the default base64 JSON envelope. Both the
 // byte-slice and line-tail readers return this shape, so they share this.
+// The task is known to exist here (the slice readers 404 otherwise), so one
+// extra narrow read supplies X-Task-Status for polling tail loops. When
+// attachmentName is set the raw text is served as a download attachment.
 function sendSlice(
   res: Response,
   slice: { bytes: Buffer; offset: number; nextOffset: number; totalBytes: number },
   asText: boolean,
+  id: string,
+  attachmentName?: string,
 ): void {
+  res.setHeader('X-Task-Status', readTaskStatus(db, id) ?? '')
+  if (attachmentName) {
+    res.setHeader('Content-Disposition', `attachment; filename="${attachmentName}"`)
+  }
   if (asText) {
     res.setHeader('X-Total-Bytes', String(slice.totalBytes))
     res.setHeader('X-Next-Offset', String(slice.nextOffset))
@@ -43,6 +52,26 @@ taskLogRouter.get('/:id/log', (req, res) => {
     return
   }
   const asText = formats[0] === 'text'
+  // download=1 turns the raw text response into a file attachment. It only
+  // makes sense for the text path (the base64 JSON envelope is not a transcript
+  // file), so reject download on the default path, repeated/array values, and
+  // any value other than '1'.
+  const downloads = query.getAll('download')
+  const structuredDownload = [...query.keys()].some(key => key.startsWith('download['))
+  if (structuredDownload || downloads.length > 1 || (downloads.length === 1 && downloads[0] !== '1')) {
+    res.status(400).json({ error: "download must be omitted or '1'" })
+    return
+  }
+  const download = downloads[0] === '1'
+  if (download && !asText) {
+    res.status(400).json({ error: 'download=1 requires format=text' })
+    return
+  }
+  // Build the attachment filename once; sanitize the id to [A-Za-z0-9._-] so a
+  // crafted task id cannot inject characters into the Content-Disposition header.
+  const attachmentName = download
+    ? `forge-task-${req.params.id.replace(/[^A-Za-z0-9._-]/g, '_')}.log`
+    : undefined
   // tailLines selects a line-oriented tail of the whole log. Precedence/coherence:
   //   - format applies to the tail output just as to a byte slice (text vs base64 JSON);
   //   - tailLines is mutually exclusive with the byte-slice params offset/limit —
@@ -67,7 +96,7 @@ taskLogRouter.get('/:id/log', (req, res) => {
       res.status(404).json({ error: 'task not found' })
       return
     }
-    sendSlice(res, tailSlice, asText)
+    sendSlice(res, tailSlice, asText, req.params.id, attachmentName)
     return
   }
   const offset = integer('offset', 0, 0)
@@ -81,5 +110,5 @@ taskLogRouter.get('/:id/log', (req, res) => {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  sendSlice(res, slice, asText)
+  sendSlice(res, slice, asText, req.params.id, attachmentName)
 })
