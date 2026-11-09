@@ -6,6 +6,7 @@ import { healthRouter } from './routes/health.js'
 import { taskLogRouter } from './routes/task-log.js'
 import { taskLogViewRouter } from './routes/task-log-view.js'
 import { taskChangesViewRouter } from './routes/task-changes-view.js'
+import { taskHistoryViewRouter } from './routes/task-history-view.js'
 import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
@@ -52,6 +53,7 @@ app.use('/tasks', tasksRouter)
 app.use('/repos', reposRouter)
 app.use(agentStateRouter)
 app.use(dashboardRouter)
+app.use(taskHistoryViewRouter)
 
 // 404 catch-all
 app.use((_req, res) => {
