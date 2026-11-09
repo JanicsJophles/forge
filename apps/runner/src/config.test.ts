@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import os from 'node:os'
 import { test } from 'node:test'
 
 const names = ['PORT', 'MAX_CONCURRENT_TASKS', 'MIN_FREE_DISK_MB'] as const
 const defaults = [5000, 2, 2048]
 
 function loadConfig(value?: string, setting?: typeof names[number]) {
-  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, DOTENV_CONFIG_PATH: '/dev/null', ALLOWED_REPO_PATHS: '/tmp/repos' }
+  // Point at a directory that exists so the allowlist existence check stays
+  // silent; this suite exercises numeric env parsing, not the allowlist.
+  const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, DOTENV_CONFIG_PATH: '/dev/null', ALLOWED_REPO_PATHS: os.tmpdir() }
   for (const name of names) {
     delete env[name]
     if (value !== undefined && (setting === undefined || setting === name)) env[name] = value
