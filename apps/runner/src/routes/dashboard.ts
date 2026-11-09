@@ -685,7 +685,7 @@ const HTML = `<!DOCTYPE html>
         const running = t.status === 'running' || t.status === 'queued';
         const elapsedLabel = running ? elapsed(t.createdAt) : '';
         const hasId = t.id != null && t.id !== '';
-        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log?format=text';
+        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
         const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes';
         return [
           '<div class="task-row">',
@@ -753,7 +753,7 @@ const HTML = `<!DOCTYPE html>
         const terminal = t.status === 'completed' || t.status === 'failed';
         const hasId = t.id != null && t.id !== '';
         const shortSha = typeof t.commitSha === 'string' ? t.commitSha.slice(0, 7) : '';
-        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log?format=text';
+        const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
         return [
           '<div class="task-row">',
             '<div>',
