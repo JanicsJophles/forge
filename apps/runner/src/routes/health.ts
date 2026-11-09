@@ -3,6 +3,7 @@ import { countActiveProcs } from '../agent/runner.js'
 import { countActiveTasks, oldestRunningTaskAgeSeconds } from '../db/queries.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { config } from '../config.js'
+import { version } from '../version.js'
 
 export const healthRouter = Router()
 
@@ -17,6 +18,7 @@ healthRouter.get('/health', (_req, res) => {
 
   res.json({
     status: 'ok',
+    version,
     activeTasks: countActiveProcs(),
     queuedOrRunning: countActiveTasks(),
     maxConcurrentTasks: config.maxConcurrentTasks,
