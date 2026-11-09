@@ -1,3 +1,8 @@
+import { createReadStream, closeSync, mkdtempSync, openSync, writeSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { Router } from 'express'
 import type { Response } from 'express'
 import { db } from '../db/schema.js'
@@ -48,6 +53,50 @@ function sendSlice(
     nextOffset: slice.nextOffset, totalBytes: slice.totalBytes })
 }
 
+// Spool one consistent SQLite snapshot before waiting on the network. Memory is
+// bounded by a slice; the read transaction ends before streaming starts. A file
+// stream supplies backpressure and pipeline destroys it on client disconnect.
+async function sendDownload(res: Response, id: string, attachmentName: string): Promise<void> {
+  const directory = mkdtempSync(path.join(tmpdir(), 'forge-log-download-'))
+  const filename = path.join(directory, 'snapshot')
+  try {
+    const fd = openSync(filename, 'wx', 0o600)
+    let totalBytes: number | undefined
+    try {
+      totalBytes = db.transaction(() => {
+        let slice = readTaskLog(db, id, 0, MAX_LOG_SLICE_BYTES)
+        if (!slice) return undefined
+        const total = slice.totalBytes
+        while (slice.bytes.length > 0) {
+          let written = 0
+          while (written < slice.bytes.length) {
+            written += writeSync(fd, slice.bytes, written, slice.bytes.length - written)
+          }
+          if (slice.nextOffset >= total) break
+          slice = readTaskLog(db, id, slice.nextOffset, MAX_LOG_SLICE_BYTES)!
+        }
+        return total
+      })()
+    } finally {
+      closeSync(fd)
+    }
+    if (totalBytes === undefined) {
+      res.status(404).json({ error: 'task not found' })
+      return
+    }
+    if (res.destroyed) return
+    setTaskStatusHeaders(res, id)
+    res.setHeader('Content-Disposition', `attachment; filename="${attachmentName}"`)
+    res.setHeader('Content-Length', String(totalBytes))
+    res.setHeader('X-Total-Bytes', String(totalBytes))
+    res.setHeader('X-Next-Offset', String(totalBytes))
+    res.type('text/plain; charset=utf-8')
+    await pipeline(createReadStream(filename, { highWaterMark: 65536 }), res)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 // HEAD mirrors GET's paging metadata without transferring any log bytes, so a
 // tail-follow poller can detect growth (X-Total-Bytes/X-Next-Offset) and
 // completion (X-Task-Status) cheaply. Registered BEFORE the GET route: Express
@@ -67,7 +116,7 @@ taskLogRouter.head('/:id/log', (req, res) => {
   res.status(200).end()
 })
 
-taskLogRouter.get('/:id/log', (req, res) => {
+taskLogRouter.get('/:id/log', (req, res, next) => {
   // Parse raw keys too: structured queries must fail even with a simple query parser.
   const query = new URL(req.originalUrl, 'http://localhost').searchParams
   function integer(name: string, fallback: number, minimum: number): number | undefined {
@@ -138,6 +187,12 @@ taskLogRouter.get('/:id/log', (req, res) => {
   const limit = integer('limit', MAX_LOG_SLICE_BYTES, 1)
   if (offset === undefined || limit === undefined || limit > MAX_LOG_SLICE_BYTES) {
     res.status(400).json({ error: 'offset must be a nonnegative safe integer; limit must be an integer from 1 to 262144' })
+    return
+  }
+  if (download && !query.has('offset') && !query.has('limit')) {
+    void sendDownload(res, req.params.id, attachmentName!).catch(error => {
+      if (!res.destroyed) next(error)
+    })
     return
   }
   const slice = readTaskLog(db, req.params.id, offset, limit)

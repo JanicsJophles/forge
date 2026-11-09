@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
+import http from 'node:http'
 
 test('log download serves a sanitized attachment and exposes the task status', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'forge-log-dl-'))
@@ -19,7 +20,29 @@ test('log download serves a sanitized attachment and exposes the task status', a
   insert.run('done-1', 'finished\n', 'succeeded')
   // A task id with characters that must never reach the header verbatim.
   insert.run('a/b"c; drop\n2', 'x\n', 'queued')
-  const app = express().use('/tasks', taskLogRouter)
+  const transcript = Buffer.from(('x'.repeat(65535) + '🌍\0end\n').repeat(40))
+  insert.run('large', transcript, 'running')
+  insert.run('disconnect', transcript, 'running')
+  let writes = 0
+  let disconnected: Promise<void> | undefined
+  const app = express().use((req, res, next) => {
+    if (req.path.includes('/large/log') && !req.url.includes('offset') && !req.url.includes('limit') && !req.url.includes('tailLines')) {
+      const write = res.write.bind(res)
+      res.write = ((...args: Parameters<typeof res.write>) => {
+        assert.equal(db.inTransaction, false, 'network writes must not hold a transaction')
+        assert.ok(Buffer.byteLength(args[0]) <= 65536)
+        if (writes++ === 0) {
+          // Mutate after the snapshot but before the client receives its body.
+          db.prepare('UPDATE tasks SET log = ? WHERE id = ?').run('replacement', 'large')
+        }
+        return write(...args)
+      }) as typeof res.write
+    }
+    if (req.path.includes('/disconnect/log')) {
+      disconnected = new Promise(resolve => res.once('close', resolve))
+    }
+    next()
+  }).use('/tasks', taskLogRouter)
   const server = app.listen(0, '127.0.0.1')
   await new Promise<void>(resolve => server.once('listening', resolve))
   t.after(() => new Promise<void>((resolve, reject) => {
@@ -30,6 +53,45 @@ test('log download serves a sanitized attachment and exposes the task status', a
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}/tasks`
   const get = (id: string, query = '') => fetch(`${base}/${encodeURIComponent(id)}/log${query}`)
+
+  const full = await get('large', '?format=text&download=1')
+  assert.equal(full.headers.get('content-length'), String(transcript.length))
+  assert.equal(full.headers.get('x-next-offset'), String(transcript.length))
+  assert.deepEqual(Buffer.from(await full.arrayBuffer()), transcript)
+  assert.ok(writes > 1, 'download uses bounded chunks')
+
+  insert.run('slice', transcript, 'succeeded')
+  for (const [query, expected] of [
+    ['&offset=65534&limit=9', transcript.subarray(65534, 65543)],
+    ['&limit=7', transcript.subarray(0, 7)],
+    ['&offset=1', transcript.subarray(1, 262145)],
+    ['&tailLines=1', Buffer.from('x'.repeat(65535) + '🌍\0end\n')],
+  ] as const) {
+    const response = await get('slice', '?format=text&download=1' + query)
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), expected)
+  }
+
+  const snapshots = async () => (await readdir(tmpdir())).filter(name => name.startsWith('forge-log-download-'))
+  // Completion and early disconnect both remove their temporary snapshot.
+  for (let i = 0; i < 100 && (await snapshots()).length; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  const before = await snapshots()
+  await new Promise<void>((resolve, reject) => {
+    const request = http.get(`${base}/disconnect/log?format=text&download=1`, response => {
+      response.once('data', () => {
+        response.destroy()
+        resolve()
+      })
+    })
+    request.once('error', reject)
+  })
+  await disconnected
+  for (let i = 0; i < 100 && (await snapshots()).length > before.length; i++) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  assert.deepEqual(await snapshots(), before)
+  assert.equal(db.inTransaction, false)
 
   // download=1 with format=text sends an attachment named after the task id,
   // and still carries the paging headers of a normal text slice.
