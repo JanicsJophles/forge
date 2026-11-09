@@ -16,6 +16,15 @@ capabilitiesRouter.get('/capabilities', (_req, res) => {
     // Whether a bearer token guards state-changing routes. Lets dispatchers
     // decide up front whether they must send an Authorization header.
     authRequired: config.authToken !== undefined,
+    // Build identity a dispatcher/bridge needs to correlate runner builds with
+    // the commits it auto-tags. gitShaPinned is a boolean, never the raw SHA, so
+    // the deployed commit stays an implementation detail; commitMessagePrefix is
+    // already public (it appears verbatim on every [forge] auto-commit).
+    build: {
+      version,
+      gitShaPinned: config.gitSha !== undefined,
+      commitMessagePrefix: config.commitMessagePrefix,
+    },
     limits: {
       maxConcurrentTasks: config.maxConcurrentTasks,
       taskTimeoutMs: config.taskTimeoutMs,
