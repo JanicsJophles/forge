@@ -1,6 +1,6 @@
 import 'dotenv/config'
 import path from 'node:path'
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 
 function positiveIntegerEnv(name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
   const raw = process.env[name]
@@ -61,6 +61,21 @@ export const config = {
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
 } as const
+
+// Surface misconfiguration early: a typo in ALLOWED_REPO_PATHS otherwise only
+// shows up as an empty GET /repos and opaque 400s on POST /tasks. Warn once per
+// bad entry without mutating the allowlist (isRepoAllowed still fails closed).
+for (const repoPath of config.allowedRepoPaths) {
+  let isDirectory = false
+  try {
+    isDirectory = statSync(repoPath).isDirectory()
+  } catch {
+    isDirectory = false
+  }
+  if (!isDirectory) {
+    console.warn(`[config] ALLOWED_REPO_PATHS entry does not exist or is not a directory: ${repoPath}`)
+  }
+}
 
 export function isRepoAllowed(repo: string): boolean {
   if (typeof repo !== 'string' || !repo.trim()) return false
