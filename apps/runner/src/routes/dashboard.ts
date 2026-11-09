@@ -754,7 +754,7 @@ const HTML = `<!DOCTYPE html>
         const elapsedLabel = running ? elapsed(t.createdAt) : '';
         const hasId = t.id != null && t.id !== '';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
-        const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes';
+        const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes/view';
         return [
           '<div class="task-row">',
             '<div>',
@@ -763,7 +763,7 @@ const HTML = `<!DOCTYPE html>
               t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
               t.provider ? '<span class="provider">' + escape(t.provider) + '</span>' : '',
               elapsedLabel ? '<span class="elapsed">' + escape(elapsedLabel) + '</span>' : '',
-              '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>',
+              hasId ? '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>' : '',
               hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
               hasId && running ? '<button type="button" class="cancel" data-task-id="' + encodeURIComponent(t.id) + '" onclick="cancelTask(this)">cancel</button>' : '',
             '</div>',
@@ -821,6 +821,7 @@ const HTML = `<!DOCTYPE html>
         const terminal = t.status === 'completed' || t.status === 'failed';
         const hasId = t.id != null && t.id !== '';
         const shortSha = typeof t.commitSha === 'string' ? t.commitSha.slice(0, 7) : '';
+        const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes/view';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
         return [
           '<div class="task-row">',
@@ -831,6 +832,7 @@ const HTML = `<!DOCTYPE html>
               t.status ? '<span class="status ' + statusClass + '">' + escape(t.status) + '</span>' : '',
               t.status === 'completed' && shortSha ? '<span class="commit">' + escape(shortSha) + '</span>' : '',
               hasId ? '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>' : '',
+              hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
               hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)">retry</button>' : '',
             '</div>',
             t.status === 'failed' && t.errorMessage ? '<div class="error-message">' + escape(t.errorMessage) + '</div>' : '',
