@@ -22,7 +22,7 @@ test('history shell pages opaque same-second cursors, resets filters and fences 
   function element() {
     return { value: '', textContent: '', disabled: false, hidden: false, children: [] as any[],
       appendChild(child: any) { this.children.push(child) },
-      replaceChildren() { this.children = [] },
+      replaceChildren(...children: any[]) { this.children = children },
     }
   }
   const requests: { url: string; resolve: (value: any) => void; reject: (reason: Error) => void }[] = []
@@ -44,6 +44,8 @@ test('history shell pages opaque same-second cursors, resets filters and fences 
     } },
   })
   assert.match(el('message').textContent, /Loading/)
+  assert.equal(el('newer').disabled, true)
+  assert.equal(el('latest').disabled, true)
   assert.equal(new URL(requests[0].url, 'http://fake').searchParams.get('limit'), '25')
   answer(0, [task('same-second-new')], 'same-second-old?&')
   await tick()
@@ -97,4 +99,86 @@ test('history shell pages opaque same-second cursors, resets filters and fences 
   answer(9, [])
   await tick()
   assert.equal(el('retry').hidden, true)
+
+  // Start a fresh filtered history and traverse three pages in both directions.
+  el('filters').onsubmit({ preventDefault() {} })
+  answer(10, [task('page-one')], 'cursor-two')
+  await tick()
+  const pageId = () => el('rows').children[0].children[4].children[0].href
+  const navigate = (control: string, before: string | null) => {
+    const index = requests.length
+    el(control).onclick()
+    const params = new URL(requests[index].url, 'http://fake').searchParams
+    assert.equal(params.get('before'), before)
+    assert.equal(params.get('repo'), '/repo?a&b')
+    assert.equal(params.get('status'), 'failed')
+    for (const id of ['older', 'newer', 'latest']) assert.equal(el(id).disabled, true)
+    return index
+  }
+  let index = navigate('older', 'cursor-two')
+  assert.match(pageId(), /page-one/)
+  answer(index, [task('page-two')], 'cursor-three')
+  await tick()
+  assert.equal(el('newer').disabled, false)
+  assert.equal(el('latest').disabled, false)
+  index = navigate('older', 'cursor-three')
+  answer(index, [task('page-three')])
+  await tick()
+  assert.equal(el('older').disabled, true)
+
+  // A failed return must preserve page three and its navigation depth.
+  index = navigate('newer', 'cursor-two')
+  requests[index].reject(new Error('offline'))
+  await tick()
+  assert.match(pageId(), /page-three/)
+  assert.equal(el('newer').disabled, false)
+  assert.equal(el('older').disabled, true)
+  el('retry').onclick()
+  assert.equal(new URL(requests[index + 1].url, 'http://fake').searchParams.get('before'), 'cursor-two')
+  answer(index + 1, [task('page-two')], 'cursor-three')
+  await tick()
+  index = navigate('newer', null)
+  answer(index, [task('page-one')], 'cursor-two')
+  await tick()
+  assert.equal(el('newer').disabled, true)
+  assert.equal(el('latest').disabled, true)
+  index = navigate('older', 'cursor-two')
+  answer(index, [task('page-two')], 'cursor-three')
+  await tick()
+  index = navigate('older', 'cursor-three')
+  answer(index, [task('page-three')])
+  await tick()
+  index = navigate('latest', null)
+  requests[index].resolve({ ok: false, status: 503 })
+  await tick()
+  assert.match(pageId(), /page-three/)
+  assert.equal(el('latest').disabled, false)
+  index = navigate('latest', null)
+  answer(index, [task('latest')], 'cursor-two')
+  await tick()
+  assert.match(pageId(), /latest/)
+  assert.equal(el('newer').disabled, true)
+  assert.equal(el('latest').disabled, true)
+
+  // Reset during an older request; neither stale success nor reset failure loses rows.
+  index = navigate('older', 'cursor-two')
+  el('repo').value = '/different'
+  el('repo').onchange()
+  answer(index, [task('superseded')], 'stale-cursor')
+  await tick()
+  assert.match(pageId(), /latest/)
+  requests[index + 1].reject(new Error('filter request failed'))
+  await tick()
+  assert.match(pageId(), /latest/)
+  for (const id of ['older', 'newer', 'latest']) assert.equal(el(id).disabled, true)
+  el('retry').onclick()
+  const resetQuery = new URL(requests[index + 2].url, 'http://fake').searchParams
+  assert.equal(resetQuery.get('repo'), '/different')
+  assert.equal(resetQuery.has('before'), false)
+  answer(index + 2, [task('filtered')], 'filtered-cursor')
+  await tick()
+  assert.match(pageId(), /filtered/)
+  assert.equal(el('older').disabled, false)
+  assert.equal(el('newer').disabled, true)
+  assert.equal(el('latest').disabled, true)
 })
