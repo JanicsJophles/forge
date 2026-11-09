@@ -62,6 +62,13 @@ test('GET /health reports the oldest running task age in seconds', async () => {
     ]) {
       assert.ok(Object.hasOwn(body, field), `missing field ${field}`)
     }
+
+    // The build version is reported so a single health poll identifies the
+    // live build, matching what /capabilities returns.
+    const { version } = await import('../version.js')
+    assert.equal(body.version, version)
+    assert.equal(typeof body.version, 'string')
+    assert.ok(body.version.length > 0)
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
     db.close()
