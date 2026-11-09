@@ -158,6 +158,7 @@ async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network')
         return new Element()
       },
     },
+    setTimeout: () => 0,
     fetch: async (url: string) => {
       requests.push(url)
       if (url === '/health') return { ok: true, json: async () => ({}) }

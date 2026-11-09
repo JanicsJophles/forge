@@ -70,12 +70,13 @@ function landingHtml(): string {
     <p>Self-hosted Claude Code agent runner — version <code>${safeVersion}</code></p>
     <p><a href="/dashboard">Open the dashboard →</a></p>
     <!--
-      Live status, filled in by the script below from GET /health on each page
-      load (static render shows "…" so the page is never blank if JS is off or
+      Live status, refreshed from GET /health five seconds after each completed
+      refresh cycle (static render shows "…" so the page is never blank if JS is off or
       the fetch fails). Every server value is written via textContent only, so a
       hostile /health payload can never inject markup here.
     -->
     <h2>Status</h2>
+    <p id="health-freshness" role="status">Health unavailable — waiting for first update.</p>
     <ul>
       <li>Accepting work: <strong id="accepting">…</strong></li>
       <li>Slots in use: <span id="slots">…</span></li>
@@ -83,6 +84,8 @@ function landingHtml(): string {
       <li>Reported version: <code id="live-version">…</code></li>
     </ul>
     <h2>Recent tasks</h2>
+    <p id="tasks-freshness" role="status">Recent tasks unavailable — waiting for first update.</p>
+    <p>Refreshes five seconds after each completed update.</p>
     <ul id="recent-tasks" aria-live="polite"><li>recent tasks unavailable</li></ul>
     <h2>Endpoints</h2>
     <ul>
@@ -109,7 +112,10 @@ ${rows}
           var el = document.getElementById(id)
           if (el) el.textContent = value
         }
-        fetch('/tasks?limit=5', { headers: { accept: 'application/json' } })
+        var hasHealth = false
+        var hasTasks = false
+        function refreshTasks() {
+          return fetch('/tasks?limit=5', { cache: 'no-store', headers: { accept: 'application/json' } })
           .then(function (r) {
             if (!r.ok) throw new Error('tasks ' + r.status)
             return r.json()
@@ -133,16 +139,23 @@ ${rows}
               rows.push(empty)
             }
             rows.forEach(function (row) { list.appendChild(row) })
+            hasTasks = true
+            setText('tasks-freshness', '')
           })
           .catch(function () {
-            setText('recent-tasks', 'recent tasks unavailable')
+            if (!hasTasks) setText('recent-tasks', 'recent tasks unavailable')
+            setText('tasks-freshness', hasTasks
+              ? 'Recent tasks stale — refresh unavailable.' : 'Recent tasks unavailable — retrying.')
           })
-        fetch('/health', { headers: { accept: 'application/json' } })
+        }
+        function refreshHealth() {
+          return fetch('/health', { cache: 'no-store', headers: { accept: 'application/json' } })
           .then(function (r) {
             if (!r.ok) throw new Error('health ' + r.status)
             return r.json()
           })
           .then(function (h) {
+            if (!h || typeof h !== 'object' || Array.isArray(h)) throw new Error('invalid health')
             var accepting = h.acceptingTasks === true
             var reasonLabels = ${reasonLabelsJson}
             var reason =
@@ -161,13 +174,27 @@ ${rows}
             }
             setText('uptime', fmtUptime(h.uptimeSeconds))
             setText('live-version', typeof h.version === 'string' ? h.version : 'unknown')
+            hasHealth = true
+            setText('health-freshness', '')
           })
           .catch(function () {
+            setText('health-freshness', hasHealth
+              ? 'Health stale — refresh unavailable.' : 'Health unavailable — retrying.')
+            if (hasHealth) return
             setText('accepting', 'unknown (health unreachable)')
             setText('slots', 'unknown')
             setText('uptime', 'unknown')
             setText('live-version', 'unknown')
           })
+        }
+        function refresh() {
+          // Schedule only after both independent updates settle: slow requests
+          // cannot overlap later cycles or build up a queue of pending polls.
+          Promise.all([refreshTasks(), refreshHealth()]).then(function () {
+            setTimeout(refresh, 5000)
+          })
+        }
+        refresh()
       })()
     </script>
   </body>
