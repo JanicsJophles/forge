@@ -5,6 +5,7 @@ import { capabilitiesRouter } from './routes/capabilities.js'
 import { healthRouter } from './routes/health.js'
 import { taskLogRouter } from './routes/task-log.js'
 import { taskLogViewRouter } from './routes/task-log-view.js'
+import { taskChangesViewRouter } from './routes/task-changes-view.js'
 import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
@@ -45,6 +46,8 @@ app.use('/tasks', taskLogRouter)
 // Distinct /:id/log/view segment — mounted after the byte-slice log router so
 // the exact /:id/log route always wins its match; neither shadows the other.
 app.use('/tasks', taskLogViewRouter)
+// Exact /:id/changes/view path, alongside the log viewer, before task routes.
+app.use('/tasks', taskChangesViewRouter)
 app.use('/tasks', tasksRouter)
 app.use('/repos', reposRouter)
 app.use(agentStateRouter)
