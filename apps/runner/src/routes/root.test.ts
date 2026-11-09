@@ -39,8 +39,8 @@ test('GET / returns an HTML landing page with version and a dashboard link', asy
     assert.ok(body.includes(version), 'landing page lists the build version')
     assert.match(body, /href="\/dashboard"/)
     // The documented endpoints are signposted.
-    for (const path of ['/health', '/capabilities', '/tasks', '/repos', '/agent-context']) {
-      assert.ok(body.includes(path), `landing page links ${path}`)
+    for (const path of ['/health', '/capabilities', '/tasks', '/history', '/repos', '/agent-context']) {
+      assert.ok(body.includes(`href="${path}"`), `landing page links ${path}`)
     }
     // The root route does not swallow unknown paths.
     const unknown = await fetch(base + '/nope')
@@ -73,8 +73,8 @@ test('GET / embeds a client-side fetch of /health and keeps the static fallback'
     // Static fallback: version + every documented endpoint still render without
     // JS, so a failed fetch (or JS off) never leaves a blank page.
     assert.ok(body.includes(version), 'static render still lists the build version')
-    for (const path of ['/health', '/capabilities', '/tasks', '/repos', '/agent-context']) {
-      assert.ok(body.includes(path), `landing page links ${path}`)
+    for (const path of ['/health', '/capabilities', '/tasks', '/history', '/repos', '/agent-context']) {
+      assert.ok(body.includes(`href="${path}"`), `landing page links ${path}`)
     }
     assert.match(body, /href="\/dashboard"/, 'dashboard link preserved')
   } finally {
