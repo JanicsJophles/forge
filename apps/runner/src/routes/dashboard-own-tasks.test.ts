@@ -92,7 +92,7 @@ test('runner own tasks render with escaped fields and track the repo + activity 
   assert.match(tasks(), /branch: fleet\/forge\/x/)
   assert.match(tasks(), /<span class="status status-running">running<\/span>/)
   assert.match(tasks(), /<span class="provider">claude<\/span>/)
-  assert.match(tasks(), /<a class="log" target="_blank" rel="noopener" href="\/tasks\/task-1\/log\?format=text">log<\/a>/)
+  assert.match(tasks(), /<a class="log" target="_blank" rel="noopener" href="\/tasks\/task-1\/log\/view">log<\/a>/)
   assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task-1\/changes">changes<\/a>/)
   assert.match(tasks(), /<button type="button" class="cancel" data-task-id="task-1" onclick="cancelTask\(this\)">cancel<\/button>/)
   assert.match(tasks(), /<div class="intent">do a thing<\/div>/)
@@ -151,7 +151,7 @@ test('runner tasks render without a provider and encode the id in the log link',
   // No provider → no badge, but the row (and its log link) still render.
   assert.match(tasks(), /class="task-row"/)
   assert.ok(!tasks().includes('class="provider"'))
-  assert.match(tasks(), /href="\/tasks\/task%20a%2Fb\/log\?format=text"/)
+  assert.match(tasks(), /href="\/tasks\/task%20a%2Fb\/log\/view"/)
   // The changes anchor and the cancel button encode the id the same way.
   assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task%20a%2Fb\/changes">changes<\/a>/)
   assert.match(tasks(), /data-task-id="task%20a%2Fb"/)
