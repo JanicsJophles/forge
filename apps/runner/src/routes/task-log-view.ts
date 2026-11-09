@@ -109,6 +109,7 @@ function viewHtml(id: string, status: string): string {
         line-height: 1.5;
       }
       #empty { color: var(--text-dim); }
+      #omitted { margin: 0; padding: 8px 20px; color: var(--warn); }
       footer {
         padding: 8px 20px;
         border-top: 1px solid var(--border);
@@ -131,6 +132,7 @@ function viewHtml(id: string, status: string): string {
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
     </header>
+    <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <pre id="log"><span id="empty">waiting for output…</span></pre>
     <footer>Live tail via <code>/tasks/:id/stream</code> · scroll up to pause autoscroll</footer>
     <script>
@@ -144,6 +146,11 @@ function viewHtml(id: string, status: string): string {
         var tokenEl = document.getElementById('authToken');
         var messageEl = document.getElementById('actionMessage');
         var taskUrl = STREAM_URL.slice(0, -'/stream'.length);
+        // 128K UTF-16 code units = at most 256 KiB of retained text.
+        // A single text node also bounds DOM size for tiny SSE frames.
+        var MAX_LOG_UNITS = 128 * 1024;
+        var transcript = null;
+        var omittedEl = document.getElementById('omitted');
         var done = false;
         var statusVersion = 0;
         try { tokenEl.value = sessionStorage.getItem('forge.authToken') || ''; } catch (e) {}
@@ -209,11 +216,33 @@ function viewHtml(id: string, status: string): string {
         }
         function appendLog(text) {
           if (typeof text !== 'string' || text.length === 0) return;
-          if (emptyEl) { emptyEl.remove(); emptyEl = null; }
           var pinned = atBottom();
-          // createTextNode (never innerHTML) keeps stream payloads inert.
-          logEl.appendChild(document.createTextNode(text));
+          var previousTop = logEl.scrollTop;
+          if (emptyEl) { emptyEl.remove(); emptyEl = null; }
+          if (!transcript) {
+            // createTextNode (never innerHTML) keeps stream payloads inert.
+            transcript = document.createTextNode('');
+            logEl.appendChild(transcript);
+          }
+          var previous = transcript.textContent;
+          var combined = previous + text;
+          var cut = Math.max(0, combined.length - MAX_LOG_UNITS);
+          // Never retain half of a surrogate pair, including across frames.
+          if (cut > 0 && combined.charCodeAt(cut) >= 0xdc00 &&
+              combined.charCodeAt(cut) <= 0xdfff &&
+              combined.charCodeAt(cut - 1) >= 0xd800 &&
+              combined.charCodeAt(cut - 1) <= 0xdbff) cut++;
+          var removedHeight = 0;
+          if (cut > 0) {
+            omittedEl.hidden = false;
+            var oldHeight = logEl.scrollHeight;
+            // Measure only the removed prefix, before adding new output.
+            transcript.textContent = previous.slice(Math.min(cut, previous.length));
+            removedHeight = oldHeight - logEl.scrollHeight;
+          }
+          transcript.textContent = combined.slice(cut);
           if (pinned) logEl.scrollTop = logEl.scrollHeight;
+          else logEl.scrollTop = Math.max(0, previousTop - removedHeight);
         }
         function parse(data) {
           // Stream frames carry JSON.stringify'd strings; recover the raw text,
