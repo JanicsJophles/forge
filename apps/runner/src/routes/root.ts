@@ -124,6 +124,16 @@ ${rows}
                 ? task.repo.split('/').filter(Boolean).pop() || 'unknown' : 'unknown'
               var status = typeof task.status === 'string' ? task.status : 'unknown'
               row.textContent = id + ' — ' + repo + ' — ' + status
+              if (typeof task.id === 'string' && task.id.trim() && !/^\\.+$/.test(task.id)) {
+                try {
+                  var link = document.createElement('a')
+                  link.href = '/tasks/' + encodeURIComponent(task.id) + '/log/view'
+                  link.textContent = ' View logs'
+                  row.appendChild(link)
+                } catch (_) {
+                  // Malformed Unicode cannot form an encoded path segment.
+                }
+              }
               return row
             })
             list.textContent = ''

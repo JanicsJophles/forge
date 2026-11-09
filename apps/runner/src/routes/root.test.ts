@@ -154,7 +154,7 @@ async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network')
     document: {
       getElementById: (id: string) => id === 'recent-tasks' ? list : new Element(),
       createElement: (tag: string) => {
-        assert.equal(tag, 'li')
+        assert.ok(tag === 'li' || tag === 'a')
         return new Element()
       },
     },
