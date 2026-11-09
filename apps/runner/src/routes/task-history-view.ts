@@ -15,7 +15,7 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
 <table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th></tr></thead><tbody id="rows"></tbody></table>
-<button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
+<button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 <script>
 const repo = document.getElementById('repo');
 const status = document.getElementById('status');
@@ -23,19 +23,28 @@ const rows = document.getElementById('rows');
 const message = document.getElementById('message');
 const older = document.getElementById('older');
 const retry = document.getElementById('retry');
+const newer = document.getElementById('newer');
+const latest = document.getElementById('latest');
 let generation = 0;
 let next = null;
 let selection = { repo: '', status: '' };
-let failedBefore = null;
-async function load(before) {
+let cursors = [null];
+let failedCursors = cursors;
+let loading = false;
+function updateControls() {
+  older.disabled = loading || !next;
+  newer.disabled = latest.disabled = loading || cursors.length === 1;
+}
+async function load(targetCursors) {
+  const before = targetCursors[targetCursors.length - 1];
   const current = ++generation;
   const query = new URLSearchParams({ limit: '25' });
   if (selection.repo) query.set('repo', selection.repo);
   if (selection.status) query.set('status', selection.status);
   if (before) query.set('before', before);
-  older.disabled = true;
+  loading = true;
+  updateControls();
   retry.hidden = true;
-  rows.replaceChildren();
   message.textContent = 'Loading task history…';
   try {
     const response = await fetch('/tasks?' + query);
@@ -43,7 +52,7 @@ async function load(before) {
     const tasks = await response.json();
     if (current !== generation) return;
     if (!Array.isArray(tasks)) throw new Error('Invalid response');
-    next = response.headers.get('X-Next-Before');
+    const pageRows = [];
     for (const task of tasks) {
       const row = document.createElement('tr');
       const prompt = String(task.prompt || '');
@@ -60,27 +69,37 @@ async function load(before) {
       link.textContent = 'View logs';
       cell.appendChild(link);
       row.appendChild(cell);
-      rows.appendChild(row);
+      pageRows.push(row);
     }
+    rows.replaceChildren(...pageRows);
+    next = response.headers.get('X-Next-Before');
+    cursors = targetCursors;
     message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
-    older.disabled = !next;
   } catch (error) {
     if (current !== generation) return;
-    failedBefore = before;
+    failedCursors = targetCursors;
     message.textContent = 'Request failed: ' + error.message;
     retry.hidden = false;
+  } finally {
+    if (current === generation) {
+      loading = false;
+      updateControls();
+    }
   }
 }
 function reset() {
   selection = { repo: repo.value, status: status.value };
   next = null;
-  return load(null);
+  cursors = [null];
+  return load(cursors);
 }
 document.getElementById('filters').onsubmit = event => { event.preventDefault(); return reset(); };
 repo.onchange = reset;
 status.onchange = reset;
-older.onclick = () => { if (next && !older.disabled) return load(next); };
-retry.onclick = () => load(failedBefore);
-load(null);
+older.onclick = () => { if (!older.disabled) return load([...cursors, next]); };
+newer.onclick = () => { if (!newer.disabled) return load(cursors.slice(0, -1)); };
+latest.onclick = () => { if (!latest.disabled) return load([null]); };
+retry.onclick = () => load(failedCursors);
+load(cursors);
 </script></body></html>`)
 })
