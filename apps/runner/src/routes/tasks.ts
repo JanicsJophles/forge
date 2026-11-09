@@ -251,6 +251,14 @@ tasksRouter.get('/', (req: Request, res: Response) => {
 // GET /tasks/:id — single task
 tasksRouter.get('/:id', (req: Request, res: Response) => {
   const view = req.query.view
+  // A view query, when present, must name a known projection. Any other value —
+  // a typo like ?view=statuss, or a repeated ?view=a&view=b array — is rejected
+  // before any DB read rather than silently falling back to the full task (its
+  // entire log and prompt), which would be a mild disclosure footgun.
+  if (view !== undefined && view !== 'status' && view !== 'detail') {
+    res.status(400).json({ error: "view must be 'status' or 'detail'" })
+    return
+  }
   const task = view === 'status' || view === 'detail'
     ? readTaskProjection(db, req.params.id, view)
     : getTask(req.params.id)
