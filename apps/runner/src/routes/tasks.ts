@@ -284,6 +284,24 @@ tasksRouter.get('/', (req: Request, res: Response) => {
   res.json(rows)
 })
 
+// GET /tasks/stats — aggregate task counts by status. Registered before GET
+// /:id so Express does not capture 'stats' as a task id (which would 404 as a
+// missing task). One grouped query covers every stored row; statuses absent from
+// the result default to 0. total is the sum of the four reported buckets rather
+// than a raw COUNT(*), so an unexpected stored status (none are written today)
+// can never make total disagree with the buckets.
+tasksRouter.get('/stats', (_req: Request, res: Response) => {
+  const rows = db
+    .prepare('SELECT status, COUNT(*) AS count FROM tasks GROUP BY status')
+    .all() as { status: TaskStatus; count: number }[]
+  const counts: Record<TaskStatus, number> = { queued: 0, running: 0, completed: 0, failed: 0 }
+  for (const row of rows) {
+    if (row.status in counts) counts[row.status] += row.count
+  }
+  const total = counts.queued + counts.running + counts.completed + counts.failed
+  res.json({ ...counts, total })
+})
+
 // GET /tasks/:id — single task
 tasksRouter.get('/:id', (req: Request, res: Response) => {
   const view = req.query.view
