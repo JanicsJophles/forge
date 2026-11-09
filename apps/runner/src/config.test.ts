@@ -24,8 +24,9 @@ test('unset numeric settings use defaults without warnings', () => {
   assert.deepEqual(loadConfig(), { values: defaults, warnings: '' })
 })
 
+// 60 stays within every cap (PORT 65535, MAX_CONCURRENT_TASKS 64, MIN_FREE_DISK_MB huge).
 test('positive integer settings are preserved without warnings', () => {
-  assert.deepEqual(loadConfig('123'), { values: [123, 123, 123], warnings: '' })
+  assert.deepEqual(loadConfig('60'), { values: [60, 60, 60], warnings: '' })
 })
 
 for (const value of ['abc', '', '0', '-1', '+1', 'Infinity', '2workers', '1e3', '1.5', '1.0',
@@ -42,10 +43,10 @@ for (const value of ['abc', '', '0', '-1', '+1', 'Infinity', '2workers', '1e3', 
 // Lexical policy: ASCII decimal digits only; leading zeros are allowed.
 // Signs, whitespace, exponent notation and even integral fractions are rejected.
 test('leading zeros preserve the decimal value without warnings', () => {
-  assert.deepEqual(loadConfig('000123'), { values: [123, 123, 123], warnings: '' })
+  assert.deepEqual(loadConfig('000060'), { values: [60, 60, 60], warnings: '' })
 })
 
-for (const [index, maximum] of [65535, Number.MAX_SAFE_INTEGER,
+for (const [index, maximum] of [65535, 64,
   Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024))].entries()) {
   const name = names[index]
   for (const value of [1, maximum]) {

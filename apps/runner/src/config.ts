@@ -36,7 +36,10 @@ export const config = {
   port: positiveIntegerEnv('PORT', 5000, 65535),
   taskTimeoutMs: taskTimeoutEnv(),
   host: process.env.HOST ?? '0.0.0.0',
-  maxConcurrentTasks: positiveIntegerEnv('MAX_CONCURRENT_TASKS', 2),
+  // Capped at 64: each concurrent task spawns a claude/codex child process, so
+  // an operator typo (e.g. MAX_CONCURRENT_TASKS=200) would OOM the host. Values
+  // above the cap are warned-and-defaulted, matching how PORT handles overflow.
+  maxConcurrentTasks: positiveIntegerEnv('MAX_CONCURRENT_TASKS', 2, 64),
   minFreeDiskMb: positiveIntegerEnv('MIN_FREE_DISK_MB', 2048, Math.floor(Number.MAX_SAFE_INTEGER / (1024 * 1024))),
   allowedRepoPaths: rawPaths
     .split(',')
