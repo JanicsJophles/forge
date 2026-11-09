@@ -43,6 +43,7 @@ async function servedScript() {
     assert.match(html, /id="launchRepo"/)
     assert.match(html, /id="launchPrompt"/)
     assert.match(html, /id="launchProvider"/)
+    assert.match(html, /id="launchModel"/)
     assert.match(html, /id="launchAutoCommit"/)
     return html.match(/<script>([\s\S]*?)<\/script>/)![1]
   } finally {
@@ -173,6 +174,71 @@ test('submitting POSTs JSON to /tasks and clears the prompt on 201', async () =>
   assert.equal(h.el('launchPrompt').value, '')
   assert.equal(h.el('launchErr').textContent, '')
   assert.equal(h.el('launchSubmit').textContent, 'Launch task')
+  assert.equal(h.el('launchSubmit').disabled, false)
+})
+
+test('a non-empty model is trimmed and included in the POST body', async () => {
+  const h = await harness(await servedScript())
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+
+  h.el('launchRepo').value = '/opt/repos/fleet-forge'
+  h.el('launchPrompt').value = 'do a thing'
+  h.el('launchProvider').value = 'claude'
+  h.el('launchModel').value = '  claude-opus-4-6  '
+
+  await h.submit()
+  const post = h.take('/tasks')
+  assert.deepEqual(JSON.parse(post.options!.body!), {
+    repo: '/opt/repos/fleet-forge',
+    prompt: 'do a thing',
+    provider: 'claude',
+    autoCommit: false,
+    model: 'claude-opus-4-6',
+  })
+  post.resolve({ ok: true, status: 201, json: async () => ({ taskId: 'abc' }) })
+  await h.settle()
+})
+
+test('a blank / whitespace-only model omits the model field entirely', async () => {
+  const h = await harness(await servedScript())
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+
+  h.el('launchRepo').value = '/opt/repos/fleet-forge'
+  h.el('launchPrompt').value = 'do a thing'
+  h.el('launchProvider').value = 'claude'
+  h.el('launchModel').value = '   '
+
+  await h.submit()
+  const post = h.take('/tasks')
+  const body = JSON.parse(post.options!.body!)
+  // No model key at all — the server applies the provider (claude) default.
+  assert.ok(!('model' in body), 'blank model must not add a model field')
+  assert.deepEqual(body, {
+    repo: '/opt/repos/fleet-forge',
+    prompt: 'do a thing',
+    provider: 'claude',
+    autoCommit: false,
+  })
+  post.resolve({ ok: true, status: 201, json: async () => ({ taskId: 'abc' }) })
+  await h.settle()
+})
+
+test('a server 400 for an invalid model surfaces inline, never silently', async () => {
+  const h = await harness(await servedScript())
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+
+  h.el('launchRepo').value = '/opt/repos/fleet-forge'
+  h.el('launchPrompt').value = 'keep me'
+  h.el('launchModel').value = 'bad model!'
+  h.el('launchSubmit').textContent = 'Launch task'
+
+  await h.submit()
+  // The server rejects the invalid model shape with 400.
+  h.take('/tasks').resolve({ ok: false, status: 400, json: async () => ({ error: 'invalid model' }) })
+  await h.settle()
+  assert.match(h.el('launchErr').textContent, /launch failed: HTTP 400/)
+  // The prompt (and the typed model) are left intact so the operator can fix it.
+  assert.equal(h.el('launchPrompt').value, 'keep me')
   assert.equal(h.el('launchSubmit').disabled, false)
 })
 

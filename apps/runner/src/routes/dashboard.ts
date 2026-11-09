@@ -324,6 +324,7 @@ const HTML = `<!DOCTYPE html>
     }
     .launch-row label { color: var(--text-dim); font-size: 12px; }
     .launch-form select,
+    .launch-form input[type="text"],
     .launch-form textarea {
       background: var(--panel);
       color: var(--text);
@@ -334,6 +335,7 @@ const HTML = `<!DOCTYPE html>
       font-family: inherit;
     }
     .launch-form #launchRepo { min-width: 160px; }
+    .launch-form #launchModel { min-width: 140px; }
     .launch-form textarea {
       width: 100%;
       min-height: 64px;
@@ -430,6 +432,8 @@ const HTML = `<!DOCTYPE html>
             <option value="claude">claude</option>
             <option value="codex">codex</option>
           </select>
+          <label for="launchModel">Model (optional)</label>
+          <input type="text" id="launchModel" placeholder="provider default" autocomplete="off" />
           <label class="launch-check"><input type="checkbox" id="launchAutoCommit" /> autoCommit</label>
         </div>
         <textarea id="launchPrompt" placeholder="Prompt — what should the agent do?"></textarea>
@@ -700,6 +704,7 @@ const HTML = `<!DOCTYPE html>
       const repo = document.getElementById('launchRepo').value;
       const prompt = document.getElementById('launchPrompt').value;
       const provider = document.getElementById('launchProvider').value;
+      const model = document.getElementById('launchModel').value.trim();
       const autoCommit = document.getElementById('launchAutoCommit').checked === true;
       // Clear any stale error from a previous attempt; textContent can't inject HTML.
       errEl.textContent = '';
@@ -709,10 +714,15 @@ const HTML = `<!DOCTYPE html>
       const original = button.textContent;
       button.textContent = 'launching…';
       try {
+        // Only send model when the operator typed one; a blank field POSTs no
+        // model so the server applies the provider default. An invalid value
+        // comes back 400 and surfaces inline via the throw below.
+        const body = { repo, prompt, provider, autoCommit };
+        if (model) body.model = model;
         const r = await fetch('/tasks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ repo, prompt, provider, autoCommit }),
+          body: JSON.stringify(body),
         });
         if (!r.ok) throw new Error('HTTP ' + r.status);
         // 201: clear the prompt; the next 5s /agent-context poll surfaces the task.
