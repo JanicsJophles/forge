@@ -26,7 +26,7 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
     ? `, repo, branch, prompt,
        substr(CAST(COALESCE(log, '') AS BLOB), -${LOG_TAIL_BYTES}) AS log_tail,
        length(CAST(COALESCE(log, '') AS BLOB)) AS logBytes,
-       length(CAST(COALESCE(log, '') AS BLOB)) > ${LOG_TAIL_BYTES} AS log_truncated`
+       length(CAST(COALESCE(log, '') AS BLOB)) > ${LOG_TAIL_BYTES} AS logTruncated`
     : ''
   // durationMs is derived from the stored SQLite datetime strings via julianday
   // (days) scaled to ms: finished tasks measure completed_at - started_at, running
@@ -48,7 +48,7 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
     // codepoint returned in log, after skipping any continuation bytes.
     row.logTailOffset = Math.max(0, (row.logBytes as number) - LOG_TAIL_BYTES) + tailStart(tail)
     row.log = decodeTail(tail)
-    row.log_truncated = Boolean(row.log_truncated)
+    row.logTruncated = Boolean(row.logTruncated)
     delete row.log_tail
   }
   return { ...row, read_projection_version: 1 }

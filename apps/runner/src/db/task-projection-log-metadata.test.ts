@@ -38,14 +38,14 @@ for (const modern of [true, false]) {
         assert.equal(detail.logTailOffset, offset, name)
         assert.equal(detail.log, bytes.subarray(offset).toString('utf8'), name)
         assert.equal(Buffer.byteLength(detail.log as string) + Number(detail.logTailOffset), detail.logBytes, name)
-        assert.equal(detail.log_truncated, bytes.length > LOG_TAIL_BYTES, name)
+        assert.equal(detail.logTruncated, bytes.length > LOG_TAIL_BYTES, name)
         assert.equal('log_tail' in detail, false)
         const select = statements.find(sql => sql.startsWith('SELECT'))!
         assert.match(select, /substr\(CAST\(COALESCE\(log, ''\) AS BLOB\), -262144\)/)
         assert.match(select, /length\(CAST\(COALESCE\(log, ''\) AS BLOB\)\) AS logBytes/)
         statements.length = 0
         const status = readTaskProjection(db, name, 'status')!
-        for (const field of ['log', 'logBytes', 'logTailOffset', 'log_truncated']) {
+        for (const field of ['log', 'logBytes', 'logTailOffset', 'logTruncated']) {
           assert.equal(field in status, false)
         }
         assert.doesNotMatch(statements.find(sql => sql.startsWith('SELECT'))!, /\blog\b|logBytes|logTailOffset/i)
