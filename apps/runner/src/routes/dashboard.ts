@@ -196,6 +196,33 @@ const HTML = `<!DOCTYPE html>
       font-size: 11px;
     }
     .task-row .log:hover { text-decoration: underline; }
+    .task-row .changes {
+      display: inline-block;
+      margin-left: 6px;
+      color: var(--running);
+      text-decoration: none;
+      font-size: 11px;
+    }
+    .task-row .changes:hover { text-decoration: underline; }
+    .task-row .cancel {
+      margin-left: 6px;
+      background: rgba(239, 68, 68, 0.12);
+      color: var(--fail);
+      border: 1px solid rgba(239, 68, 68, 0.4);
+      border-radius: 4px;
+      padding: 1px 8px;
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .task-row .cancel:hover:not(:disabled) { background: rgba(239, 68, 68, 0.2); }
+    .task-row .cancel:disabled { opacity: 0.6; cursor: default; }
+    .task-row.cancelling { opacity: 0.5; }
+    .task-row .cancel-err {
+      margin-left: 6px;
+      color: var(--fail);
+      font-size: 11px;
+    }
     .full-span { grid-column: 1 / -1; }
     .event-row .time {
       display: inline-block;
@@ -453,6 +480,34 @@ const HTML = `<!DOCTYPE html>
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
     }
+    async function cancelTask(button) {
+      // data-task-id is already encodeURIComponent'd, so it is a safe URL path
+      // segment and a safe HTML attribute value.
+      const encodedId = button.dataset.taskId;
+      if (!encodedId) return;
+      if (!confirm('Cancel this runner task?')) return;
+      button.disabled = true;
+      button.textContent = 'cancelling…';
+      // Clear any stale error left from a previous attempt on this row.
+      const row = button.closest ? button.closest('.task-row') : null;
+      const prevErr = row ? row.querySelector('.cancel-err') : null;
+      if (prevErr) prevErr.remove();
+      try {
+        const r = await fetch('/tasks/' + encodedId, { method: 'DELETE' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // 2xx: the task leaves the active set; the next 5s poll drops the row.
+        if (row) row.classList.add('cancelling');
+      } catch (e) {
+        // Non-2xx (401 when FORGE_AUTH_TOKEN is set, 409 if already terminal) or a
+        // network error: surface it inline and leave the row intact.
+        button.disabled = false;
+        button.textContent = 'cancel';
+        const err = document.createElement('span');
+        err.className = 'cancel-err';
+        err.textContent = 'cancel failed: ' + e.message;
+        button.insertAdjacentElement('afterend', err);
+      }
+    }
     function renderTasks(tasks) {
       const root = document.getElementById('tasks');
       if (!tasks.length) {
@@ -464,7 +519,9 @@ const HTML = `<!DOCTYPE html>
         // Only in-flight tasks get a live timer; anything else degrades to no label.
         const running = t.status === 'running' || t.status === 'queued';
         const elapsedLabel = running ? elapsed(t.createdAt) : '';
+        const hasId = t.id != null && t.id !== '';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log?format=text';
+        const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes';
         return [
           '<div class="task-row">',
             '<div>',
@@ -474,6 +531,8 @@ const HTML = `<!DOCTYPE html>
               t.provider ? '<span class="provider">' + escape(t.provider) + '</span>' : '',
               elapsedLabel ? '<span class="elapsed">' + escape(elapsedLabel) + '</span>' : '',
               '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>',
+              hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
+              hasId && running ? '<button type="button" class="cancel" data-task-id="' + encodeURIComponent(t.id) + '" onclick="cancelTask(this)">cancel</button>' : '',
             '</div>',
             t.branch ? '<div class="branch">branch: ' + escape(t.branch) + '</div>' : '',
             t.promptSnippet ? '<div class="intent">' + escape(t.promptSnippet) + '</div>' : '',

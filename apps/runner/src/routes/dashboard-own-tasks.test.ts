@@ -93,6 +93,8 @@ test('runner own tasks render with escaped fields and track the repo + activity 
   assert.match(tasks(), /<span class="status status-running">running<\/span>/)
   assert.match(tasks(), /<span class="provider">claude<\/span>/)
   assert.match(tasks(), /<a class="log" target="_blank" rel="noopener" href="\/tasks\/task-1\/log\?format=text">log<\/a>/)
+  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task-1\/changes">changes<\/a>/)
+  assert.match(tasks(), /<button type="button" class="cancel" data-task-id="task-1" onclick="cancelTask\(this\)">cancel<\/button>/)
   assert.match(tasks(), /<div class="intent">do a thing<\/div>/)
   assert.match(tasks(), /class="age">created \d+[smhd] ago/)
   assert.equal(h.el('taskCount2').textContent, '1')
@@ -150,4 +152,24 @@ test('runner tasks render without a provider and encode the id in the log link',
   assert.match(tasks(), /class="task-row"/)
   assert.ok(!tasks().includes('class="provider"'))
   assert.match(tasks(), /href="\/tasks\/task%20a%2Fb\/log\?format=text"/)
+  // The changes anchor and the cancel button encode the id the same way.
+  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task%20a%2Fb\/changes">changes<\/a>/)
+  assert.match(tasks(), /data-task-id="task%20a%2Fb"/)
+})
+
+test('runner tasks omit cancel and changes controls when the id is missing', async () => {
+  const h = await harness(await servedScript())
+  const tasks = () => h.el('tasks').innerHTML
+  await h.success({
+    ...snapshot(),
+    liveTasks: [{
+      id: '', repo: 'owner/forge', branch: 'fleet/forge/x',
+      status: 'running', provider: 'claude', promptSnippet: 'do a thing',
+      createdAt: '2026-11-05T06:59:00Z',
+    }],
+  })
+  // A row with no id still renders, but gets no cancel button or changes link.
+  assert.match(tasks(), /class="task-row"/)
+  assert.ok(!tasks().includes('class="cancel"'))
+  assert.ok(!tasks().includes('class="changes"'))
 })
