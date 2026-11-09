@@ -23,6 +23,8 @@ test('root and legacy discovery return the same static contract; unknown paths s
     const { tasksRouter } = await import('./tasks.js')
     const { db } = await import('../db/schema.js')
     const { config } = await import('../config.js')
+    const { MAX_LOG_SLICE_BYTES } = await import('../db/task-log.js')
+    const { LOG_TAIL_BYTES } = await import('../db/task-projection.js')
     try {
       const app = express()
       app.use(capabilitiesRouter)
@@ -47,6 +49,10 @@ test('root and legacy discovery return the same static contract; unknown paths s
               minFreeDiskMb: number
               autoCommit: boolean
             }
+            logging: {
+              maxSliceBytes: number
+              detailTailBytes: number
+            }
           }
           // Existing contract fields stay byte-for-byte stable.
           assert.equal(body.providerSelectionVersion, 1)
@@ -60,6 +66,10 @@ test('root and legacy discovery return the same static contract; unknown paths s
           assert.equal(body.limits.taskTimeoutMs, config.taskTimeoutMs)
           assert.equal(body.limits.minFreeDiskMb, config.minFreeDiskMb)
           assert.equal(body.limits.autoCommit, config.autoCommit)
+          // Logging bounds mirror the constants the log routes enforce, so
+          // pagination clients can self-configure instead of hard-coding caps.
+          assert.equal(body.logging.maxSliceBytes, MAX_LOG_SLICE_BYTES)
+          assert.equal(body.logging.detailTailBytes, LOG_TAIL_BYTES)
         }
         for (const route of ['/unknown', '/capabilities/unknown', '/tasks/capabilities/unknown']) {
           const response = await fetch(base + route)
