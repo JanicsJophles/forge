@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { dirname, resolve } from 'node:path'
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import type { AgentTask, RunRequest, TaskStatus } from '@forge/shared'
+import type { AgentProvider, AgentTask, RunRequest, TaskStatus } from '@forge/shared'
 import { config, isRepoAllowed } from '../config.js'
 import {
   insertTask,
@@ -36,6 +36,126 @@ function checkoutRoot(directory: string): string {
     cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 5000, killSignal: 'SIGKILL', maxBuffer: 64 * 1024, env,
   }).trim())
+}
+
+// Shared admission guards for dispatching work into a checkout. `repo` must be a
+// canonical checkout root — the POST / body path resolves one from untrusted
+// input; the retry path reuses the source task's stored canonical repo.
+// `requestedBranch`, when present, is an already-validated non-empty string.
+// Factoring these into one place means the retry endpoint cannot bypass the
+// allowlist re-check, the active-checkout conflict, the disk guard, the
+// concurrency limit, or branch resolution that POST / enforces.
+type AdmissionOutcome =
+  | { ok: true; branch: string }
+  | { ok: false; status: number; body: Record<string, unknown> }
+
+function admitCheckout(repo: string, requestedBranch: string | undefined): AdmissionOutcome {
+  if (!isRepoAllowed(repo)) {
+    return { ok: false, status: 400, body: { error: 'repo checkout root is not in ALLOWED_REPO_PATHS' } }
+  }
+
+  // Keep admission synchronous: queued login probes also own their checkout.
+  // Resolve older rows too, since they may contain aliases.
+  const conflict = listActiveTasks().find(task => {
+    let activeRepo: string
+    try { activeRepo = checkoutRoot(task.repo) }
+    catch {
+      try { activeRepo = realpathSync(task.repo) }
+      catch { activeRepo = resolve(task.repo) }
+    }
+    return activeRepo === repo
+  })
+  if (conflict) {
+    return { ok: false, status: 409, body: { error: 'repo checkout already has an active task', taskId: conflict.id } }
+  }
+
+  // Disk guard: the runner git-pulls into the repo and the agent writes files
+  // there plus a growing SQLite WAL. If the disk fills, git and the agent
+  // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
+  // cannot read the filesystem — never crash the request over a stat error.
+  const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
+  for (const volume of ['repo', 'data'] as const) {
+    try {
+      // Resolve the open database itself so a symlinked forge.db checks the
+      // filesystem that actually stores SQLite and its adjacent WAL.
+      const directory = volume === 'repo' ? repo : dirname(realpathSync(db.name))
+      const freeBytes = freeDiskBytes(directory)
+      if (freeBytes < minFreeBytes) {
+        return {
+          ok: false,
+          status: 507,
+          body: {
+            error: 'insufficient disk space to accept new tasks',
+            volume,
+            freeMb: Math.floor(freeBytes / (1024 * 1024)),
+            requiredMb: config.minFreeDiskMb,
+          },
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[runner] ${volume} disk-space check failed, measurement unknown: ${err.message}`)
+    }
+  }
+
+  if (countActiveTasks() >= config.maxConcurrentTasks) {
+    return { ok: false, status: 429, body: { error: 'max concurrent tasks reached' } }
+  }
+
+  // Validate the branch claim against the checkout so two callers cannot race the
+  // same working tree under mismatched branch assumptions. A provable mismatch is
+  // rejected with a static message — never raw Git output, which can carry paths
+  // or remote URLs. When the branch is omitted we record the checkout's current
+  // branch. An unborn checkout (no commits) has no resolvable branch to compare
+  // against, so a claim is accepted rather than invented: real work always runs on
+  // a checkout with commits.
+  if (requestedBranch !== undefined) {
+    let checkoutBranch: string | null
+    try { checkoutBranch = getCurrentBranch(repo) } catch { checkoutBranch = null }
+    if (checkoutBranch !== null && checkoutBranch !== requestedBranch) {
+      return { ok: false, status: 409, body: { error: 'requested branch does not match the repository checkout' } }
+    }
+    return { ok: true, branch: requestedBranch }
+  }
+  try {
+    return { ok: true, branch: getCurrentBranch(repo) }
+  } catch (err: any) {
+    return { ok: false, status: 400, body: { error: `could not determine branch: ${err.message}` } }
+  }
+}
+
+// Build, persist and kick off a queued task from already-admitted inputs. Used by
+// both POST / and POST /:id/retry so the two dispatch paths stay identical.
+function dispatchTask(fields: {
+  provider: AgentProvider
+  autoCommit: boolean
+  model: string | undefined
+  repo: string
+  branch: string
+  prompt: string
+}): string {
+  const task: AgentTask = {
+    id: uuidv4(),
+    provider: fields.provider,
+    autoCommit: fields.autoCommit,
+    model: fields.model,
+    repo: fields.repo,
+    branch: fields.branch,
+    prompt: fields.prompt,
+    status: 'queued',
+    log: '',
+    createdAt: new Date().toISOString(),
+  }
+
+  insertTask(task)
+
+  const emitter = createEmitter(task.id)
+
+  // Run async — do not await here
+  runTask(task, emitter).catch((err) => {
+    console.error('[runner] uncaught error in runTask', err)
+  })
+
+  return task.id
 }
 
 export const tasksRouter = Router()
@@ -98,114 +218,30 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     res.status(400).json({ error: 'repo must be inside a Git checkout with a discoverable root' })
     return
   }
-  if (!isRepoAllowed(repo)) {
-    res.status(400).json({ error: 'repo checkout root is not in ALLOWED_REPO_PATHS' })
+
+  // Reject a malformed branch claim (body-level) before running shared admission;
+  // admitCheckout receives an already-validated non-empty string or undefined.
+  if (body.branch !== undefined && (typeof body.branch !== 'string' || !body.branch.trim())) {
+    res.status(400).json({ error: 'branch must be a non-empty string' })
     return
   }
 
-  // Keep admission synchronous through insertTask: queued login probes also
-  // own their checkout. Resolve older rows too, since they may contain aliases.
-  const conflict = listActiveTasks().find(task => {
-    let activeRepo: string
-    try { activeRepo = checkoutRoot(task.repo) }
-    catch {
-      try { activeRepo = realpathSync(task.repo) }
-      catch { activeRepo = resolve(task.repo) }
-    }
-    return activeRepo === repo
-  })
-  if (conflict) {
-    res.status(409).json({ error: 'repo checkout already has an active task', taskId: conflict.id })
+  const admission = admitCheckout(repo, body.branch)
+  if (!admission.ok) {
+    res.status(admission.status).json(admission.body)
     return
   }
 
-  // Disk guard: the runner git-pulls into the repo and the agent writes files
-  // there plus a growing SQLite WAL. If the disk fills, git and the agent
-  // corrupt state, so refuse new work below MIN_FREE_DISK_MB. Fail open if we
-  // cannot read the filesystem — never crash the request over a stat error.
-  const minFreeBytes = config.minFreeDiskMb * 1024 * 1024
-  for (const volume of ['repo', 'data'] as const) {
-    try {
-      // Resolve the open database itself so a symlinked forge.db checks the
-      // filesystem that actually stores SQLite and its adjacent WAL.
-      const directory = volume === 'repo' ? repo : dirname(realpathSync(db.name))
-      const freeBytes = freeDiskBytes(directory)
-      if (freeBytes < minFreeBytes) {
-        res.status(507).json({
-          error: 'insufficient disk space to accept new tasks',
-          volume,
-          freeMb: Math.floor(freeBytes / (1024 * 1024)),
-          requiredMb: config.minFreeDiskMb,
-        })
-        return
-      }
-    } catch (err: any) {
-      console.warn(`[runner] ${volume} disk-space check failed, measurement unknown: ${err.message}`)
-    }
-  }
-
-  if (countActiveTasks() >= config.maxConcurrentTasks) {
-    res.status(429).json({ error: 'max concurrent tasks reached' })
-    return
-  }
-
-  // Validate the branch claim against the checkout so two callers cannot race
-  // the same working tree under mismatched branch assumptions. When the caller
-  // names a branch it must match the checkout's current branch; a provable
-  // mismatch is rejected with a static message — never raw Git output, which can
-  // carry paths or remote URLs. When the branch is omitted we record the
-  // checkout's current branch as before. An unborn checkout (no commits) has no
-  // resolvable branch to compare against, so a claim is accepted rather than
-  // invented: real work always runs on a checkout with commits.
-  let branch: string
-  if (body.branch !== undefined) {
-    if (typeof body.branch !== 'string' || !body.branch.trim()) {
-      res.status(400).json({ error: 'branch must be a non-empty string' })
-      return
-    }
-    let checkoutBranch: string | null
-    try {
-      checkoutBranch = getCurrentBranch(repo)
-    } catch {
-      checkoutBranch = null
-    }
-    if (checkoutBranch !== null && checkoutBranch !== body.branch) {
-      res.status(409).json({ error: 'requested branch does not match the repository checkout' })
-      return
-    }
-    branch = body.branch
-  } else {
-    try {
-      branch = getCurrentBranch(repo)
-    } catch (err: any) {
-      res.status(400).json({ error: `could not determine branch: ${err.message}` })
-      return
-    }
-  }
-
-  const task: AgentTask = {
-    id: uuidv4(),
+  const taskId = dispatchTask({
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
     model: body.model,
     repo,
-    branch,
+    branch: admission.branch,
     prompt: body.prompt,
-    status: 'queued',
-    log: '',
-    createdAt: new Date().toISOString(),
-  }
-
-  insertTask(task)
-
-  const emitter = createEmitter(task.id)
-
-  // Run async — do not await here
-  runTask(task, emitter).catch((err) => {
-    console.error('[runner] uncaught error in runTask', err)
   })
 
-  res.status(201).json({ taskId: task.id })
+  res.status(201).json({ taskId })
 })
 
 // GET /tasks — bounded history with exact stored-value filters.
@@ -300,6 +336,41 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
   }
 
   res.json({ taskId: task.id, repo: task.repo, branch: task.branch, changedFiles })
+})
+
+// POST /tasks/:id/retry — re-dispatch a terminal task's exact stored inputs as a
+// brand-new task (new id). Reuses repo, prompt, provider, model and autoCommit;
+// branch is re-resolved from the checkout via the shared admission guards, so a
+// retry can never bypass the allowlist, conflict, disk, concurrency, or branch
+// checks POST / enforces. Only completed/failed tasks are retryable.
+tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
+  const source = getTask(req.params.id)
+  if (!source) {
+    res.status(404).json({ error: 'task not found' })
+    return
+  }
+  if (source.status !== 'completed' && source.status !== 'failed') {
+    res.status(409).json({ error: 'task is not in a terminal state' })
+    return
+  }
+
+  // source.repo was canonicalized to its checkout root at the original admission.
+  const admission = admitCheckout(source.repo, undefined)
+  if (!admission.ok) {
+    res.status(admission.status).json(admission.body)
+    return
+  }
+
+  const taskId = dispatchTask({
+    provider: source.provider ?? 'claude',
+    autoCommit: source.autoCommit ?? config.autoCommit,
+    model: source.model,
+    repo: source.repo,
+    branch: admission.branch,
+    prompt: source.prompt,
+  })
+
+  res.status(201).json({ taskId })
 })
 
 // DELETE /tasks/:id — kill active task

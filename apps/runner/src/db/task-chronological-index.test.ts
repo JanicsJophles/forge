@@ -92,7 +92,7 @@ test('existing task databases gain chronological indexes idempotently without ch
       id TEXT PRIMARY KEY, repo TEXT NOT NULL, branch TEXT NOT NULL, prompt TEXT NOT NULL,
       status TEXT DEFAULT 'queued', log TEXT DEFAULT '', created_at TEXT DEFAULT (datetime('now')),
       started_at TEXT, completed_at TEXT, error_message TEXT, commit_sha TEXT,
-      provider TEXT NOT NULL DEFAULT 'claude', auto_commit INTEGER
+      provider TEXT NOT NULL DEFAULT 'claude', auto_commit INTEGER, model TEXT
     );
     CREATE INDEX tasks_created_idx ON tasks(created_at DESC);
     CREATE INDEX tasks_status_idx ON tasks(status);

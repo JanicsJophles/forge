@@ -10,6 +10,7 @@ export const LIST_LOG_TAIL_BYTES = 8192
 interface TaskRow {
   provider: 'claude' | 'codex'
   auto_commit: number | null
+  model: string | null
   id: string
   repo: string
   branch: string
@@ -27,6 +28,7 @@ function rowToTask(row: TaskRow): AgentTask {
   return {
     provider: row.provider,
     autoCommit: row.auto_commit == null ? undefined : Boolean(row.auto_commit),
+    model: row.model ?? undefined,
     id: row.id,
     repo: row.repo,
     branch: row.branch,
@@ -43,12 +45,13 @@ function rowToTask(row: TaskRow): AgentTask {
 
 export function insertTask(task: AgentTask): void {
   db.prepare(`
-    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit)
-    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit)
+    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit, model)
+    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit, @model)
   `).run({
     id: task.id,
     provider: task.provider ?? 'claude',
     autoCommit: task.autoCommit == null ? null : Number(task.autoCommit),
+    model: task.model ?? null,
     repo: task.repo,
     branch: task.branch,
     prompt: task.prompt,
@@ -72,6 +75,7 @@ function listRowToTask(row: TaskListRow): AgentTask {
   return {
     provider: row.provider,
     autoCommit: row.auto_commit == null ? undefined : Boolean(row.auto_commit),
+    model: row.model ?? undefined,
     id: row.id,
     repo: row.repo,
     branch: row.branch,
@@ -117,7 +121,7 @@ export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTa
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const rows = db.prepare(`
     SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
-           error_message, commit_sha, provider, auto_commit,
+           error_message, commit_sha, provider, auto_commit, model,
            substr(CAST(COALESCE(log, '') AS BLOB), -${LIST_LOG_TAIL_BYTES}) AS log_tail,
            length(CAST(COALESCE(log, '') AS BLOB)) AS log_bytes
     FROM tasks ${where} ORDER BY ${TASK_NEWEST_FIRST} LIMIT ?
