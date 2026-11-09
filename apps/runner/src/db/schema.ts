@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
+import { pruneOldTasks, retentionDaysFromEnv } from './retention.js'
 
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), 'data')
 fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -65,5 +66,16 @@ db.exec(`
     WHERE status IN ('queued', 'running');
   DROP INDEX IF EXISTS tasks_status_idx;
 `)
+
+// Prune aged terminal tasks once at boot so forge.db (and its WAL) cannot grow
+// without bound on the long-running host and starve the disk guard. Disabled
+// (retentionDays === 0) is a no-op. Read from env directly rather than config
+// so this stays importable in db-only tests (config.ts exits when the repo
+// allowlist is unset); config.retentionDays resolves to the same value.
+const retentionDays = retentionDaysFromEnv()
+if (retentionDays > 0) {
+  const pruned = pruneOldTasks(db, retentionDays)
+  console.log(`[db] Retention: pruned ${pruned} task(s) older than ${retentionDays}d`)
+}
 
 console.log(`[db] SQLite open: ${DB_PATH}`)

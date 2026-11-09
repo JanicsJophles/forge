@@ -1,6 +1,7 @@
 import 'dotenv/config'
 import path from 'node:path'
 import { realpathSync, statSync } from 'node:fs'
+import { retentionDaysFromEnv } from './db/retention.js'
 
 function positiveIntegerEnv(name: string, fallback: number, maximum = Number.MAX_SAFE_INTEGER): number {
   const raw = process.env[name]
@@ -35,6 +36,9 @@ if (!rawPaths.trim()) {
 export const config = {
   port: positiveIntegerEnv('PORT', 5000, 65535),
   taskTimeoutMs: taskTimeoutEnv(),
+  // Days of completed/failed task history to keep; 0 (default) disables pruning.
+  // Prevents forge.db from growing unbounded and tripping the disk guard.
+  retentionDays: retentionDaysFromEnv(),
   host: process.env.HOST ?? '0.0.0.0',
   // Capped at 64: each concurrent task spawns a claude/codex child process, so
   // an operator typo (e.g. MAX_CONCURRENT_TASKS=200) would OOM the host. Values
