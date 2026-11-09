@@ -167,19 +167,11 @@ export async function runTask(
   const formatStderr = stderrLines()
   let buffer = ''
   let flushTimer: ReturnType<typeof setInterval> | null = null
-  // Full accumulated log, kept in-memory so the stuckpoint-capture hook can
-  // read the whole transcript at close without a DB round-trip. Capped to
-  // avoid unbounded growth on very long runs.
-  const MAX_CAPTURE_LOG = 256 * 1024 // 256KB
-  let fullLog = ''
 
   function flush() {
     if (!buffer) return
     const chunk = buffer
     buffer = ''
-    if (fullLog.length < MAX_CAPTURE_LOG) {
-      fullLog += chunk.slice(0, MAX_CAPTURE_LOG - fullLog.length)
-    }
     appendLog(task.id, chunk)
     emitter.emit('event', makeEvent('log', chunk))
   }
