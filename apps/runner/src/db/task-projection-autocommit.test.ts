@@ -37,7 +37,7 @@ for (const modern of [true, false]) {
           if (view === 'detail') Object.assign(expected, {
             repo: '/throwaway/repo', branch: 'test', prompt: 'prompt',
             log: 'x'.repeat(LOG_TAIL_BYTES), logBytes: LOG_TAIL_BYTES + 10,
-            logTailOffset: 10, log_truncated: true,
+            logTailOffset: 10, logTruncated: true,
           })
           assert.deepEqual(result, expected)
           const select = statements.find(sql => sql.startsWith('SELECT'))!

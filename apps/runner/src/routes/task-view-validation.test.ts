@@ -83,7 +83,7 @@ test('GET /tasks/:id rejects an unknown view with 400 before any DB read', async
       assert.equal(body.read_projection_version, 1)
       assert.equal(body.log, 'line one\nline two\n')
       assert.equal(typeof body.logBytes, 'number')
-      assert.equal(body.log_truncated, false)
+      assert.equal(body.logTruncated, false)
     }
 
     // Unknown view values are rejected with 400 — and no task SELECT runs.

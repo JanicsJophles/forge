@@ -59,7 +59,7 @@ test('history and detail decode actual SQLite suffixes for empty and populated l
         } else {
           const detail = readTaskProjection(db, id, 'detail')!
           assert.equal(detail.log, expected)
-          assert.equal(detail.log_truncated, bytes.length > limit)
+          assert.equal(detail.logTruncated, bytes.length > limit)
           assert.equal(detail.read_projection_version, 1)
           assert.equal(detail.prompt, 'test prompt')
           assert.equal('log_tail' in detail, false)
@@ -67,7 +67,7 @@ test('history and detail decode actual SQLite suffixes for empty and populated l
       }
       const status = readTaskProjection(db, id, 'status')!
       assert.equal('log' in status, false)
-      assert.equal('log_truncated' in status, false)
+      assert.equal('logTruncated' in status, false)
     }
   } finally {
     db.close()
