@@ -11,15 +11,15 @@ function escapeHtml(value: string): string {
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Avoid loading the task's potentially large log just to locate its checkout.
-  const task = db.prepare('SELECT repo FROM tasks WHERE id = ?').get(req.params.id) as
-    { repo: string } | undefined
+  const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
+    { repo: string; commit_sha: string | null } | undefined
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
   }
   let result
   try {
-    result = getChangesPatch(task.repo)
+    result = getChangesPatch(task.repo, task.commit_sha)
   } catch {
     res.status(503).json({ error: 'could not inspect repository changes' })
     return
@@ -59,7 +59,9 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     <a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
   </header>
   <main>
-    <p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>
+    ${task.commit_sha != null
+      ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
+      : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
     ${result.truncated ? '<p class="warning" role="status">Patch truncated: only the first part is shown.</p>' : ''}
     ${result.patch ? `<pre aria-label="Unified diff">${lines}</pre>` : '<p>No tracked changes.</p>'}
   </main>
