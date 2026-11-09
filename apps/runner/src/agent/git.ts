@@ -1,4 +1,4 @@
-import { execFileSync, execSync } from "node:child_process"
+import { execFileSync } from "node:child_process"
 
 interface RunOpts {
   uid?: number
@@ -17,11 +17,15 @@ function gitEnvironment(): NodeJS.ProcessEnv {
     SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" }
 }
 
-function exec(cmd: string, cwd: string, opts: RunOpts = {}): string {
-  return execSync(cmd, {
+// Run a Git subprocess without a shell: the file and its arguments are passed
+// as an argv array, so no value is ever parsed by a shell (no quoting, no
+// injection). Pipe stdout and stderr so callers can inspect them on failure.
+function exec(file: string, args: string[], cwd: string, opts: RunOpts = {}): string {
+  return execFileSync(file, args, {
     cwd,
     env: gitEnvironment(),
     encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
     ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
     ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
   }).trim()
@@ -95,7 +99,9 @@ function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
   // the next agent (running as forge) hits ENOENT-equivalent failures
   // editing src/. Mass-chown is cheap on these repos (< 1s).
   try {
-    execSync(`chown -R ${opts.uid}:${opts.gid} ${JSON.stringify(repoPath)}`, {
+    // argv array, no shell: repoPath is a single argument and is never parsed,
+    // so paths with spaces or metacharacters cannot break out.
+    execFileSync("chown", ["-R", `${opts.uid}:${opts.gid}`, repoPath], {
       stdio: "ignore",
     })
   } catch {
@@ -141,13 +147,13 @@ export function gitCommit(repoPath: string, message: string, opts: RunOpts = {})
   // Stage all tracked modifications (but not untracked files — let the
   // agent's own git add handle staging if it chose to add new files)
   try {
-    exec("git add -u", repoPath, opts)
+    exec("git", ["add", "-u"], repoPath, opts)
   } catch {
     // Nothing tracked was modified — that's fine
   }
 
   try {
-    exec(`git commit -m ${JSON.stringify(message)}`, repoPath, opts)
+    exec("git", ["commit", "-m", message], repoPath, opts)
   } catch (err: any) {
     // "nothing to commit" is not a real error
     if (err.stdout?.includes("nothing to commit") || err.stderr?.includes("nothing to commit")) {
@@ -156,7 +162,7 @@ export function gitCommit(repoPath: string, message: string, opts: RunOpts = {})
     throw err
   }
 
-  return exec("git rev-parse HEAD", repoPath, opts)
+  return exec("git", ["rev-parse", "HEAD"], repoPath, opts)
 }
 
 export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {
