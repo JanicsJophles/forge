@@ -17,7 +17,7 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
-import { getChangedFiles } from '../agent/git-changes.js'
+import { getChangedFiles, summarizeChangedFiles, boundChangedFiles } from '../agent/git-changes.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
@@ -335,7 +335,20 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
     return
   }
 
-  res.json({ taskId: task.id, repo: task.repo, branch: task.branch, changedFiles })
+  // Summarize the FULL set first so counts stay complete even when the emitted
+  // list is capped; the cap keeps a pathological working tree from returning an
+  // unbounded JSON body on the request thread.
+  const summary = summarizeChangedFiles(changedFiles)
+  const bounded = boundChangedFiles(changedFiles)
+
+  res.json({
+    taskId: task.id,
+    repo: task.repo,
+    branch: task.branch,
+    summary,
+    changedFiles: bounded.changedFiles,
+    truncated: bounded.truncated,
+  })
 })
 
 // POST /tasks/:id/retry — re-dispatch a terminal task's exact stored inputs as a

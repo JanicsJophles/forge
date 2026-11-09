@@ -7,6 +7,61 @@ export interface ChangedFile {
   status: string
 }
 
+/** Server-computed counts over the FULL changed-file set, keyed off the status
+ * letter. `total` always equals the number of entries, so unknown status letters
+ * (anything other than A/M/D/R/C/?) are reflected in `total` but no named bucket. */
+export interface ChangedFilesSummary {
+  added: number
+  modified: number
+  deleted: number
+  renamed: number
+  copied: number
+  untracked: number
+  total: number
+}
+
+/**
+ * Cap for the per-response changed-file list. A pathological working tree (e.g.
+ * thousands of untracked files) would otherwise return an unbounded JSON body on
+ * the request thread; callers get the bounded list plus a `truncated` flag, while
+ * the summary counts still describe the full set.
+ */
+export const CHANGED_FILES_LIMIT = 2_000
+
+/**
+ * Reduce a changed-file list to counts by Git status letter. Pure: no I/O. Keys
+ * off the first character of each status (A/M/D/R/C/'?'); R100, C75, etc. collapse
+ * to renamed/copied. Unknown letters are counted only in `total`.
+ */
+export function summarizeChangedFiles(files: ChangedFile[]): ChangedFilesSummary {
+  const summary: ChangedFilesSummary = {
+    added: 0, modified: 0, deleted: 0, renamed: 0, copied: 0, untracked: 0, total: 0,
+  }
+  for (const file of files) {
+    summary.total += 1
+    switch (file.status[0]) {
+      case 'A': summary.added += 1; break
+      case 'M': summary.modified += 1; break
+      case 'D': summary.deleted += 1; break
+      case 'R': summary.renamed += 1; break
+      case 'C': summary.copied += 1; break
+      case '?': summary.untracked += 1; break
+      // Unknown status letters contribute to total only.
+    }
+  }
+  return summary
+}
+
+/**
+ * Bound a changed-file list to CHANGED_FILES_LIMIT entries. Pure: no I/O. Returns
+ * the original array untouched when it is within bounds, otherwise the first
+ * CHANGED_FILES_LIMIT entries with `truncated: true`.
+ */
+export function boundChangedFiles(files: ChangedFile[]): { changedFiles: ChangedFile[]; truncated: boolean } {
+  if (files.length <= CHANGED_FILES_LIMIT) return { changedFiles: files, truncated: false }
+  return { changedFiles: files.slice(0, CHANGED_FILES_LIMIT), truncated: true }
+}
+
 // Read probes run on the request thread: cap each at two seconds so a stuck
 // Git process (including a filesystem monitor hook) cannot block it indefinitely.
 const GIT_READ_TIMEOUT_MS = 2_000
