@@ -17,7 +17,7 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
-import { getChangedFiles, summarizeChangedFiles, boundChangedFiles } from '../agent/git-changes.js'
+import { getChangedFiles, summarizeChangedFiles, boundChangedFiles, getChangesPatch } from '../agent/git-changes.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
@@ -341,6 +341,31 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
   const task = getTask(req.params.id)
   if (!task) {
     res.status(404).json({ error: 'task not found' })
+    return
+  }
+
+  // format selects the response shape: absent => the JSON file-footprint (default,
+  // unchanged), 'patch' => the bounded unified diff as text/plain. Repeated, array,
+  // or unknown values are rejected 400 (parse raw keys so a structured query fails too).
+  const query = new URL(req.originalUrl, 'http://localhost').searchParams
+  const formats = query.getAll('format')
+  const structuredFormat = [...query.keys()].some(key => key.startsWith('format['))
+  if (structuredFormat || formats.length > 1 || (formats.length === 1 && formats[0] !== 'patch')) {
+    res.status(400).json({ error: "format must be omitted or 'patch'" })
+    return
+  }
+
+  if (formats[0] === 'patch') {
+    let patch
+    try {
+      patch = getChangesPatch(task.repo)
+    } catch {
+      // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
+      res.status(503).json({ error: 'could not inspect repository changes' })
+      return
+    }
+    res.setHeader('X-Patch-Truncated', patch.truncated ? 'true' : 'false')
+    res.type('text/plain; charset=utf-8').send(patch.patch)
     return
   }
 

@@ -100,6 +100,51 @@ function readGit(args: string[], repoPath: string): string {
   }
 }
 
+// Byte cap on the unified diff returned to a reviewer: a response body bound so a
+// large refactor cannot stream an unbounded transcript back on the request thread.
+// The caller receives the first CHANGES_PATCH_BYTE_CAP bytes plus a `truncated` flag.
+export const CHANGES_PATCH_BYTE_CAP = 1_000_000
+
+// Hard ceiling on the raw diff the probe will buffer before the cap is applied.
+// Above this, execFileSync throws ENOBUFS and getChangesPatch reports the static
+// failure (503 to the client) rather than materialising an enormous diff in memory.
+const CHANGES_PATCH_MAX_BUFFER = 64 * 1024 * 1024
+
+// Buffer-returning sibling of readGit for binary-safe diff capture: the diff is
+// sliced on a byte boundary, so it must be read as bytes, not a utf8 string.
+// Same env hardening, 2s timeout, SIGKILL, and static-message failure as readGit.
+function readGitBuffer(args: string[], repoPath: string): Buffer {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoPath,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: GIT_READ_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+      maxBuffer: CHANGES_PATCH_MAX_BUFFER,
+      env: gitEnvironment(),
+    })
+  } catch {
+    throw new Error('Git change inspection unavailable; read probe failed or exceeded 2000ms')
+  }
+}
+
+/**
+ * Produce the bounded unified diff of a checkout's tracked changes against HEAD —
+ * the same tracked footprint getChangedFiles lists, as a reviewable patch. Runs a
+ * single read-only `git diff HEAD` probe (arg array, never a shell string), bounded
+ * to 2s and SIGKILLed, with core.quotepath=false so non-ASCII paths stay readable.
+ * The returned patch is capped at CHANGES_PATCH_BYTE_CAP bytes (first bytes kept,
+ * `truncated: true` when the cap bit). Throws a static-message Error on failure;
+ * never surfaces raw Git stderr.
+ */
+export function getChangesPatch(repoPath: string): { patch: string; truncated: boolean } {
+  const diff = readGitBuffer(['-c', 'core.quotepath=false', 'diff', 'HEAD'], repoPath)
+  if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
+    return { patch: diff.toString('utf8'), truncated: false }
+  }
+  return { patch: diff.subarray(0, CHANGES_PATCH_BYTE_CAP).toString('utf8'), truncated: true }
+}
+
 // `git diff --name-status -z HEAD` emits NUL-terminated fields. A normal entry is
 // two fields (status, path); a rename/copy is three (status, old, new). Using -z
 // keeps paths with spaces or newlines intact.
