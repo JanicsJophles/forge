@@ -44,6 +44,7 @@ const ENDPOINTS: Array<{ path: string; desc: string }> = [
   { path: '/health', desc: 'liveness + capacity + disk' },
   { path: '/capabilities', desc: 'providers + limits contract' },
   { path: '/tasks', desc: 'recent tasks' },
+  { path: '/history', desc: 'browse task history' },
   { path: '/repos', desc: 'allowed git repos' },
   { path: '/agent-context', desc: 'live agents + recent events' },
 ]
