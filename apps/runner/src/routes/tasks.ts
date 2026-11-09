@@ -24,6 +24,7 @@ import { readTaskProjection } from '../db/task-projection.js'
 import { capabilitiesRouter } from './capabilities.js'
 
 import { streamTask } from './task-stream.js'
+import { readTaskStreamSnapshot } from '../db/task-stream-snapshot.js'
 
 // A worktree's top level is its lock identity; the shared Git common-dir is
 // deliberately unsuitable because linked worktrees can run independently.
@@ -325,13 +326,13 @@ tasksRouter.get('/:id', (req: Request, res: Response) => {
 
 // GET /tasks/:id/stream — SSE stream
 tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
-  const task = getTask(req.params.id)
+  const replay = req.query.replay !== '0' && req.query.replay !== 'false'
+  const task = readTaskStreamSnapshot(db, req.params.id, replay)
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
   }
 
-  const replay = req.query.replay !== '0' && req.query.replay !== 'false'
   streamTask(req, res, task, getEmitter(task.id), replay)
 })
 
