@@ -82,6 +82,8 @@ function landingHtml(): string {
       <li>Uptime: <span id="uptime">…</span></li>
       <li>Reported version: <code id="live-version">…</code></li>
     </ul>
+    <h2>Recent tasks</h2>
+    <ul id="recent-tasks" aria-live="polite"><li>recent tasks unavailable</li></ul>
     <h2>Endpoints</h2>
     <ul>
 ${rows}
@@ -107,6 +109,34 @@ ${rows}
           var el = document.getElementById(id)
           if (el) el.textContent = value
         }
+        fetch('/tasks?limit=5', { headers: { accept: 'application/json' } })
+          .then(function (r) {
+            if (!r.ok) throw new Error('tasks ' + r.status)
+            return r.json()
+          })
+          .then(function (tasks) {
+            if (!Array.isArray(tasks)) throw new Error('invalid tasks')
+            var list = document.getElementById('recent-tasks')
+            var rows = tasks.slice(0, 5).map(function (task) {
+              var row = document.createElement('li')
+              var id = typeof task.id === 'string' ? task.id.slice(0, 8) : 'unknown'
+              var repo = typeof task.repo === 'string'
+                ? task.repo.split('/').filter(Boolean).pop() || 'unknown' : 'unknown'
+              var status = typeof task.status === 'string' ? task.status : 'unknown'
+              row.textContent = id + ' — ' + repo + ' — ' + status
+              return row
+            })
+            list.textContent = ''
+            if (!rows.length) {
+              var empty = document.createElement('li')
+              empty.textContent = 'No recent tasks'
+              rows.push(empty)
+            }
+            rows.forEach(function (row) { list.appendChild(row) })
+          })
+          .catch(function () {
+            setText('recent-tasks', 'recent tasks unavailable')
+          })
         fetch('/health', { headers: { accept: 'application/json' } })
           .then(function (r) {
             if (!r.ok) throw new Error('health ' + r.status)
