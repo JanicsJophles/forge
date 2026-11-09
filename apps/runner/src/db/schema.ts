@@ -48,6 +48,9 @@ if (!columns.some(c => c.name === 'provider')) {
 if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
+if (!columns.some(c => c.name === 'model')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN model TEXT')
+}
 
 // Ascending expression indexes include rowid as the implicit final key, so
 // reverse scans satisfy julianday(created_at) DESC, rowid DESC without sorting.
