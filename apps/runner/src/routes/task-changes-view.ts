@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { db } from '../db/schema.js'
-import { getChangesPatch } from '../agent/git-changes.js'
+import { getChangesPatch, getChangedFiles, summarizeChangedFiles, boundChangedFiles } from '../agent/git-changes.js'
 
 export const taskChangesViewRouter = Router()
 
@@ -18,12 +18,19 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     return
   }
   let result
+  let files
   try {
     result = getChangesPatch(task.repo, task.commit_sha)
+    files = getChangedFiles(task.repo, task.commit_sha)
   } catch {
     res.status(503).json({ error: 'could not inspect repository changes' })
     return
   }
+  const summary = summarizeChangedFiles(files)
+  const bounded = boundChangedFiles(files)
+  const fileList = bounded.changedFiles.map(file =>
+    `<li><code>${escapeHtml(file.status)}</code> <code>${escapeHtml(file.path)}</code></li>`,
+  ).join('\n')
   const lines = result.patch.split('\n').map(line => {
     const kind = line.startsWith('diff --git ') || line.startsWith('--- ') || line.startsWith('+++ ')
       ? 'file' : line.startsWith('@@') ? 'hunk'
@@ -50,6 +57,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     .removed { color: #fca5a5; background: #450a0a; }
     .file { color: #93c5fd; font-weight: bold; }
     .hunk { color: #c4b5fd; }
+    li code { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
   </style>
 </head>
@@ -62,8 +70,14 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     ${task.commit_sha != null
       ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
       : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
+    <section aria-label="Changed files">
+      <h2>Changed files</h2>
+      <p>${summary.total} changed files: ${summary.added} added, ${summary.modified} modified, ${summary.deleted} deleted, ${summary.renamed} renamed, ${summary.copied} copied, ${summary.untracked} untracked.</p>
+      ${summary.total ? `<ul>${fileList}</ul>` : '<p>No changed files.</p>'}
+      ${bounded.truncated ? `<p class="warning" role="status">File list truncated: showing ${bounded.changedFiles.length} of ${summary.total} changed files. Counts include all changed files.</p>` : ''}
+    </section>
     ${result.truncated ? '<p class="warning" role="status">Patch truncated: only the first part is shown.</p>' : ''}
-    ${result.patch ? `<pre aria-label="Unified diff">${lines}</pre>` : '<p>No tracked changes.</p>'}
+    ${result.patch ? `<pre aria-label="Unified diff">${lines}</pre>` : '<p>No tracked changes. No tracked patch to display; untracked file contents are not included.</p>'}
   </main>
 </body>
 </html>`)
