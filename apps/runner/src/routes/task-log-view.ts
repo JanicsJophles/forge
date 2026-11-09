@@ -33,7 +33,7 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function viewHtml(id: string): string {
+function viewHtml(id: string, status: string): string {
   const safeId = escapeHtml(id)
   const encodedId = encodeURIComponent(id)
   const streamPath = `/tasks/${encodedId}/stream`
@@ -42,6 +42,7 @@ function viewHtml(id: string): string {
   // JSON.stringify yields a valid JS string literal; hardening '<' to \u003c
   // means a '</script>' inside the id can never close the inline block.
   const streamLiteral = JSON.stringify(streamPath).replace(/</g, '\\u003c')
+  const statusLiteral = JSON.stringify(status).replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -120,6 +121,11 @@ function viewHtml(id: string): string {
     <header>
       <h1>forge log · <span class="id">${safeId}</span></h1>
       <span id="status" role="status" aria-live="polite">connecting…</span>
+      <label for="authToken">Auth token</label>
+      <input type="password" id="authToken" placeholder="Bearer token" autocomplete="off" />
+      <button type="button" id="cancel" hidden>Cancel</button>
+      <button type="button" id="retry" hidden>Retry</button>
+      <span id="actionMessage" role="status" aria-live="polite"></span>
       <div class="spacer"></div>
       <a href="${rawHref}">raw text</a>
       <a href="${downloadHref}">download</a>
@@ -133,7 +139,65 @@ function viewHtml(id: string): string {
         var logEl = document.getElementById('log');
         var statusEl = document.getElementById('status');
         var emptyEl = document.getElementById('empty');
+        var cancelEl = document.getElementById('cancel');
+        var retryEl = document.getElementById('retry');
+        var tokenEl = document.getElementById('authToken');
+        var messageEl = document.getElementById('actionMessage');
+        var taskUrl = STREAM_URL.slice(0, -'/stream'.length);
         var done = false;
+        var statusVersion = 0;
+        try { tokenEl.value = sessionStorage.getItem('forge.authToken') || ''; } catch (e) {}
+        tokenEl.oninput = function () {
+          try {
+            var token = tokenEl.value.trim();
+            if (token) sessionStorage.setItem('forge.authToken', token);
+            else sessionStorage.removeItem('forge.authToken');
+          } catch (e) {}
+        };
+        function taskStatus(status) {
+          statusVersion++;
+          cancelEl.hidden = status !== 'running' && status !== 'queued';
+          retryEl.hidden = status !== 'completed' && status !== 'failed';
+          setStatus(status, status === 'completed' ? 'done' : status === 'failed' ? 'fail' : '');
+        }
+        async function refreshStatus() {
+          var version = statusVersion;
+          var response = await fetch(taskUrl + '?view=status');
+          if (!response.ok) throw new Error('Status refresh failed (HTTP ' + response.status + ')');
+          var task = await response.json();
+          // A newer stream event takes precedence over an in-flight read.
+          if (version === statusVersion) taskStatus(task.status);
+        }
+        async function action(retry) {
+          cancelEl.disabled = retryEl.disabled = true;
+          messageEl.textContent = '';
+          try {
+            var token = tokenEl.value.trim();
+            var response = await fetch(taskUrl + (retry ? '/retry' : ''), {
+              method: retry ? 'POST' : 'DELETE',
+              headers: token ? { Authorization: 'Bearer ' + token } : {}
+            });
+            var result = await response.json();
+            if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + (result.error || 'Action failed'));
+            if (retry) {
+              var link = document.createElement('a');
+              link.href = '/tasks/' + encodeURIComponent(result.taskId) + '/log/view';
+              link.textContent = 'Open retried task';
+              messageEl.appendChild(link);
+            } else {
+              messageEl.textContent = 'Cancellation requested';
+              await refreshStatus();
+            }
+          } catch (e) {
+            messageEl.textContent = e.message;
+          } finally {
+            cancelEl.disabled = retryEl.disabled = false;
+          }
+        }
+        cancelEl.onclick = function () { return action(false); };
+        retryEl.onclick = function () { return action(true); };
+        taskStatus(${statusLiteral});
+        refreshStatus().catch(function (e) { messageEl.textContent = e.message; });
         function setStatus(text, cls) {
           statusEl.textContent = text;
           statusEl.className = cls || '';
@@ -175,11 +239,11 @@ function viewHtml(id: string): string {
           appendLog(parse(e.data));
         });
         source.addEventListener('status', function (e) {
-          if (!done) setStatus(parse(e.data) || 'streaming', '');
+          if (!done) taskStatus(parse(e.data) || 'streaming');
         });
         source.addEventListener('complete', function () {
           done = true;
-          setStatus('completed', 'done');
+          taskStatus('completed');
           source.close();
         });
         source.addEventListener('error', function (e) {
@@ -189,7 +253,7 @@ function viewHtml(id: string): string {
           if (e && typeof e.data === 'string') {
             done = true;
             appendLog(parse(e.data));
-            setStatus('failed', 'fail');
+            taskStatus('failed');
             source.close();
           } else if (!done) {
             setStatus('reconnecting…', 'warn');
@@ -207,9 +271,10 @@ function viewHtml(id: string): string {
 // the same { error: 'task not found' } JSON 404 the sibling routes return;
 // readTaskStatusMeta is a narrow existence probe (no full-log read).
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
-  if (!readTaskStatusMeta(db, req.params.id)) {
+  const meta = readTaskStatusMeta(db, req.params.id)
+  if (!meta) {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  res.type('html').send(viewHtml(req.params.id))
+  res.type('html').send(viewHtml(req.params.id, meta.status))
 })
