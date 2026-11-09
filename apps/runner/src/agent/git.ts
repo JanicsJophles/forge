@@ -17,6 +17,8 @@ function gitEnvironment(): NodeJS.ProcessEnv {
     SSH_ASKPASS: "/bin/false", GIT_SSH_COMMAND: "ssh -oBatchMode=yes" }
 }
 
+const GIT_WRITE_TIMEOUT_MS = 30_000
+
 // Run a Git subprocess without a shell: the file and its arguments are passed
 // as an argv array, so no value is ever parsed by a shell (no quoting, no
 // injection). Pipe stdout and stderr so callers can inspect them on failure.
@@ -24,6 +26,8 @@ function exec(file: string, args: string[], cwd: string, opts: RunOpts = {}): st
   return execFileSync(file, args, {
     cwd,
     env: gitEnvironment(),
+    timeout: GIT_WRITE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
@@ -103,6 +107,8 @@ function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
     // so paths with spaces or metacharacters cannot break out.
     execFileSync("chown", ["-R", `${opts.uid}:${opts.gid}`, repoPath], {
       stdio: "ignore",
+      timeout: GIT_WRITE_TIMEOUT_MS,
+      killSignal: "SIGKILL",
     })
   } catch {
     // not running as root, or .git doesn't exist yet — neither case is a real error
@@ -144,25 +150,28 @@ export function gitPull(repoPath: string, opts: RunOpts = {}, timeoutMs = 30_000
 }
 
 export function gitCommit(repoPath: string, message: string, opts: RunOpts = {}): string {
-  // Stage all tracked modifications (but not untracked files — let the
-  // agent's own git add handle staging if it chose to add new files)
-  try {
-    exec("git", ["add", "-u"], repoPath, opts)
-  } catch {
-    // Nothing tracked was modified — that's fine
-  }
-
-  try {
-    exec("git", ["commit", "-m", message], repoPath, opts)
-  } catch (err: any) {
-    // "nothing to commit" is not a real error
-    if (err.stdout?.includes("nothing to commit") || err.stderr?.includes("nothing to commit")) {
-      return ""
+  // Sanitize every failure before it reaches persisted task errors. In particular,
+  // a timeout must never be mistaken for a clean checkout based on hook output.
+  function write(args: string[], operation: string, allowNothing = false): string | null {
+    try {
+      return exec("git", args, repoPath, opts)
+    } catch (error) {
+      const failure = error as { code?: string; status?: number; stdout?: string; stderr?: string }
+      if (allowNothing && failure.code !== "ETIMEDOUT" && failure.status === 1 &&
+        (failure.stdout?.includes("nothing to commit") || failure.stderr?.includes("nothing to commit"))) {
+        return null
+      }
+      const reason = failure.code === "ETIMEDOUT"
+        ? "timed out after 30000ms; check Git hooks and repository filesystem responsiveness"
+        : "failed; check repository permissions, Git hooks, and local changes"
+      throw new Error(`Git ${operation} ${reason}`)
     }
-    throw err
   }
 
-  return exec("git", ["rev-parse", "HEAD"], repoPath, opts)
+  // Stage tracked modifications only; do not commit a partial index if staging fails.
+  write(["add", "-u"], "staging")
+  if (write(["commit", "-m", message], "commit", true) === null) return ""
+  return write(["rev-parse", "HEAD"], "commit SHA lookup")!
 }
 
 export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {
