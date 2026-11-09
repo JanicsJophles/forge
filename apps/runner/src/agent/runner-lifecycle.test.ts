@@ -79,7 +79,7 @@ for (const mode of ['term-zero', 'timeout-zero', 'ignore', 'timeout', 'normal-ra
       assert.equal(commits, 0)
       assert.equal(getTask(task.id)?.status, 'failed')
       assert.match(getTask(task.id)!.errorMessage!, mode.startsWith('timeout') ? /timed out/ : mode === 'spawn-error' ? /failed to launch claude/ : /cancelled/)
-      assert.deepEqual(signals, mode === 'spawn-error' ? [] : mode === 'ignore' || mode === 'timeout' ? ['SIGTERM', 'SIGKILL'] : ['SIGTERM'])
+      assert.deepEqual(signals, mode === 'spawn-error' ? [] : mode === 'ignore' || mode === 'timeout' || mode === 'exit-before-close' ? ['SIGTERM', 'SIGKILL'] : ['SIGTERM'])
     }
     if (timers[1]) assert.equal(timers[1].delay, 10000)
     child.emit('close', 0, null) // Duplicate close never commits or completes twice.
