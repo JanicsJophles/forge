@@ -3,6 +3,7 @@ import { readdirSync, existsSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { config } from '../config.js'
 import { getCurrentBranch, getHeadCommit, hasUncommittedChanges, HeadCommit } from '../agent/git.js'
+import { getAheadBehind } from '../agent/git-tracking.js'
 
 export const reposRouter = Router()
 
@@ -14,12 +15,16 @@ interface RepoSummary {
   branchError?: 'unavailable'
   head: HeadCommit | null
   statusError?: 'unavailable'
+  // Local-only comparison against the tracked upstream (no fetch); both null
+  // when the branch has no upstream or the probe failed.
+  ahead: number | null
+  behind: number | null
 }
 
 // Accept git readers separately so discovery can be tested without a live runner.
 export function discoverRepos(
   allowedPaths: string[],
-  git = { getCurrentBranch, getHeadCommit, hasUncommittedChanges },
+  git = { getCurrentBranch, getHeadCommit, hasUncommittedChanges, getAheadBehind },
 ): RepoSummary[] {
   const paths = new Set<string>()
   const addCheckout = (candidate: string) => {
@@ -61,7 +66,17 @@ export function discoverRepos(
     let head: HeadCommit | null = null
     try { head = git.getHeadCommit(path) } catch { /* no resolvable HEAD */ }
 
-    repos.push({ name: basename(path), path, currentBranch, dirty, head,
+    // A missing upstream or a failed probe yields nulls and must not hide other
+    // repos or crash the request. getAheadBehind already returns null rather than
+    // throwing; the guard defends against an injected reader that throws.
+    let ahead: number | null = null
+    let behind: number | null = null
+    try {
+      const tracking = git.getAheadBehind?.(path)
+      if (tracking) { ahead = tracking.ahead; behind = tracking.behind }
+    } catch { /* treat as unknown */ }
+
+    repos.push({ name: basename(path), path, currentBranch, dirty, head, ahead, behind,
       ...(branchError ? { branchError } : {}),
       ...(statusError ? { statusError } : {}) })
   }
