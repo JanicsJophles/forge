@@ -279,6 +279,53 @@ const HTML = `<!DOCTYPE html>
       color: var(--text-dim);
     }
     .by-repo .pill b { color: var(--accent); margin-right: 4px; }
+    .launch-form {
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .launch-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .launch-row label { color: var(--text-dim); font-size: 12px; }
+    .launch-form select,
+    .launch-form textarea {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-family: inherit;
+    }
+    .launch-form #launchRepo { min-width: 160px; }
+    .launch-form textarea {
+      width: 100%;
+      min-height: 64px;
+      resize: vertical;
+      font-family: 'SF Mono', Menlo, monospace;
+      line-height: 1.4;
+    }
+    .launch-check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .launch-actions { display: flex; align-items: center; gap: 10px; }
+    .launch-form button {
+      background: rgba(16, 185, 129, 0.14);
+      color: var(--accent);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      border-radius: 4px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .launch-form button:hover:not(:disabled) { background: rgba(16, 185, 129, 0.22); }
+    .launch-form button:disabled { opacity: 0.6; cursor: default; }
+    .launch-err { color: var(--fail); font-size: 11px; overflow-wrap: anywhere; }
     footer {
       padding: 12px 24px;
       color: var(--text-mute);
@@ -334,6 +381,27 @@ const HTML = `<!DOCTYPE html>
       <h2>Recent event snapshot <span class="count" id="eventCount2">0</span></h2>
       <p id="eventCoverage" role="status" aria-live="polite"></p>
       <div id="events"></div>
+    </section>
+
+    <section class="full-span">
+      <h2>New task</h2>
+      <form id="newTaskForm" class="launch-form">
+        <div class="launch-row">
+          <label for="launchRepo">Repository</label>
+          <select id="launchRepo"><option value="">loading repositories…</option></select>
+          <label for="launchProvider">Provider</label>
+          <select id="launchProvider">
+            <option value="claude">claude</option>
+            <option value="codex">codex</option>
+          </select>
+          <label class="launch-check"><input type="checkbox" id="launchAutoCommit" /> autoCommit</label>
+        </div>
+        <textarea id="launchPrompt" placeholder="Prompt — what should the agent do?"></textarea>
+        <div class="launch-actions">
+          <button type="submit" id="launchSubmit">Launch task</button>
+          <span class="launch-err" id="launchErr" role="status" aria-live="polite"></span>
+        </div>
+      </form>
     </section>
 
     <section class="full-span">
@@ -508,6 +576,67 @@ const HTML = `<!DOCTYPE html>
         err.textContent = 'cancel failed: ' + e.message;
         button.insertAdjacentElement('afterend', err);
       }
+    }
+    async function loadRepos() {
+      // Populate the launcher's repo <select> from GET /repos, once on load.
+      // A read endpoint, so it is never auth-gated. Option values are repo paths
+      // (what POST /tasks expects); labels fall back to the path if name is blank.
+      const select = document.getElementById('launchRepo');
+      try {
+        const r = await fetch('/repos');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const repos = await r.json();
+        if (!Array.isArray(repos)) throw new Error('invalid repos');
+        const options = repos
+          .filter(repo => repo && typeof repo.path === 'string' && repo.path)
+          .map(repo => {
+            const label = typeof repo.name === 'string' && repo.name ? repo.name : repo.path;
+            // escape() neutralizes a hostile repo name/path before it reaches the DOM.
+            return '<option value="' + escape(repo.path).replace(/"/g, '&quot;') + '">' + escape(label) + '</option>';
+          })
+          .join('');
+        select.innerHTML = options || '<option value="">no repositories available</option>';
+      } catch (e) {
+        select.innerHTML = '<option value="">could not load repositories</option>';
+      }
+    }
+    async function submitNewTask(event) {
+      if (event && event.preventDefault) event.preventDefault();
+      const button = document.getElementById('launchSubmit');
+      const errEl = document.getElementById('launchErr');
+      const repo = document.getElementById('launchRepo').value;
+      const prompt = document.getElementById('launchPrompt').value;
+      const provider = document.getElementById('launchProvider').value;
+      const autoCommit = document.getElementById('launchAutoCommit').checked === true;
+      // Clear any stale error from a previous attempt; textContent can't inject HTML.
+      errEl.textContent = '';
+      if (!repo) { errEl.textContent = 'select a repository'; return; }
+      if (!prompt.trim()) { errEl.textContent = 'prompt is required'; return; }
+      button.disabled = true;
+      const original = button.textContent;
+      button.textContent = 'launching…';
+      try {
+        const r = await fetch('/tasks', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ repo, prompt, provider, autoCommit }),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        // 201: clear the prompt; the next 5s /agent-context poll surfaces the task.
+        document.getElementById('launchPrompt').value = '';
+      } catch (e) {
+        // Non-2xx (401/400/409/429/507) or a network error: surface inline next to
+        // the button and leave the typed prompt intact so the user can retry.
+        errEl.textContent = 'launch failed: ' + e.message;
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+    function wireNewTaskForm() {
+      const form = document.getElementById('newTaskForm');
+      if (form) form.onsubmit = submitNewTask;
+      loadRepos();
     }
     function renderTasks(tasks) {
       const root = document.getElementById('tasks');
@@ -701,6 +830,11 @@ const HTML = `<!DOCTYPE html>
         setTimeout(refresh, 5000);
       }
     }
+    // Wire the launcher only in a real browser. The unit harness runs the script
+    // in a bare VM with no window, so this keeps the one-poll-in-flight invariant
+    // (dashboard-refresh asserts a single fetch at load); those tests drive the
+    // launcher functions directly.
+    if (typeof window !== 'undefined') wireNewTaskForm();
     refresh();
   </script>
 </body>
