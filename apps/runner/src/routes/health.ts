@@ -46,6 +46,27 @@ healthRouter.get('/health', (_req, res) => {
   const acceptingTasks =
     diskOk === true && dataDiskOk === true && queuedOrRunning < config.maxConcurrentTasks
 
+  // When acceptingTasks is false, say WHY in a single machine-readable code so a
+  // dispatcher does not have to re-derive the rule from the raw fields (the exact
+  // drift acceptingTasks was added to prevent). Precedence mirrors the fail-safe
+  // bias of acceptingTasks: a null/unverifiable disk reading reports 'unknown'
+  // FIRST — it is never silently masked by concurrency, so the field cannot read
+  // healthy over an unmeasured volume. Then the concrete low-disk reasons ('disk'
+  // = repo volume, 'dataDisk' = sqlite volume) ahead of 'concurrency', matching
+  // admitCheckout's disk-before-slots order. null when accepting.
+  const notAcceptingReason: 'concurrency' | 'disk' | 'dataDisk' | 'unknown' | null =
+    acceptingTasks
+      ? null
+      : diskOk === null || dataDiskOk === null
+        ? 'unknown'
+        : diskOk === false
+          ? 'disk'
+          : dataDiskOk === false
+            ? 'dataDisk'
+            : queuedOrRunning >= config.maxConcurrentTasks
+              ? 'concurrency'
+              : 'unknown'
+
   res.json({
     status: 'ok',
     version,
@@ -57,6 +78,7 @@ healthRouter.get('/health', (_req, res) => {
     dataFreeDiskMb,
     dataDiskOk,
     acceptingTasks,
+    notAcceptingReason,
     uptimeSeconds: Math.floor(process.uptime()),
     oldestRunningTaskAgeSeconds: oldestRunningTaskAgeSeconds(),
   })
