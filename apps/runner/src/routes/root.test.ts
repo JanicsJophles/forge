@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import type { AddressInfo } from 'node:net'
 import { test } from 'node:test'
 import express from 'express'
-import { rootRouter } from './root.js'
+import { rootRouter, acceptingLabel } from './root.js'
 import { version } from '../version.js'
 import { requireBearerAuth } from './auth.js'
 
@@ -76,6 +76,37 @@ test('GET / embeds a client-side fetch of /health and keeps the static fallback'
       assert.ok(body.includes(path), `landing page links ${path}`)
     }
     assert.match(body, /href="\/dashboard"/, 'dashboard link preserved')
+  } finally {
+    await close()
+  }
+})
+
+test('acceptingLabel maps each notAcceptingReason to a human suffix', () => {
+  // Accepting: always 'yes', reason is ignored.
+  assert.equal(acceptingLabel(true, null), 'yes')
+  assert.equal(acceptingLabel(true, 'disk'), 'yes')
+  // Each known refusal code appends its human reason.
+  assert.equal(acceptingLabel(false, 'concurrency'), 'no (at capacity)')
+  assert.equal(acceptingLabel(false, 'disk'), 'no (low disk)')
+  assert.equal(acceptingLabel(false, 'dataDisk'), 'no (low data-disk)')
+  assert.equal(acceptingLabel(false, 'unknown'), 'no (disk unmeasured)')
+  // Missing or unrecognised code degrades to a bare 'no'.
+  assert.equal(acceptingLabel(false, null), 'no')
+  assert.equal(acceptingLabel(false, 'bogus'), 'no')
+})
+
+test('GET / embeds the reason-label map so the page can show WHY it refuses', async () => {
+  const app = express()
+  app.use(rootRouter)
+  const { ready, close } = startApp(app)
+  try {
+    const base = await ready
+    const body = await (await fetch(base + '/')).text()
+    // The client script reads notAcceptingReason and carries the human labels.
+    assert.match(body, /notAcceptingReason/, 'script reads notAcceptingReason')
+    for (const label of ['at capacity', 'low disk', 'low data-disk', 'disk unmeasured']) {
+      assert.ok(body.includes(label), `reason label "${label}" is embedded`)
+    }
   } finally {
     await close()
   }
