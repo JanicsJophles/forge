@@ -15,6 +15,7 @@ import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 import { exitReason } from './exit-reason.js'
+import { providerDetached, hasProcessGroup, signalProvider } from './process-group.js'
 
 // Bounds are UTF-16 code units, matching JavaScript string length.
 const MAX_PENDING_OUTPUT = 16 * 1024
@@ -65,7 +66,7 @@ export function countActiveProcs(): number {
 const runtime = { spawn, executionIdentity, gitPull, gitCommit, setTimeout, clearTimeout, checkCodexLogin }
 export async function runTask(
   task: AgentTask, emitter: EventEmitter,
-  deps: Omit<typeof runtime, 'checkCodexLogin'> & { checkCodexLogin?: typeof checkCodexLogin } = runtime,
+  deps: Omit<typeof runtime, 'checkCodexLogin'> & { checkCodexLogin?: typeof checkCodexLogin; signalProvider?: typeof signalProvider } = runtime,
 ): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
@@ -137,6 +138,7 @@ export async function runTask(
       {
         cwd: task.repo,
         ...identity,
+        detached: providerDetached,
       }
     )
   } catch (err) {
@@ -152,9 +154,10 @@ export async function runTask(
     return
   }
 
+  let closed: [number | null, NodeJS.Signals | null] | null = null
+  let escalationComplete = false
   let settled = false
-  // Tracks whether the child has actually exited, so the SIGKILL escalation
-  // can be skipped once SIGTERM succeeds.
+  // Direct-child exit does not prove descendants have stopped.
   let procExited = false
   let terminationReason: string | null = null
   let spawnError: string | null = null
@@ -210,23 +213,25 @@ export async function runTask(
   const timeoutMs = config.taskTimeoutMs
   const KILL_GRACE_MS = 10000
   function terminate(reason: string) {
-    if (settled || procExited || terminationReason) return
+    if (settled || terminationReason) return
     terminationReason = reason
     setErrorMessage(task.id, reason)
     const termMsg = `[forge] ${reason} — sending SIGTERM\n`
     appendLog(task.id, termMsg)
     emitter.emit('event', makeEvent('log', termMsg))
-    // Install escalation before sending SIGTERM: even an immediate close can
-    // then clear the timer through the single completion path.
+    // Install escalation before SIGTERM; group completion waits for both
+    // escalation and close, in either order.
     killTimer = deps.setTimeout(() => {
-      if (procExited || settled) return
+      if (settled) return
       const msg = '[forge] agent did not exit after SIGTERM — sending SIGKILL\n'
       appendLog(task.id, msg)
       emitter.emit('event', makeEvent('log', msg))
-      proc.kill('SIGKILL')
+      ;(deps.signalProvider ?? signalProvider)(proc, 'SIGKILL')
+      escalationComplete = true
+      if (closed) finish(...closed)
     }, KILL_GRACE_MS)
     killTimer.unref?.()
-    proc.kill('SIGTERM')
+    ;(deps.signalProvider ?? signalProvider)(proc, 'SIGTERM')
   }
   activeProcs.set(task.id, () => terminate(`${provider} task cancelled`))
   timeoutTimer = deps.setTimeout(() => {
@@ -234,7 +239,7 @@ export async function runTask(
   }, timeoutMs)
   timeoutTimer.unref?.()
 
-  // Exit confirms the agent cannot write; close also confirms stdio is drained.
+  // Exit only describes the direct child; close confirms its stdio is drained.
   proc.on('exit', () => { procExited = true })
 
   proc.stdout.on('data', (data: Buffer) => {
@@ -245,8 +250,15 @@ export async function runTask(
     receive(data, stderrDecoder, true)
   })
 
-  proc.on('close', async (code, signal) => {
+  proc.on('close', (code, signal) => {
+    closed = [code, signal]
     procExited = true
+    // Descendants may have closed stdio yet still be writing to the checkout.
+    if (terminationReason && hasProcessGroup(proc) && !escalationComplete) return
+    finish(code, signal)
+  })
+
+  function finish(code: number | null, signal: NodeJS.Signals | null) {
     if (settled) return
     settled = true
     if (timeoutTimer) deps.clearTimeout(timeoutTimer)
@@ -309,7 +321,7 @@ export async function runTask(
 
     emitter.emit('done')
     removeEmitter(task.id)
-  })
+  }
 
   // Node emits close after error too. An error after launch is not proof of
   // exit (for example a failed kill), so only close releases capacity.
