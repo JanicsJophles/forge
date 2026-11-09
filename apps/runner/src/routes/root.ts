@@ -15,6 +15,29 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
+// Human-readable suffix for WHY the runner is not accepting work, keyed by the
+// machine-readable notAcceptingReason from GET /health. Single source of truth:
+// serialized into the client script below AND consumed by acceptingLabel, so the
+// page text and the unit tests can never drift from each other. Values are fixed
+// constants with no HTML-special characters, so embedding them is injection-safe.
+const NOT_ACCEPTING_LABELS: Record<string, string> = {
+  concurrency: 'at capacity',
+  disk: 'low disk',
+  dataDisk: 'low data-disk',
+  unknown: 'disk unmeasured',
+}
+
+// Map a /health acceptance verdict to the text shown next to "Accepting work".
+// Exported so the reason-mapping branches are unit-testable without executing the
+// embedded client script. An accepting box stays 'yes'; a refusal appends the
+// human reason ('no (at capacity)') when notAcceptingReason is a known code, and
+// degrades to a bare 'no' when the code is missing or unrecognised.
+export function acceptingLabel(accepting: boolean, reason: string | null): string {
+  if (accepting) return 'yes'
+  const suffix = reason != null ? NOT_ACCEPTING_LABELS[reason] : undefined
+  return suffix ? `no (${suffix})` : 'no'
+}
+
 // Documented, operator-facing endpoints a human browsing the box should see
 // first. Kept deliberately short — this is a signpost, not the full API.
 const ENDPOINTS: Array<{ path: string; desc: string }> = [
@@ -27,6 +50,10 @@ const ENDPOINTS: Array<{ path: string; desc: string }> = [
 
 function landingHtml(): string {
   const safeVersion = escapeHtml(version)
+  // The reason labels are fixed ASCII constants, so this never contains a
+  // </script> sequence; written into the inline script as the single source of
+  // truth for the "Accepting work" suffix mapping.
+  const reasonLabelsJson = JSON.stringify(NOT_ACCEPTING_LABELS)
   const rows = ENDPOINTS.map(
     ({ path, desc }) =>
       `      <li><a href="${path}"><code>${path}</code></a> — ${escapeHtml(desc)}</li>`,
@@ -87,7 +114,14 @@ ${rows}
           })
           .then(function (h) {
             var accepting = h.acceptingTasks === true
-            setText('accepting', accepting ? 'yes' : 'no')
+            var reasonLabels = ${reasonLabelsJson}
+            var reason =
+              typeof h.notAcceptingReason === 'string' ? h.notAcceptingReason : null
+            var suffix =
+              !accepting && reason && reasonLabels[reason]
+                ? ' (' + reasonLabels[reason] + ')'
+                : ''
+            setText('accepting', (accepting ? 'yes' : 'no') + suffix)
             var used = h.queuedOrRunning
             var max = h.maxConcurrentTasks
             if (typeof used === 'number' && typeof max === 'number') {
