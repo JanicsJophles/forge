@@ -300,7 +300,8 @@ const HTML = `<!DOCTYPE html>
       <span id="connection" role="status" aria-live="polite">Connecting · last success: never</span> &middot;
       <span id="generatedAt">—</span> &middot;
       <b id="liveCount">0</b> checkpoints shown &middot;
-      <b id="eventCount">0</b> events shown (recent snapshot)
+      <b id="eventCount">0</b> events shown (recent snapshot) &middot;
+      <span id="capacity">—</span>
     </div>
   </header>
 
@@ -566,6 +567,15 @@ const HTML = `<!DOCTYPE html>
       selectedRepo = repoFilter.value;
       renderSnapshot();
     };
+    const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+    const count = v => Number.isSafeInteger(v) && v >= 0;
+    function capacityText(c) {
+      // Best-effort: only an older runner (absent) or a malformed value yields '—'.
+      // Never throws — the capacity stat degrades independently of the rest of the board.
+      return record(c) && count(c.activeTasks) && count(c.maxConcurrentTasks) && count(c.availableSlots)
+        ? 'slots: ' + c.activeTasks + '/' + c.maxConcurrentTasks + ' (' + c.availableSlots + ' free)'
+        : '—';
+    }
     function renderSnapshot() {
       if (!latestSnapshot) return;
       const d = latestSnapshot;
@@ -617,6 +627,7 @@ const HTML = `<!DOCTYPE html>
       document.getElementById('liveCount2').textContent = liveCount;
       document.getElementById('eventCount2').textContent = eventCount;
       document.getElementById('taskCount2').textContent = tasks.length;
+      document.getElementById('capacity').textContent = capacityText(d.capacity);
       renderAgents(agents);
       renderEvents(events);
       renderTasks(tasks);
@@ -633,8 +644,6 @@ const HTML = `<!DOCTYPE html>
       renderByRepo(tasksByRepo, 'tasksByRepo');
     }
     function validSnapshot(d) {
-      const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-      const count = v => Number.isSafeInteger(v) && v >= 0;
       const fields = (v, names) => record(v) && names.every(k => v[k] == null || typeof v[k] === 'string');
       const byRepo = v => record(v) && Object.values(v).every(count);
       return record(d) && typeof d.generatedAt === 'string' && Number.isFinite(Date.parse(d.generatedAt)) &&
