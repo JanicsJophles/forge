@@ -19,6 +19,17 @@ export function readTaskLog(db: Database.Database, id: string, offset: number, l
   return { bytes, offset, nextOffset: offset + bytes.length, totalBytes: row.totalBytes }
 }
 
+// Read a task's current status for the X-Task-Status header. A single narrow
+// read (no log blob) so a tailing client can tell when the task is terminal.
+// Returns undefined when the task does not exist (so the caller keeps 404),
+// or '' when the row exists but status is NULL.
+export function readTaskStatus(db: Database.Database, id: string): string | undefined {
+  const row = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as
+    { status: string | null } | undefined
+  if (!row) return undefined
+  return row.status ?? ''
+}
+
 // Return the last `lines` newline-delimited lines of the task's log, scanning
 // backward from the end. A trailing newline terminates the final line (it is
 // not treated as introducing an empty trailing line); a log with no trailing
