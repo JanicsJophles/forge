@@ -1,6 +1,20 @@
 import type { Request, Response } from 'express'
 import type { AgentTask } from '@forge/shared'
 import type { EventEmitter } from 'node:events'
+import { LOG_TAIL_BYTES } from '../db/task-projection.js'
+
+// getTask() returns the entire persisted log column; for a long agent run that is
+// many megabytes, and every new subscriber would receive the whole blob at connect.
+// Bound the catch-up to the trailing LOG_TAIL_BYTES code units — matching the cap
+// the detail view already applies — prefixed with a one-line marker so a consumer
+// knows earlier output was elided. Keep surrogate pairs intact: if the tail would
+// begin on a low surrogate whose high half was cut, drop that orphaned unit.
+function boundReplayLog(log: string): string {
+  if (log.length <= LOG_TAIL_BYTES) return log
+  let start = log.length - LOG_TAIL_BYTES
+  if (/[\uDC00-\uDFFF]/.test(log[start])) start++
+  return '… [earlier output truncated]\n' + log.slice(start)
+}
 
 // No application queue: one bounded frame may enter Node's response buffer.
 // On backpressure destroy only this connection; never stall the task emitter.
@@ -77,7 +91,7 @@ export function streamTask(
 
   // ?replay=0 opts out of the stored-log catch-up frame; status and all live
   // (and terminal) events below are still sent, so late consumers never hang.
-  if (replay && task.log && !send('log', task.log)) return
+  if (replay && task.log && !send('log', boundReplayLog(task.log))) return
   if (task.status === 'completed' || task.status === 'failed') {
     const data = task.status === 'failed' ? task.errorMessage ?? 'failed' : task.status
     if (send(task.status === 'completed' ? 'complete' : 'error', data)) onDone()
