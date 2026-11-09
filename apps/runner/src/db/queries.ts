@@ -206,19 +206,26 @@ export interface LiveTaskSummary {
 }
 
 const PROMPT_SNIPPET_MAX = 120
+export const ACTIVE_PROMPT_MAX_BYTES = 4096
 
 export function listActiveTasks(): LiveTaskSummary[] {
   const rows = db.prepare(
-    `SELECT id, repo, branch, status, provider, prompt, created_at
+    `SELECT id, repo, branch, status, provider, created_at,
+            substr(CAST(prompt AS BLOB), 1, ${ACTIVE_PROMPT_MAX_BYTES}) AS prompt_head,
+            length(CAST(prompt AS BLOB)) AS prompt_bytes
        FROM tasks
       WHERE status IN ('queued', 'running')
       ORDER BY ${TASK_NEWEST_FIRST}`
-  ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'prompt' | 'created_at'>>
+  ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'created_at'> & { prompt_head: Buffer | null; prompt_bytes: number }>
 
   return rows.map(row => {
-    const flat = row.prompt.replace(/\s+/g, ' ').trim()
-    const promptSnippet = flat.length > PROMPT_SNIPPET_MAX
-      ? flat.slice(0, PROMPT_SNIPPET_MAX - 1) + '\u2026'
+    const flat = decodeHead(row.prompt_head).replace(/\s+/g, ' ').trim()
+    // Uninspected bytes may contain meaningful text even after an all-space head.
+    const truncated = row.prompt_bytes > ACTIVE_PROMPT_MAX_BYTES || flat.length > PROMPT_SNIPPET_MAX
+    // Avoid slicing a supplementary Unicode character between its surrogates.
+    const head = flat.slice(0, PROMPT_SNIPPET_MAX - 1).replace(/[\uD800-\uDBFF]$/, '')
+    const promptSnippet = truncated
+      ? head + '\u2026'
       : flat
     return {
       id: row.id,
