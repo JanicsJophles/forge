@@ -32,6 +32,25 @@ function sendSlice(
     nextOffset: slice.nextOffset, totalBytes: slice.totalBytes })
 }
 
+// HEAD mirrors GET's paging metadata without transferring any log bytes, so a
+// tail-follow poller can detect growth (X-Total-Bytes/X-Next-Offset) and
+// completion (X-Task-Status) cheaply. Registered BEFORE the GET route: Express
+// routes HEAD to a GET handler when no HEAD route exists, so the explicit HEAD
+// route must come first to win the match and avoid the full-slice read. A
+// single-byte readTaskLog supplies totalBytes without materialising the log;
+// X-Next-Offset equals the total (a resumed read from the end returns nothing).
+taskLogRouter.head('/:id/log', (req, res) => {
+  const slice = readTaskLog(db, req.params.id, 0, 1)
+  if (!slice) {
+    res.status(404).end()
+    return
+  }
+  res.setHeader('X-Total-Bytes', String(slice.totalBytes))
+  res.setHeader('X-Next-Offset', String(slice.totalBytes))
+  res.setHeader('X-Task-Status', readTaskStatus(db, req.params.id) ?? '')
+  res.status(200).end()
+})
+
 taskLogRouter.get('/:id/log', (req, res) => {
   // Parse raw keys too: structured queries must fail even with a simple query parser.
   const query = new URL(req.originalUrl, 'http://localhost').searchParams
