@@ -31,8 +31,8 @@ export function executionIdentity(username: string) {
   }
   if (uid === 0) throw new Error('Agent runner must use a non-root account')
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USER: username, LOGNAME: username }
-  // Never borrow the service/root account's credential directory or API keys.
-  for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) delete env[key]
+  // Never pass runner mutation credentials or borrow service/root provider credentials.
+  for (const key of ['FORGE_AUTH_TOKEN', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) delete env[key]
   return { uid, gid, env }
 }
 
