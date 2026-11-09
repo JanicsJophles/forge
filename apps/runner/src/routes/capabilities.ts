@@ -1,6 +1,8 @@
 import { Router } from 'express'
 import { config } from '../config.js'
 import { version } from '../version.js'
+import { MAX_LOG_SLICE_BYTES } from '../db/task-log.js'
+import { LOG_TAIL_BYTES } from '../db/task-projection.js'
 
 export const capabilitiesRouter = Router()
 
@@ -19,6 +21,12 @@ capabilitiesRouter.get('/capabilities', (_req, res) => {
       taskTimeoutMs: config.taskTimeoutMs,
       minFreeDiskMb: config.minFreeDiskMb,
       autoCommit: config.autoCommit,
+    },
+    // Real byte bounds a log-pagination client must respect. Sourced from the
+    // same constants the log routes enforce, so external pagers never drift.
+    logging: {
+      maxSliceBytes: MAX_LOG_SLICE_BYTES,
+      detailTailBytes: LOG_TAIL_BYTES,
     },
   })
 })
