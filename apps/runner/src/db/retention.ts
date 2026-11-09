@@ -37,3 +37,28 @@ export function pruneOldTasks(db: Database.Database, days: number): number {
     .run(days)
   return result.changes
 }
+
+// Run at startup and every 24 hours while enabled. DELETE makes SQLite pages
+// reusable; it does not shrink the database file (no automatic VACUUM).
+export const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+export function startTaskRetention(
+  db: Database.Database,
+  days: number,
+  schedule: typeof setInterval = setInterval,
+): (() => void) | undefined {
+  if (!Number.isInteger(days) || days <= 0) return undefined
+  const prune = () => {
+    try {
+      const removed = pruneOldTasks(db, days)
+      console.log(`[db] Retention: pruned ${removed} task(s) older than ${days}d`)
+    } catch {
+      // SQLite errors may contain task data; never log the error itself.
+      console.warn('[db] Task retention pruning failed; will retry at the next interval.')
+    }
+  }
+  prune()
+  const timer = schedule(prune, RETENTION_INTERVAL_MS)
+  timer.unref()
+  return () => clearInterval(timer)
+}
