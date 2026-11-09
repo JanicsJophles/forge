@@ -74,6 +74,18 @@ test('GET /tasks/:id/changes reports a task checkout footprint and hides git fai
     assert.equal(byPath.get('untracked.txt'), '?')
     assert.equal(payload.changedFiles.length, 2)
 
+    // A recorded root commit wins over the dirty checkout for both formats.
+    const sha = git('rev-parse', 'HEAD').toString().trim()
+    db.prepare('UPDATE tasks SET commit_sha = ? WHERE id = ?').run(sha, 'task-under-test')
+    const committed = await fetch(`${base}/tasks/task-under-test/changes`)
+    assert.equal(committed.status, 200)
+    assert.deepEqual((await committed.json()).changedFiles, [{ path: 'tracked.txt', status: 'A' }])
+    const patch = await fetch(`${base}/tasks/task-under-test/changes?format=patch`)
+    assert.equal(patch.status, 200)
+    const text = await patch.text()
+    assert.match(text, /\+original/)
+    assert.doesNotMatch(text, /changed|untracked/)
+
     // Git failure (checkout removed) -> static 503 JSON, never raw git output.
     fs.rmSync(repo, { recursive: true, force: true })
     const failed = await fetch(`${base}/tasks/task-under-test/changes`)

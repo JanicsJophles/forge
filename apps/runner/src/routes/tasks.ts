@@ -358,7 +358,7 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
   if (formats[0] === 'patch') {
     let patch
     try {
-      patch = getChangesPatch(task.repo)
+      patch = getChangesPatch(task.repo, task.commitSha)
     } catch {
       // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
       res.status(503).json({ error: 'could not inspect repository changes' })
@@ -371,7 +371,7 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
 
   let changedFiles
   try {
-    changedFiles = getChangedFiles(task.repo)
+    changedFiles = getChangedFiles(task.repo, task.commitSha)
   } catch {
     // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
     res.status(503).json({ error: 'could not inspect repository changes' })

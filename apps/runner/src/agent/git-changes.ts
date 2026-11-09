@@ -128,8 +128,19 @@ function readGitBuffer(args: string[], repoPath: string): Buffer {
   }
 }
 
+// Accept only recorded object IDs, never arbitrary revisions or Git options.
+// --root compares a parentless commit with the empty tree; merge commits use
+// their first parent so file and patch responses describe the same footprint.
+function commitArgs(commitSha: string): string[] {
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(commitSha)) {
+    throw new Error('Git change inspection unavailable; invalid commit ID')
+  }
+  return ['show', '--format=', '--root', '--diff-merges=first-parent', commitSha]
+}
+
 /**
- * Produce the bounded unified diff of a checkout's tracked changes against HEAD —
+ * With a commit ID, return that commit's diff (including root commits). Otherwise,
+ * produce the bounded unified diff of a checkout's tracked changes against HEAD —
  * the same tracked footprint getChangedFiles lists, as a reviewable patch. Runs a
  * single read-only `git diff HEAD` probe (arg array, never a shell string), bounded
  * to 2s and SIGKILLed, with core.quotepath=false so non-ASCII paths stay readable.
@@ -137,8 +148,8 @@ function readGitBuffer(args: string[], repoPath: string): Buffer {
  * `truncated: true` when the cap bit). Throws a static-message Error on failure;
  * never surfaces raw Git stderr.
  */
-export function getChangesPatch(repoPath: string): { patch: string; truncated: boolean } {
-  const diff = readGitBuffer(['-c', 'core.quotepath=false', 'diff', 'HEAD'], repoPath)
+export function getChangesPatch(repoPath: string, commitSha?: string | null): { patch: string; truncated: boolean } {
+  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--'] : ['diff', 'HEAD'])], repoPath)
   if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
     return { patch: diff.toString('utf8'), truncated: false }
   }
@@ -196,14 +207,19 @@ function parsePorcelainUntrackedZ(output: string, into: Map<string, string>): vo
 }
 
 /**
- * Compute the concrete file footprint of a checkout: tracked changes against
+ * With a commit ID, list only that commit's changes. Otherwise, compute
+ * the concrete file footprint of a checkout: tracked changes against
  * HEAD plus untracked files. Runs only read-only Git probes (execFileSync with
  * an arg array, never a shell string), each bounded to 2s and SIGKILLed, and
  * never surfaces raw Git stderr. Throws a static-message Error on failure.
  */
-export function getChangedFiles(repoPath: string): ChangedFile[] {
+export function getChangedFiles(repoPath: string, commitSha?: string | null): ChangedFile[] {
   const files = new Map<string, string>()
-  parseNameStatusZ(readGit(['diff', '--name-status', '-z', 'HEAD'], repoPath), files)
-  parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z'], repoPath), files)
+  if (commitSha != null) {
+    parseNameStatusZ(readGit([...commitArgs(commitSha), '--name-status', '-z', '--'], repoPath), files)
+  } else {
+    parseNameStatusZ(readGit(['diff', '--name-status', '-z', 'HEAD'], repoPath), files)
+    parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z'], repoPath), files)
+  }
   return [...files].map(([path, status]) => ({ path, status }))
 }
