@@ -162,12 +162,39 @@ export interface CheckpointInput {
 
 const DEFAULT_TTL_SECONDS = 3600 // 1h — agents that go idle this long are stale
 
+// Bounds so one runaway agent can't bloat the board (re-served in every
+// /agent-context for the checkpoint's TTL). The 2mb body cap is the only
+// other guard. Patch semantics are preserved: undefined/null pass through
+// untouched; only actual string/array values are capped.
+const MAX_FIELD_CHARS = 500
+const MAX_FILES_TOUCHED = 200
+
+function capField<T extends string | null | undefined>(v: T): T {
+  if (typeof v !== 'string' || v.length <= MAX_FIELD_CHARS) return v
+  return v.slice(0, MAX_FIELD_CHARS) as T
+}
+
+function capFilesTouched<T extends string[] | null | undefined>(v: T): T {
+  if (!Array.isArray(v)) return v
+  return v.slice(0, MAX_FILES_TOUCHED).map(capField) as T
+}
+
 export function checkpoint(input: CheckpointInput): AgentState {
   const requestedTtl = input.ttlSeconds ?? DEFAULT_TTL_SECONDS
   const ttl = Number.isFinite(requestedTtl)
     ? Math.min(604800, Math.max(60, Math.floor(requestedTtl)))
     : DEFAULT_TTL_SECONDS
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+
+  // Bound each stored field up front so both the insert and update paths persist
+  // the capped values (and the set_* patch flags still key off the originals).
+  const agentType = capField(input.agentType)
+  const repo = capField(input.repo)
+  const branch = capField(input.branch)
+  const intent = capField(input.intent)
+  const ticket = capField(input.ticket)
+  const status = capField(input.status)
+  const filesTouched = capFilesTouched(input.filesTouched)
 
   const existing = db.prepare('SELECT * FROM agent_state WHERE agent_id = ?').get(input.agentId) as AgentStateRow | undefined
 
@@ -187,7 +214,7 @@ export function checkpoint(input: CheckpointInput): AgentState {
       WHERE agent_id = @agent_id
     `).run({
       agent_id: input.agentId,
-      agent_type: input.agentType ?? null,
+      agent_type: agentType ?? null,
       set_repo: Number(input.repo !== undefined),
       set_branch: Number(input.branch !== undefined),
       set_intent: Number(input.intent !== undefined),
@@ -195,12 +222,12 @@ export function checkpoint(input: CheckpointInput): AgentState {
       set_ticket: Number(input.ticket !== undefined),
       set_status: Number(input.status !== undefined),
       set_metadata: Number(input.metadata !== undefined),
-      repo: input.repo ?? null,
-      branch: input.branch ?? null,
-      intent: input.intent ?? null,
-      files_touched: input.filesTouched ? JSON.stringify(input.filesTouched) : null,
-      ticket: input.ticket ?? null,
-      status: input.status ?? null,
+      repo: repo ?? null,
+      branch: branch ?? null,
+      intent: intent ?? null,
+      files_touched: filesTouched ? JSON.stringify(filesTouched) : null,
+      ticket: ticket ?? null,
+      status: status ?? null,
       expires_at: expiresAt,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
     })
@@ -212,13 +239,13 @@ export function checkpoint(input: CheckpointInput): AgentState {
         (@agent_id, @agent_type, @repo, @branch, @intent, @files_touched, @ticket, @status, @expires_at, @metadata)
     `).run({
       agent_id: input.agentId,
-      agent_type: input.agentType ?? 'unknown',
-      repo: input.repo ?? null,
-      branch: input.branch ?? null,
-      intent: input.intent ?? null,
-      files_touched: input.filesTouched ? JSON.stringify(input.filesTouched) : null,
-      ticket: input.ticket ?? null,
-      status: input.status ?? null,
+      agent_type: agentType ?? 'unknown',
+      repo: repo ?? null,
+      branch: branch ?? null,
+      intent: intent ?? null,
+      files_touched: filesTouched ? JSON.stringify(filesTouched) : null,
+      ticket: ticket ?? null,
+      status: status ?? null,
       expires_at: expiresAt,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
     })
