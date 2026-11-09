@@ -50,22 +50,44 @@ forge/
 ### Tasks
 
 ```
-POST   /tasks               → create + start task, returns { taskId }
-                              body: { repo, prompt, branch?, provider?, autoCommit? }
+POST   /tasks               → create + start task, returns 201 { taskId }
+                              body: { repo, prompt, branch?, provider?, model?, autoCommit? }
                               provider is 'claude' (default) or 'codex'
+                              model is optional, /^[A-Za-z0-9][A-Za-z0-9._-]*$/, ≤100 chars
                               autoCommit defaults to config.autoCommit (off unless enabled)
-GET    /tasks               → last 20 tasks
+                              rejects: 400 bad input, 409 branch/active-checkout conflict,
+                                       429 at capacity, 507 low disk
+GET    /tasks               → task history, newest first
+                              filters: ?repo= ?status= ?limit=(1..100,def 20) ?before=<id cursor>
+                              sets X-Next-Before header when another page exists
+GET    /tasks/stats         → { queued, running, completed, failed, total }
 GET    /tasks/:id           → single task; ?view=status|detail returns a projection
-GET    /tasks/:id/stream    → SSE stream (catch-up + live)
-DELETE /tasks/:id           → SIGTERM active task
-GET    /capabilities        → { providerSelectionVersion, providers: ['claude','codex'] }
+GET    /tasks/:id/stream    → SSE stream (catch-up + live; ?replay=0 skips catch-up)
+GET    /tasks/:id/changes   → { taskId, repo, branch, summary, changedFiles, truncated }
+GET    /tasks/:id/log       → byte slice (?offset= ?limit=), line tail (?tailLines=),
+                              or raw text (?format=text, ?download=1); X-Task-Status header
+POST   /tasks/:id/retry     → re-dispatch a terminal task's inputs, returns 201 { taskId }
+DELETE /tasks/:id           → cancel queued / SIGTERM running task
 ```
 
-### Repos & health
+### Repos, health & capabilities
 
 ```
-GET    /repos               → list git repos in ALLOWED_REPO_PATHS
-GET    /health              → { status: 'ok', activeTasks: N }
+GET    /repos               → list allowed git checkout roots + immediate children
+GET    /health              → { status, version, activeTasks, queuedOrRunning,
+                                maxConcurrentTasks, freeDiskMb, diskOk, dataFreeDiskMb,
+                                dataDiskOk, uptimeSeconds, oldestRunningTaskAgeSeconds }
+GET    /capabilities        → { providerSelectionVersion, providers, version,
+                                authRequired, limits, logging }
+                              also reachable at GET /tasks/capabilities (legacy alias)
+```
+
+### Authentication
+
+```
+Off by default. Set FORGE_AUTH_TOKEN to require `Authorization: Bearer <token>`
+on state-changing requests (POST/PUT/PATCH/DELETE); reads stay open. A missing or
+wrong token → 401 { error: 'unauthorized' }. Discoverable via capabilities.authRequired.
 ```
 
 ### Agent coordination surface
