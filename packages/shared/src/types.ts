@@ -16,6 +16,10 @@ export interface AgentTask {
   logBytes?: number
   /** True when `log` is a truncated tail of a larger transcript (list views). */
   logTruncated?: boolean
+  /** Full byte length of the prompt column (set on list views where `prompt` is a bounded head). */
+  promptBytes?: number
+  /** True when `prompt` is a truncated head of a larger prompt (list views). */
+  promptTruncated?: boolean
   createdAt: string
   startedAt?: string
   completedAt?: string

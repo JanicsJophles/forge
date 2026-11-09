@@ -1,11 +1,17 @@
 import { db } from './schema.js'
-import { decodeTail } from './task-projection.js'
+import { decodeHead, decodeTail } from './task-projection.js'
 import type { AgentTask, TaskStatus } from '@forge/shared'
 
 // List views return only a trailing tail of each task's log so GET /tasks
 // doesn't ship up to 20 full transcripts at once. The single-task detail view
 // still returns the full log (getTask).
 export const LIST_LOG_TAIL_BYTES = 8192
+
+// List views also bound each task's prompt to a leading head. Prompts are accepted
+// up to the 2mb JSON body limit, so an unbounded list could balloon to tens of MB
+// and echo full prompt text in a summary view. The single-task reads (getTask /
+// the detail projection) still return the complete prompt.
+export const LIST_PROMPT_MAX_BYTES = 4096
 
 interface TaskRow {
   provider: 'claude' | 'codex'
@@ -66,7 +72,9 @@ export function getTask(id: string): AgentTask | undefined {
   return row ? rowToTask(row) : undefined
 }
 
-interface TaskListRow extends Omit<TaskRow, 'log'> {
+interface TaskListRow extends Omit<TaskRow, 'log' | 'prompt'> {
+  prompt_head: Buffer | null
+  prompt_bytes: number
   log_tail: Buffer
   log_bytes: number
 }
@@ -79,7 +87,9 @@ function listRowToTask(row: TaskListRow): AgentTask {
     id: row.id,
     repo: row.repo,
     branch: row.branch,
-    prompt: row.prompt,
+    prompt: decodeHead(row.prompt_head),
+    promptBytes: row.prompt_bytes,
+    promptTruncated: row.prompt_bytes > LIST_PROMPT_MAX_BYTES,
     status: row.status as TaskStatus,
     log: decodeTail(row.log_tail),
     logBytes: row.log_bytes,
@@ -120,8 +130,10 @@ export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTa
   }
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : ''
   const rows = db.prepare(`
-    SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
+    SELECT id, repo, branch, status, created_at, started_at, completed_at,
            error_message, commit_sha, provider, auto_commit, model,
+           substr(CAST(COALESCE(prompt, '') AS BLOB), 1, ${LIST_PROMPT_MAX_BYTES}) AS prompt_head,
+           length(CAST(COALESCE(prompt, '') AS BLOB)) AS prompt_bytes,
            substr(CAST(COALESCE(log, '') AS BLOB), -${LIST_LOG_TAIL_BYTES}) AS log_tail,
            length(CAST(COALESCE(log, '') AS BLOB)) AS log_bytes
     FROM tasks ${where} ORDER BY ${TASK_NEWEST_FIRST} LIMIT ?
