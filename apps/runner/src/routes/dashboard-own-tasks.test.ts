@@ -93,7 +93,7 @@ test('runner own tasks render with escaped fields and track the repo + activity 
   assert.match(tasks(), /<span class="status status-running">running<\/span>/)
   assert.match(tasks(), /<span class="provider">claude<\/span>/)
   assert.match(tasks(), /<a class="log" target="_blank" rel="noopener" href="\/tasks\/task-1\/log\/view">log<\/a>/)
-  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task-1\/changes">changes<\/a>/)
+  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task-1\/changes\/view">changes<\/a>/)
   assert.match(tasks(), /<button type="button" class="cancel" data-task-id="task-1" onclick="cancelTask\(this\)">cancel<\/button>/)
   assert.match(tasks(), /<div class="intent">do a thing<\/div>/)
   assert.match(tasks(), /class="age">created \d+[smhd] ago/)
@@ -153,7 +153,7 @@ test('runner tasks render without a provider and encode the id in the log link',
   assert.ok(!tasks().includes('class="provider"'))
   assert.match(tasks(), /href="\/tasks\/task%20a%2Fb\/log\/view"/)
   // The changes anchor and the cancel button encode the id the same way.
-  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task%20a%2Fb\/changes">changes<\/a>/)
+  assert.match(tasks(), /<a class="changes" target="_blank" rel="noopener" href="\/tasks\/task%20a%2Fb\/changes\/view">changes<\/a>/)
   assert.match(tasks(), /data-task-id="task%20a%2Fb"/)
 })
 
