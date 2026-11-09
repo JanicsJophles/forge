@@ -11,9 +11,12 @@
 //
 //   GET  /agent-context             combined snapshot: live agents +
 //                                   up to 200 newest events from the last 24h,
-//                                   with explicit truncation metadata.
+//                                   with explicit truncation metadata, plus a
+//                                   runner-wide `capacity` block (active tasks,
+//                                   max concurrency, available slots).
 //                                   ?repo=<name> narrows every collection and
-//                                   its counts to that repo.
+//                                   its counts to that repo — but NOT capacity,
+//                                   since concurrency is global.
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -29,7 +32,8 @@ import {
   type EventInput,
 } from '../db/agent-state.js'
 import { db } from '../db/schema.js'
-import { listActiveTasks } from '../db/queries.js'
+import { listActiveTasks, countActiveTasks } from '../db/queries.js'
+import { config } from '../config.js'
 
 export const agentStateRouter = Router()
 
@@ -190,6 +194,17 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     liveTasksByRepo[t.repo] = (liveTasksByRepo[t.repo] ?? 0) + 1
   }
 
+  // Runner-wide concurrency budget, deliberately NOT narrowed by ?repo= —
+  // MAX_CONCURRENT_TASKS is global, so a dispatcher can answer "can I launch
+  // another task now?" from this one call.
+  const activeTasks = countActiveTasks()
+  const maxConcurrentTasks = config.maxConcurrentTasks
+  const capacity = {
+    activeTasks,
+    maxConcurrentTasks,
+    availableSlots: Math.max(0, maxConcurrentTasks - activeTasks),
+  }
+
   res.json({
     generatedAt: new Date().toISOString(),
     liveAgents: live,
@@ -199,6 +214,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     liveTasks,
     liveTasksCount: liveTasks.length,
     liveTasksByRepo,
+    capacity,
     recentEvents: events,
     recentEventsCount: events.length,
     recentEventsTruncated: eventWindow.length > 200,
