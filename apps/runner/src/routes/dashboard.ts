@@ -808,10 +808,10 @@ const HTML = `<!DOCTYPE html>
     }
     function renderRecentTasks(tasks) {
       const root = document.getElementById('recentTasks');
-      const rows = Array.isArray(tasks) ? tasks : [];
+      const rows = Array.isArray(tasks) ? tasks.filter(t => !selectedRepo || t.repo === selectedRepo) : [];
       document.getElementById('recentCount').textContent = rows.length;
       if (!rows.length) {
-        root.innerHTML = '<div class="empty">no recent tasks</div>';
+        root.innerHTML = '<div class="empty">' + (selectedRepo ? 'no recent tasks for this repository' : 'no recent tasks') + '</div>';
         return;
       }
       root.innerHTML = rows.map(t => {
@@ -839,20 +839,25 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
+    let recentTasksTimer;
+    let recentTasksRequest = 0;
     async function refreshRecentTasks() {
+      clearTimeout(recentTasksTimer);
+      const request = ++recentTasksRequest;
+      const repo = selectedRepo;
       // Independent of the 5s /agent-context poll: GET /tasks is task history
       // (terminal rows included), a read endpoint so never auth-gated. On any
       // failure keep the last good render in place and try again next tick.
       try {
-        const r = await fetch('/tasks?limit=15');
+        const r = await fetch('/tasks?limit=15' + (repo ? '&repo=' + encodeURIComponent(repo) : ''));
         if (r.ok) {
           const rows = await r.json();
-          if (Array.isArray(rows)) renderRecentTasks(rows);
+          if (request === recentTasksRequest && Array.isArray(rows)) renderRecentTasks(rows);
         }
       } catch (e) {
         // swallow — the panel degrades to its last successful render
       } finally {
-        setTimeout(refreshRecentTasks, 5000);
+        if (request === recentTasksRequest) recentTasksTimer = setTimeout(refreshRecentTasks, 5000);
       }
     }
     let latestSnapshot = null;
@@ -879,6 +884,8 @@ const HTML = `<!DOCTYPE html>
     repoFilter.onchange = () => {
       selectedRepo = repoFilter.value;
       renderSnapshot();
+      renderRecentTasks([]);
+      if (typeof window !== 'undefined') refreshRecentTasks();
     };
     const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
     const count = v => Number.isSafeInteger(v) && v >= 0;
@@ -1025,7 +1032,7 @@ const HTML = `<!DOCTYPE html>
       // Defer the first history fetch one tick. A real browser runs the 0ms timer
       // immediately; the headless unit harnesses define window but never run
       // timers, so they never see a /tasks GET racing a launcher /tasks POST.
-      setTimeout(refreshRecentTasks, 0);
+      recentTasksTimer = setTimeout(refreshRecentTasks, 0);
     }
     refresh();
   </script>
