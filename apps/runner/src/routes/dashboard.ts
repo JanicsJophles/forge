@@ -440,6 +440,7 @@ const HTML = `<!DOCTYPE html>
         <div class="launch-actions">
           <button type="submit" id="launchSubmit">Launch task</button>
           <span class="launch-err" id="launchErr" role="status" aria-live="polite"></span>
+          <span id="launchSuccess" role="status" aria-live="polite"></span>
         </div>
       </form>
     </section>
@@ -701,6 +702,14 @@ const HTML = `<!DOCTYPE html>
       if (event && event.preventDefault) event.preventDefault();
       const button = document.getElementById('launchSubmit');
       const errEl = document.getElementById('launchErr');
+      const successEl = document.getElementById('launchSuccess');
+      successEl.textContent = '';
+      const authorization = authHeaders().Authorization || '';
+      const token = authorization.replace(/^Bearer /, '');
+      function safeMessage(value) {
+        const text = String(value);
+        return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
+      }
       const repo = document.getElementById('launchRepo').value;
       const prompt = document.getElementById('launchPrompt').value;
       const provider = document.getElementById('launchProvider').value;
@@ -724,13 +733,26 @@ const HTML = `<!DOCTYPE html>
           headers: { 'Content-Type': 'application/json', ...authHeaders() },
           body: JSON.stringify(body),
         });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        // 201: clear the prompt; the next 5s /agent-context poll surfaces the task.
+        let result;
+        try { result = await r.json(); } catch (_) { /* Use a fixed fallback, never raw HTML. */ }
+        if (!r.ok) {
+          const detail = result && typeof result.error === 'string' && result.error.trim()
+            ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
+            : 'server returned no usable JSON error; check runner logs';
+          throw new Error('HTTP ' + r.status + ': ' + safeMessage(detail));
+        }
+        const taskId = result && result.taskId;
+        if (r.status !== 201 || typeof taskId !== 'string' || !taskId.trim() ||
+            taskId.length > 200 || (token && taskId.includes(token))) {
+          throw new Error('HTTP ' + r.status + ': invalid taskId response; a task may have started. Check task history before retrying');
+        }
+        const href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
+        successEl.innerHTML = 'Task launched. <a href="' + escape(href).replace(/"/g, '&quot;') + '">View task log</a>';
         document.getElementById('launchPrompt').value = '';
       } catch (e) {
         // Non-2xx (401/400/409/429/507) or a network error: surface inline next to
         // the button and leave the typed prompt intact so the user can retry.
-        errEl.textContent = 'launch failed: ' + e.message;
+        errEl.textContent = 'launch failed: ' + safeMessage(e && e.message ? e.message : 'network request failed');
       } finally {
         button.disabled = false;
         button.textContent = original;
