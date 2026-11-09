@@ -339,7 +339,12 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
 // GET /tasks/:id/changes — concrete file footprint of the task's checkout.
 // A distinct path segment from /:id/stream, so neither route shadows the other.
 tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
-  const task = getTask(req.params.id)
+  // Changes need checkout identity and the recorded commit, never transcript data.
+  const task = db.prepare(`
+    SELECT id, repo, branch, commit_sha AS commitSha FROM tasks WHERE id = ?
+  `).get(req.params.id) as {
+    id: string; repo: string; branch: string; commitSha: string | null
+  } | undefined
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
@@ -359,7 +364,7 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
   if (formats[0] === 'patch') {
     let patch
     try {
-      patch = getChangesPatch(task.repo, task.commitSha)
+      patch = getChangesPatch(task.repo, task.commitSha ?? undefined)
     } catch {
       // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
       res.status(503).json({ error: 'could not inspect repository changes' })
@@ -372,7 +377,7 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
 
   let changedFiles
   try {
-    changedFiles = getChangedFiles(task.repo, task.commitSha)
+    changedFiles = getChangedFiles(task.repo, task.commitSha ?? undefined)
   } catch {
     // Static message only: raw Git stderr can carry paths, remote URLs, or creds.
     res.status(503).json({ error: 'could not inspect repository changes' })
@@ -401,7 +406,14 @@ tasksRouter.get('/:id/changes', (req: Request, res: Response) => {
 // retry can never bypass the allowlist, conflict, disk, concurrency, or branch
 // checks POST / enforces. Only completed/failed tasks are retryable.
 tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
-  const source = getTask(req.params.id)
+  // Keep the complete original prompt for dispatch, but leave the stored log in SQLite.
+  const source = db.prepare(`
+    SELECT repo, prompt, provider, model, auto_commit AS autoCommit, status
+    FROM tasks WHERE id = ?
+  `).get(req.params.id) as {
+    repo: string; prompt: string; provider: AgentProvider | null; model: string | null
+    autoCommit: number | null; status: TaskStatus
+  } | undefined
   if (!source) {
     res.status(404).json({ error: 'task not found' })
     return
@@ -420,8 +432,8 @@ tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
 
   const taskId = dispatchTask({
     provider: source.provider ?? 'claude',
-    autoCommit: source.autoCommit ?? config.autoCommit,
-    model: source.model,
+    autoCommit: source.autoCommit == null ? config.autoCommit : Boolean(source.autoCommit),
+    model: source.model ?? undefined,
     repo: source.repo,
     branch: admission.branch,
     prompt: source.prompt,
