@@ -73,6 +73,12 @@ healthRouter.get('/health', (_req, res) => {
     activeTasks: countActiveProcs(),
     queuedOrRunning,
     maxConcurrentTasks: config.maxConcurrentTasks,
+    // The thresholds the measured fields are judged against, so a monitor can
+    // compute headroom ('how close is oldestRunningTaskAgeSeconds to the
+    // SIGTERM deadline', 'how much disk is left above the admission floor')
+    // from this one poll instead of a second /capabilities call.
+    taskTimeoutMs: config.taskTimeoutMs,
+    minFreeDiskMb: config.minFreeDiskMb,
     freeDiskMb,
     diskOk,
     dataFreeDiskMb,
