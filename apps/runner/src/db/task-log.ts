@@ -19,15 +19,20 @@ export function readTaskLog(db: Database.Database, id: string, offset: number, l
   return { bytes, offset, nextOffset: offset + bytes.length, totalBytes: row.totalBytes }
 }
 
-// Read a task's current status for the X-Task-Status header. A single narrow
-// read (no log blob) so a tailing client can tell when the task is terminal.
-// Returns undefined when the task does not exist (so the caller keeps 404),
-// or '' when the row exists but status is NULL.
-export function readTaskStatus(db: Database.Database, id: string): string | undefined {
-  const row = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as
-    { status: string | null } | undefined
+// Read a task's status and stored error message for the X-Task-Status /
+// X-Task-Error headers. A single narrow read (no log blob) so a tailing client
+// can tell when the task is terminal and, if it failed, why — without a second
+// request. Returns undefined when the task does not exist (so the caller keeps
+// 404); status is '' when the row exists but status is NULL; errorMessage is
+// null unless a message is stored.
+export function readTaskStatusMeta(
+  db: Database.Database,
+  id: string,
+): { status: string; errorMessage: string | null } | undefined {
+  const row = db.prepare('SELECT status, error_message AS errorMessage FROM tasks WHERE id = ?').get(id) as
+    { status: string | null; errorMessage: string | null } | undefined
   if (!row) return undefined
-  return row.status ?? ''
+  return { status: row.status ?? '', errorMessage: row.errorMessage ?? null }
 }
 
 // Return the last `lines` newline-delimited lines of the task's log, scanning

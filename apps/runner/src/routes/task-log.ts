@@ -1,9 +1,24 @@
 import { Router } from 'express'
 import type { Response } from 'express'
 import { db } from '../db/schema.js'
-import { MAX_LOG_SLICE_BYTES, readTaskLog, readTaskLogTail, readTaskStatus } from '../db/task-log.js'
+import { MAX_LOG_SLICE_BYTES, readTaskLog, readTaskLogTail, readTaskStatusMeta } from '../db/task-log.js'
 
 export const taskLogRouter = Router()
+
+// Reflect a task's status into X-Task-Status and, for a failed task with a
+// stored message, its reason into X-Task-Error — so a tail-follow poller learns
+// both completion and the failure cause without a second request. The message
+// is sanitized to a single line (CR/LF collapsed to a space) and bounded to 200
+// chars so a message containing newlines cannot inject extra response headers.
+// The task is known to exist at every call site (the readers 404 otherwise), so
+// a missing meta falls back to an empty status.
+function setTaskStatusHeaders(res: Response, id: string): void {
+  const meta = readTaskStatusMeta(db, id)
+  res.setHeader('X-Task-Status', meta?.status ?? '')
+  if (meta?.status === 'failed' && meta.errorMessage) {
+    res.setHeader('X-Task-Error', meta.errorMessage.replace(/[\r\n]+/g, ' ').slice(0, 200))
+  }
+}
 
 // Send a {bytes, offset, nextOffset, totalBytes} slice as either the raw
 // decoded text (format=text) or the default base64 JSON envelope. Both the
@@ -18,7 +33,7 @@ function sendSlice(
   id: string,
   attachmentName?: string,
 ): void {
-  res.setHeader('X-Task-Status', readTaskStatus(db, id) ?? '')
+  setTaskStatusHeaders(res, id)
   if (attachmentName) {
     res.setHeader('Content-Disposition', `attachment; filename="${attachmentName}"`)
   }
@@ -47,7 +62,7 @@ taskLogRouter.head('/:id/log', (req, res) => {
   }
   res.setHeader('X-Total-Bytes', String(slice.totalBytes))
   res.setHeader('X-Next-Offset', String(slice.totalBytes))
-  res.setHeader('X-Task-Status', readTaskStatus(db, req.params.id) ?? '')
+  setTaskStatusHeaders(res, req.params.id)
   res.status(200).end()
 })
 
