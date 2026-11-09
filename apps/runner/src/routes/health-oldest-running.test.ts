@@ -69,6 +69,15 @@ test('GET /health reports the oldest running task age in seconds', async () => {
     assert.equal(body.version, version)
     assert.equal(typeof body.version, 'string')
     assert.ok(body.version.length > 0)
+
+    // The data-volume free disk is reported alongside the repo-volume figure so
+    // /health cannot look healthy while admission rejects tasks for low
+    // data-volume space. The real temp DATA_DIR stats cleanly → a number here.
+    assert.ok(Object.hasOwn(body, 'dataFreeDiskMb'), 'missing field dataFreeDiskMb')
+    assert.ok(Object.hasOwn(body, 'dataDiskOk'), 'missing field dataDiskOk')
+    assert.equal(typeof body.dataFreeDiskMb, 'number')
+    assert.ok(body.dataFreeDiskMb >= 0)
+    assert.equal(typeof body.dataDiskOk, 'boolean')
   } finally {
     await new Promise<void>(resolve => server.close(() => resolve()))
     db.close()
