@@ -404,6 +404,8 @@ const HTML = `<!DOCTYPE html>
   <div class="by-repo">
     <label for="eventTypeFilter">Event type</label>
     <select id="eventTypeFilter"><option value="">All event types</option></select>
+    <label for="agentFilter">Agent (checkpoints and events only)</label>
+    <select id="agentFilter"><option value="">All agents</option></select>
     <label for="ticketFilter">Ticket (agents and events only)</label>
     <select id="ticketFilter"><option value="">All tickets</option></select>
   </div>
@@ -973,6 +975,12 @@ const HTML = `<!DOCTYPE html>
       selectedEventType = eventTypeFilter.value;
       renderSnapshot();
     };
+    let selectedAgent = '';
+    const agentFilter = document.getElementById('agentFilter');
+    agentFilter.onchange = () => {
+      selectedAgent = agentFilter.value;
+      renderSnapshot();
+    };
     let selectedTicket = '';
     const ticketFilter = document.getElementById('ticketFilter');
     ticketFilter.onchange = () => {
@@ -1029,11 +1037,20 @@ const HTML = `<!DOCTYPE html>
       ticketFilter.innerHTML = '<option value="">All tickets</option>' +
         [...tickets].sort().map(ticket => '<option value="' + escape(ticket).replace(/"/g, '&quot;') + '">' + escape(ticket) + '</option>').join('');
       ticketFilter.value = selectedTicket;
+      const agentIds = new Set([
+        ...d.liveAgents.map(a => a.agentId),
+        ...d.recentEvents.map(e => e.agentId),
+        ...(selectedAgent ? [selectedAgent] : [])
+      ].filter(id => typeof id === 'string' && id.length));
+      agentFilter.innerHTML = '<option value="">All agents</option>' +
+        [...agentIds].sort().map(id => '<option value="' + escape(id).replace(/"/g, '&quot;') + '">' + escape(id) + '</option>').join('');
+      agentFilter.value = selectedAgent;
+      const agentMatches = row => !selectedAgent || row.agentId === selectedAgent;
       const matches = row => !selectedRepo || row.repo === selectedRepo;
       const ticketMatches = row => !selectedTicket || row.ticket === selectedTicket;
       const agents = d.liveAgents.filter(a => {
         const finished = ['done', 'aborted', 'failed'].includes(a.status);
-        return matches(a) && ticketMatches(a) && (selectedActivity === 'all' ||
+        return matches(a) && ticketMatches(a) && agentMatches(a) && (selectedActivity === 'all' ||
           (selectedActivity === 'finished' ? finished : !finished));
       });
       const eventTypes = new Set([
@@ -1043,7 +1060,7 @@ const HTML = `<!DOCTYPE html>
       eventTypeFilter.innerHTML = '<option value="">All event types</option>' +
         [...eventTypes].sort().map(type => '<option value="' + escape(type).replace(/"/g, '&quot;') + '">' + escape(type) + '</option>').join('');
       eventTypeFilter.value = selectedEventType;
-      const events = d.recentEvents.filter(matches).filter(ticketMatches).filter(e => !selectedEventType || e.eventType === selectedEventType);
+      const events = d.recentEvents.filter(matches).filter(ticketMatches).filter(agentMatches).filter(e => !selectedEventType || e.eventType === selectedEventType);
       // Own tasks are always queued/running (i.e. "working"); hide them when the
       // activity filter narrows to finished agents.
       const tasks = selectedActivity === 'finished' ? [] : liveTasks.filter(matches);
