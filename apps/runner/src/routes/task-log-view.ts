@@ -189,44 +189,100 @@ function viewHtml(id: string, meta: LaunchMeta): string {
           retryEl.hidden = status !== 'completed' && status !== 'failed';
           setStatus(status, status === 'completed' ? 'done' : status === 'failed' ? 'fail' : '');
         }
-        async function refreshStatus() {
+        async function refreshStatus(signal) {
           var version = statusVersion;
-          var response = await fetch(taskUrl + '?view=status');
+          var response = await fetch(taskUrl + '?view=status', signal ? { signal: signal } : undefined);
           if (!response.ok) throw new Error('Status refresh failed (HTTP ' + response.status + ')');
           var task = await response.json();
           // A newer stream event takes precedence over an in-flight read.
-          if (version === statusVersion) taskStatus(task.status);
+          if ((!signal || !signal.aborted) && version === statusVersion) taskStatus(task.status);
         }
+        var actionVersion = 0;
         async function action(retry) {
+          if (cancelEl.disabled || retryEl.disabled) return;
+          actionVersion++;
+          var controller = new AbortController();
+          var timer;
+          // Race every await against one action-wide deadline. Abort alone cannot
+          // release controls when a transport or response body ignores the signal.
+          var deadline = new Promise(function (_, reject) {
+            timer = setTimeout(function () {
+              controller.abort();
+              reject(new Error('Action deadline exceeded'));
+            }, 15000);
+          });
+          function bounded(work) { return Promise.race([work, deadline]); }
+          function uncertain() {
+            messageEl.textContent = (retry ? 'Retry' : 'Cancellation') +
+              ' may have reached the runner. Inspect current status and task history before trying again. ';
+            var history = document.createElement('a');
+            history.href = '/history';
+            history.textContent = 'Task history';
+            messageEl.appendChild(history);
+          }
           cancelEl.disabled = retryEl.disabled = true;
           messageEl.textContent = '';
+          var token = tokenEl.value.trim();
+          function safeMessage(value) {
+            var text = String(value);
+            return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
+          }
           try {
-            var token = tokenEl.value.trim();
-            var response = await fetch(taskUrl + (retry ? '/retry' : ''), {
+            var response = await bounded(fetch(taskUrl + (retry ? '/retry' : ''), {
               method: retry ? 'POST' : 'DELETE',
-              headers: token ? { Authorization: 'Bearer ' + token } : {}
-            });
-            var result = await response.json();
-            if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + (result.error || 'Action failed'));
+              headers: token ? { Authorization: 'Bearer ' + token } : {},
+              signal: controller.signal
+            }));
+            var result;
+            try { result = await bounded(response.json()); } catch (error) {
+              if (controller.signal.aborted) throw error;
+              /* Never display a raw response body. */
+            }
+            if (!response.ok) {
+              var detail = result && typeof result.error === 'string' && result.error.trim()
+                ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
+                : 'server returned no usable JSON error; check runner logs';
+              throw new Error('HTTP ' + response.status + ': ' + safeMessage(detail));
+            }
             if (retry) {
+              var taskId = result && result.taskId;
+              if (typeof taskId !== 'string' || !taskId.trim() || taskId.length > 200 ||
+                  (token && taskId.includes(token))) {
+                messageEl.textContent = 'HTTP ' + response.status + ': invalid taskId response; a task may have started. Check task history before retrying. ';
+                var history = document.createElement('a');
+                history.href = '/history';
+                history.textContent = 'Task history';
+                messageEl.appendChild(history);
+                return;
+              }
               var link = document.createElement('a');
-              link.href = '/tasks/' + encodeURIComponent(result.taskId) + '/log/view';
+              link.href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
               link.textContent = 'Open retried task';
               messageEl.appendChild(link);
             } else {
               messageEl.textContent = 'Cancellation requested';
-              await refreshStatus();
+              await bounded(refreshStatus(controller.signal));
             }
           } catch (e) {
-            messageEl.textContent = e.message;
+            if (controller.signal.aborted) uncertain();
+            else {
+              var detail = safeMessage(e && e.message ? e.message : 'network request failed');
+              if (!response || response.ok) detail = detail.slice(0, 300) + '. ' +
+                (retry ? 'Retry' : 'Cancellation') + ' may have reached the runner. Inspect current status and task history before trying again.';
+              messageEl.textContent = detail;
+            }
           } finally {
+            clearTimeout(timer);
             cancelEl.disabled = retryEl.disabled = false;
           }
         }
         cancelEl.onclick = function () { return action(false); };
         retryEl.onclick = function () { return action(true); };
         taskStatus(${statusLiteral});
-        refreshStatus().catch(function (e) { messageEl.textContent = e.message; });
+        var initialActionVersion = actionVersion;
+        refreshStatus().catch(function () {
+          if (initialActionVersion === actionVersion) messageEl.textContent = 'Status refresh failed; inspect task history or the live stream.';
+        });
         function setStatus(text, cls) {
           statusEl.textContent = text;
           statusEl.className = cls || '';

@@ -58,6 +58,7 @@ test('GET /:id/log/view serves the SSE viewer and 404s a missing task', async t 
       appendChild(child: any) { this.children.push(child) }, remove() {} }
   }
   runInNewContext(body.match(/<script>([\s\S]*?)<\/script>/)![1], {
+    AbortController, setTimeout, clearTimeout,
     document: {
       getElementById(id: string) {
         if (!elements.has(id)) elements.set(id, element())
