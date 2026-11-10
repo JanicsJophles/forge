@@ -121,6 +121,9 @@ async function load(targetCursors, targetSelection = selection) {
         cell.textContent = value == null ? '' : String(value);
         row.appendChild(cell);
       }
+      const branch = document.createElement('div');
+      branch.textContent = 'Branch: ' + (typeof task.branch === 'string' && task.branch.trim() ? task.branch : 'unspecified');
+      row.children[2].appendChild(branch);
       if (task.status === 'failed' && typeof task.errorMessage === 'string' && task.errorMessage) {
         const reason = document.createElement('div');
         reason.className = 'failure-reason';
