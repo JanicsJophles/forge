@@ -453,6 +453,7 @@ const HTML = `<!DOCTYPE html>
 
     <section class="full-span">
       <h2>Recent tasks <span class="count" id="recentCount">0</span></h2>
+      <div id="recentHealth" role="status">Recent tasks · last update: never</div>
       <div id="recentTasks"></div>
     </section>
   </main>
@@ -865,23 +866,56 @@ const HTML = `<!DOCTYPE html>
     }
     let recentTasksTimer;
     let recentTasksRequest = 0;
+    let recentTasksLastSuccess = null;
+    let cancelRecentTasks;
+    function recentTasksHealth(reason) {
+      document.getElementById('recentHealth').textContent =
+        (reason ? (recentTasksLastSuccess ? 'Recent tasks stale' : 'Recent tasks unavailable') + ' · ' + reason : 'Recent tasks current') +
+        ' · last update: ' + (recentTasksLastSuccess ? recentTasksLastSuccess.toLocaleString() : 'never');
+    }
     async function refreshRecentTasks() {
       clearTimeout(recentTasksTimer);
       const request = ++recentTasksRequest;
+      if (cancelRecentTasks) cancelRecentTasks();
       const repo = selectedRepo;
-      // Independent of the 5s /agent-context poll: GET /tasks is task history
-      // (terminal rows included), a read endpoint so never auth-gated. On any
-      // failure keep the last good render in place and try again next tick.
+      const controller = new AbortController();
+      let timeout;
       try {
-        const r = await fetch('/tasks?limit=15' + (repo ? '&repo=' + encodeURIComponent(repo) : ''));
-        if (r.ok) {
-          const rows = await r.json();
-          if (request === recentTasksRequest && Array.isArray(rows)) renderRecentTasks(rows);
+        // Bound both fetch and body parsing, even if abort is ignored.
+        const rows = await Promise.race([
+          (async () => {
+            const r = await fetch('/tasks?limit=15' + (repo ? '&repo=' + encodeURIComponent(repo) : ''), { signal: controller.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return await r.json();
+          })(),
+          new Promise((_, reject) => {
+            cancelRecentTasks = () => {
+              clearTimeout(timeout);
+              controller.abort();
+              reject(new Error('request superseded'));
+            };
+            timeout = setTimeout(() => {
+              controller.abort();
+              reject(new Error('request timed out'));
+            }, 10000);
+          })
+        ]);
+        if (request !== recentTasksRequest) return;
+        if (!Array.isArray(rows) || !rows.every(t => record(t) &&
+          ['id', 'repo', 'status', 'provider', 'createdAt', 'commitSha', 'errorMessage'].every(k => t[k] == null || typeof t[k] === 'string'))) {
+          throw new Error('invalid task history');
         }
+        renderRecentTasks(rows);
+        recentTasksLastSuccess = new Date();
+        recentTasksHealth();
       } catch (e) {
-        // swallow — the panel degrades to its last successful render
+        if (request === recentTasksRequest) recentTasksHealth(e.message);
       } finally {
-        if (request === recentTasksRequest) recentTasksTimer = setTimeout(refreshRecentTasks, 5000);
+        clearTimeout(timeout);
+        if (request === recentTasksRequest) {
+          cancelRecentTasks = null;
+          recentTasksTimer = setTimeout(refreshRecentTasks, 5000);
+        }
       }
     }
     let latestSnapshot = null;
@@ -909,6 +943,8 @@ const HTML = `<!DOCTYPE html>
       selectedRepo = repoFilter.value;
       renderSnapshot();
       renderRecentTasks([]);
+      recentTasksLastSuccess = null;
+      recentTasksHealth('loading');
       if (typeof window !== 'undefined') refreshRecentTasks();
     };
     const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
