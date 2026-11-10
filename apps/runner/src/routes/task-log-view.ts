@@ -59,6 +59,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
   const safeId = escapeHtml(id)
   const encodedId = encodeURIComponent(id)
   const streamPath = `/tasks/${encodedId}/stream`
+  const changesHref = escapeHtml(`/tasks/${encodedId}/changes/view`)
   const rawHref = escapeHtml(`/tasks/${encodedId}/log?format=text`)
   const downloadHref = escapeHtml(`/tasks/${encodedId}/log?format=text&download=1`)
   // JSON.stringify yields a valid JS string literal; hardening '<' to \u003c
@@ -159,6 +160,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <button type="button" id="reconnect" hidden>Reconnect stream</button>
       <span id="actionMessage" role="status" aria-live="polite"></span>
       <div class="spacer"></div>
+      <a href="${changesHref}">Changes</a>
       <a href="${rawHref}">raw text</a>
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
