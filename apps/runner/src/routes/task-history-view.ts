@@ -14,7 +14,7 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
-<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th></tr></thead><tbody id="rows"></tbody></table>
+<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th></tr></thead><tbody id="rows"></tbody></table>
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 <script>
 // SQLite stores UTC without a zone; require a zone for ISO timestamps.
@@ -149,6 +149,13 @@ async function load(targetCursors, targetSelection = selection) {
         cell.textContent = value;
         row.appendChild(cell);
       }
+      const settings = document.createElement('td');
+      settings.textContent = [
+        'Provider: ' + (task.provider || 'unspecified'),
+        'Model: ' + (task.model || 'provider default'),
+        'Auto-commit: ' + (task.autoCommit === true ? 'on' : task.autoCommit === false ? 'off' : 'unspecified'),
+      ].join(' · ');
+      row.appendChild(settings);
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);
