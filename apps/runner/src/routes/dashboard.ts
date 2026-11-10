@@ -899,6 +899,13 @@ const HTML = `<!DOCTYPE html>
         button.textContent = original;
       }
     }
+    function recentPrompt(task) {
+      const normalized = typeof task.prompt === 'string' ? task.prompt.replace(/\\s+/gu, ' ').trim() : '';
+      const points = Array.from(normalized);
+      const omitted = points.length > 160 || task.promptTruncated === true;
+      return '<div class="intent recent-prompt">' + escape(points.slice(0, 160).join('') || 'No saved prompt') +
+        (omitted ? '<span class="muted"> · prompt truncated</span>' : '') + '</div>';
+    }
     function renderRecentTasks(tasks) {
       const root = document.getElementById('recentTasks');
       const rows = Array.isArray(tasks) ? tasks.filter(t => !selectedRepo || t.repo === selectedRepo) : [];
@@ -928,6 +935,7 @@ const HTML = `<!DOCTYPE html>
               hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
               hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)">retry</button>' : '',
             '</div>',
+            recentPrompt(t),
             t.status === 'failed' && t.errorMessage ? '<div class="error-message">' + escape(t.errorMessage) + '</div>' : '',
             '<div class="age">created ' + relTime(t.createdAt) + '</div>',
           '</div>'
