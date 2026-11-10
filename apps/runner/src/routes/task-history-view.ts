@@ -114,9 +114,10 @@ async function load(targetCursors, targetSelection = selection) {
     for (const task of tasks) {
       const row = document.createElement('tr');
       const prompt = String(task.prompt || '');
-      const preview = prompt.slice(0, 240);
+      const promptPoints = Array.from(prompt);
+      const preview = promptPoints.slice(0, 240).join('');
       for (const value of [task.status, task.createdAt, task.repo,
-        preview + (task.promptTruncated || prompt.length > 240 ? '… [truncated]' : '')]) {
+        preview + (task.promptTruncated || promptPoints.length > 240 ? '… [truncated]' : '')]) {
         const cell = document.createElement('td');
         cell.textContent = value == null ? '' : String(value);
         row.appendChild(cell);
