@@ -255,6 +255,12 @@ export function checkpoint(input: CheckpointInput): AgentState {
   return rowToState(row)
 }
 
+// Identity lookups include expired checkpoints, just like the historical route.
+export function getAgentState(agentId: string): AgentState | undefined {
+  const row = db.prepare('SELECT * FROM agent_state WHERE agent_id = ?').get(agentId) as AgentStateRow | undefined
+  return row ? rowToState(row) : undefined
+}
+
 export interface ListStateFilter {
   repo?: string
   ticket?: string
