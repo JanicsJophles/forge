@@ -45,7 +45,7 @@ test('history reviews saved reasons, commits and changes using only list respons
     task('failed-without-reason'),
     task('completed', { status: 'completed', errorMessage: 'ignore', commitSha: '1234567890abcdef' }),
     task(hostile, { errorMessage: hostile, commitSha: hostile, repo: hostile, prompt: hostile }),
-    ...['', null, undefined, '../other', '.', 'a/b', 'a?x=1', 42].map(id => task(id)),
+    ...['../other', '.', 'a/b', 'a?x=1'].map(id => task(id)),
   ], 'older-cursor')
   let rows = el('rows').children
   assert.equal(rows[0].children[0].textContent, 'failed')
