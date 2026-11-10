@@ -99,12 +99,13 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | `FORGE_GIT_SHA` | *(unset)* | Short git SHA of the deployed build, appended to the reported `version` when set |
 | `CLAUDE_RUN_USER` | `forge` | Unprivileged user to run the claude provider as (for root-started servers) |
 | `CODEX_RUN_USER` | `forge` | Unprivileged user to run the codex provider as |
+| `TASK_RETENTION_DAYS` | `0` (disabled) | Opt-in terminal task pruning at startup and every 24 hours; positive integer days |
 | `LOG_LEVEL` | `info` | Log verbosity |
 
 ## API
 
-Every response is JSON (the `/dashboard` HTML view and the `format=text` log path
-are the exceptions). Unknown paths return `404 {"error":"not found"}`.
+Responses are JSON except HTML views (`/`, `/dashboard`, `/history`, and task
+viewers), SSE streams, raw text logs, and patches. Unknown paths return `404 {"error":"not found"}`.
 
 ### Tasks
 
@@ -115,7 +116,10 @@ are the exceptions). Unknown paths return `404 {"error":"not found"}`.
 | `GET` | `/tasks/stats` | Aggregate task counts by status |
 | `GET` | `/tasks/:id` | Get a single task (`?view=status\|detail` for a projection) |
 | `GET` | `/tasks/:id/stream` | SSE stream (catches up on reconnect; `?replay=0` to skip catch-up) |
-| `GET` | `/tasks/:id/changes` | Changed-file footprint of the task's checkout |
+| `GET` | `/tasks/:id/changes` | Recorded commit or current-checkout footprint; `?format=patch` for a bounded diff |
+| `GET` | `/tasks/:id/changes/view` | HTML patch review with the same source and bounds |
+| `GET` | `/tasks/:id/log/view` | Live HTML log viewer with SSE reconnect support |
+| `GET` | `/history` | HTML task history browser with filters, pagination, and log viewer links |
 | `GET` | `/tasks/:id/log` | Retrieve the log as a byte slice, line tail, or download (see below) |
 | `POST` | `/tasks/:id/retry` | Re-dispatch a terminal task's stored inputs as a new task → `201 {"taskId"}` |
 | `DELETE` | `/tasks/:id` | Cancel a queued task or kill a running one |
@@ -206,10 +210,14 @@ another page exists the response sets an `X-Next-Before` header — reuse that I
   "activeTasks": 1,
   "queuedOrRunning": 1,
   "maxConcurrentTasks": 2,
+  "taskTimeoutMs": 1800000,
+  "minFreeDiskMb": 2048,
   "freeDiskMb": 51200,
   "diskOk": true,
   "dataFreeDiskMb": 51200,
   "dataDiskOk": true,
+  "acceptingTasks": true,
+  "notAcceptingReason": null,
   "uptimeSeconds": 3600,
   "oldestRunningTaskAgeSeconds": 42
 }
@@ -220,6 +228,17 @@ rows. `freeDiskMb`/`diskOk` cover the repo volume and `dataFreeDiskMb`/`dataDisk
 the volume backing `forge.db`; either disk field is `null` if it can't be measured.
 `oldestRunningTaskAgeSeconds` is `null` when nothing is running.
 
+`status: "ok"` reports liveness, even when readiness is false. `acceptingTasks`
+is true only when both disk checks are true and `queuedOrRunning` is below
+`maxConcurrentTasks`. `notAcceptingReason` is null when accepting; otherwise its
+precedence is `unknown` (either disk measurement unavailable), `disk` (repo volume),
+`dataDisk` (SQLite volume), then `concurrency`. This is a snapshot, not a reservation:
+submission still validates the requested checkout and its active-task ownership.
+`taskTimeoutMs` and `minFreeDiskMb` expose the configured deadline and disk floor.
+The repo measurement uses the first allowed repo path; admission checks the target.
+Readiness treats unknown disk measurements as unavailable; admission currently logs
+measurement failures and continues its other checks.
+
 ### GET /capabilities
 
 ```json
@@ -228,15 +247,24 @@ the volume backing `forge.db`; either disk field is `null` if it can't be measur
   "providers": ["claude", "codex"],
   "version": "0.1.0",
   "authRequired": false,
+  "build": {
+    "version": "0.1.0",
+    "gitShaPinned": false,
+    "commitMessagePrefix": "[forge]"
+  },
   "limits": {
     "maxConcurrentTasks": 2,
     "taskTimeoutMs": 1800000,
     "minFreeDiskMb": 2048,
     "autoCommit": false
   },
-  "logging": { "maxSliceBytes": 262144, "detailTailBytes": 4096 }
+  "logging": { "maxSliceBytes": 262144, "detailTailBytes": 262144 }
 }
 ```
+
+`version` (also `build.version`) includes `+<FORGE_GIT_SHA>` when configured;
+`build.gitShaPinned` indicates whether that setting is present. Provider discovery
+does not probe CLI authentication. Retention is not exposed in this response.
 
 The same body is also reachable at `GET /tasks/capabilities` (a legacy alias of the
 canonical `GET /capabilities`).
@@ -248,14 +276,51 @@ canonical `GET /capabilities`).
   "taskId": "abc-123",
   "repo": "/repos/my-project",
   "branch": "main",
-  "summary": { "added": 1, "modified": 2, "deleted": 0, "total": 3 },
-  "changedFiles": [{ "path": "src/app.ts", "status": "modified" }],
+  "summary": { "added": 0, "modified": 1, "deleted": 0, "renamed": 0, "copied": 0, "untracked": 0, "total": 1 },
+  "changedFiles": [{ "path": "src/app.ts", "status": "M" }],
   "truncated": false
 }
 ```
 
-`summary` always reflects the full working tree; `changedFiles` is capped (`truncated`
-is `true` when the list was bounded). Returns `503` if the checkout can't be inspected.
+When the task has a recorded `commitSha`, JSON, patch, and HTML review inspect
+that commit, even after HEAD or the working tree changes. Root commits compare
+against the empty tree; merge commits compare against their first parent. An
+unavailable recorded commit returns `503`; it does not fall back to current changes.
+
+Without a recorded commit, review falls back to tracked changes against the
+checkout's current HEAD, plus untracked paths in JSON. **Uncommitted history reflects
+the current checkout**, not a saved task diff; later edits can change an old task's
+review. Untracked file contents are absent from patches.
+
+`summary` counts the full selected footprint; `changedFiles` contains at most 2000
+entries, with `truncated: true` when bounded. Statuses are Git letters (`A`, `M`,
+`D`, `R…`, `C…`, `?`); rename/copy paths are destinations.
+
+`?format=patch` returns `text/plain` unified diff, retaining the first 1,000,000
+bytes and setting `X-Patch-Truncated: true|false`. The HTML viewer uses the same
+cap and shows a truncation notice. Git probes time out after two seconds; patches
+exceeding the 64 MiB capture buffer fail with `503`. Missing tasks return `404`;
+invalid, repeated, or structured `format` values return `400`. Inspection failures
+return `503` without raw Git diagnostics.
+
+### Retention
+
+`TASK_RETENTION_DAYS` is disabled when unset or `0`; invalid values warn and disable
+pruning. A positive integer enables pruning at startup and every 24 hours. Only
+completed/failed tasks with `completed_at` strictly older than the configured age
+are deleted, including their stored transcripts; queued/running tasks are retained.
+Deleted tasks no longer appear in history or review endpoints. SQLite pages become
+reusable; pruning does not physically shrink the database file or run VACUUM.
+
+### SSE replay and reconnect
+
+Each connection replays a fresh stored tail (up to 262144 bytes, with an earlier-output
+truncation marker when needed), then current status or the terminal event, followed
+by live output while running. `?replay=0` (also `false`) skips stored output but keeps
+status, live, and terminal events. This is tail catch-up, not an offset-based resume;
+there are no event IDs for exact replay. Use the paginated log endpoint for older bytes.
+The HTML log viewer retains displayed output during a network failure, then replaces
+it with the fresh replay on successful reconnect and displays a replacement notice.
 
 ### SSE event types
 
@@ -320,7 +385,9 @@ whole log instead of a byte window. It cannot be combined with `offset` or `limi
 **Raw text & download.** `?format=text` returns the decoded bytes as
 `text/plain` (with `X-Total-Bytes` and `X-Next-Offset` headers) instead of the
 base64 JSON envelope. `?download=1` additionally serves the text as a file
-attachment (`Content-Disposition`); it requires `format=text`.
+attachment (`Content-Disposition`); it requires `format=text`. The attachment
+contains only the selected byte slice (default at most 262144 bytes) or line tail,
+not an automatic complete transcript. Use pagination for a complete log.
 
 `data` contains at most `limit` bytes encoded as base64. `nextOffset` equals
 `offset` plus the decoded byte count; `totalBytes` is the log's byte length in
