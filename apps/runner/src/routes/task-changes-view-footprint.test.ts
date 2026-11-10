@@ -84,7 +84,7 @@ test('HTML footprint names untracked files, bounds lists and isolates recorded c
       setSha(invalid)
       const failed = await fetch(url)
       assert.equal(failed.status, 503)
-      assert.deepEqual(await failed.json(), { error: 'could not inspect repository changes' })
+      assert.match(await failed.text(), /Changes temporarily unavailable/)
     }
   } finally {
     server.closeAllConnections()
