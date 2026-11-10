@@ -164,7 +164,7 @@ test('auth token: capabilities reveals the input, and state-changing fetches car
   assert.equal(h.store.get('forge.authToken'), 's3cret-token')
 
   // Launch: POST /tasks carries the bearer token alongside the JSON content type.
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
   h.el('launchProvider').value = 'claude'
@@ -207,7 +207,7 @@ test('auth token: input stays hidden and no Authorization header is sent when au
   assert.equal(h.el('authTokenRow').style.display, 'none')
 
   // With no token typed, the three state-changing fetches omit Authorization.
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
   await h.submit()
@@ -230,7 +230,7 @@ test('auth token: an unreachable /capabilities leaves the input hidden without t
   await h.settle()
   assert.equal(h.el('authTokenRow').style.display, 'none')
   // The launcher still works; it just can't attach a token.
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
   await h.submit()
