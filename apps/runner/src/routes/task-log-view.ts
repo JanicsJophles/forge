@@ -179,17 +179,37 @@ function viewHtml(id: string, status: string): string {
         async function action(retry) {
           cancelEl.disabled = retryEl.disabled = true;
           messageEl.textContent = '';
+          var token = tokenEl.value.trim();
+          function safeMessage(value) {
+            var text = String(value);
+            return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
+          }
           try {
-            var token = tokenEl.value.trim();
             var response = await fetch(taskUrl + (retry ? '/retry' : ''), {
               method: retry ? 'POST' : 'DELETE',
               headers: token ? { Authorization: 'Bearer ' + token } : {}
             });
-            var result = await response.json();
-            if (!response.ok) throw new Error('HTTP ' + response.status + ': ' + (result.error || 'Action failed'));
+            var result;
+            try { result = await response.json(); } catch (_) { /* Never display a raw response body. */ }
+            if (!response.ok) {
+              var detail = result && typeof result.error === 'string' && result.error.trim()
+                ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
+                : 'server returned no usable JSON error; check runner logs';
+              throw new Error('HTTP ' + response.status + ': ' + safeMessage(detail));
+            }
             if (retry) {
+              var taskId = result && result.taskId;
+              if (typeof taskId !== 'string' || !taskId.trim() || taskId.length > 200 ||
+                  (token && taskId.includes(token))) {
+                messageEl.textContent = 'HTTP ' + response.status + ': invalid taskId response; a task may have started. Check task history before retrying. ';
+                var history = document.createElement('a');
+                history.href = '/history';
+                history.textContent = 'Task history';
+                messageEl.appendChild(history);
+                return;
+              }
               var link = document.createElement('a');
-              link.href = '/tasks/' + encodeURIComponent(result.taskId) + '/log/view';
+              link.href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
               link.textContent = 'Open retried task';
               messageEl.appendChild(link);
             } else {
@@ -197,7 +217,7 @@ function viewHtml(id: string, status: string): string {
               await refreshStatus();
             }
           } catch (e) {
-            messageEl.textContent = e.message;
+            messageEl.textContent = safeMessage(e && e.message ? e.message : 'network request failed');
           } finally {
             cancelEl.disabled = retryEl.disabled = false;
           }
