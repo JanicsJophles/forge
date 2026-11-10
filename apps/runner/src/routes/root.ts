@@ -86,7 +86,10 @@ function landingHtml(): string {
       <li>Minimum free disk required: <span id="min-disk">…</span></li>
       <li>Uptime: <span id="uptime">…</span></li>
       <li>Reported version: <code id="live-version">…</code></li>
+      <li>Oldest running age: <span id="oldest-running-age">…</span></li>
+      <li>Provider runtime limit: <span id="task-timeout">…</span></li>
     </ul>
+    <p>The provider runtime limit is a termination deadline, not a guaranteed completion or free-slot time. Queued work has not necessarily started.</p>
     <h2>Recent tasks</h2>
     <p id="tasks-freshness" role="status">Recent tasks unavailable — waiting for first update.</p>
     <p>Refreshes five seconds after each completed update.</p>
@@ -216,6 +219,11 @@ ${rows}
             setDisk(h)
             setText('uptime', fmtUptime(h.uptimeSeconds))
             setText('live-version', typeof h.version === 'string' ? h.version : 'unknown')
+            setText('oldest-running-age', h.oldestRunningTaskAgeSeconds === null
+              ? 'no measured running age' : fmtUptime(h.oldestRunningTaskAgeSeconds))
+            var timeout = h.taskTimeoutMs
+            setText('task-timeout', typeof timeout === 'number' && isFinite(timeout) && timeout >= 0
+              ? fmtUptime(timeout / 1000) : 'unknown')
             hasHealth = true
             setText('health-freshness', '')
           })
@@ -228,6 +236,8 @@ ${rows}
             setDisk({})
             setText('uptime', 'unknown')
             setText('live-version', 'unknown')
+            setText('oldest-running-age', 'unknown')
+            setText('task-timeout', 'unknown')
           })
         }
         function refresh() {
