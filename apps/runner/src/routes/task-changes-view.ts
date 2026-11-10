@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { getCurrentBranch } from '../agent/git.js'
 import { db } from '../db/schema.js'
 import { getChangesPatch, getChangedFiles, summarizeChangedFiles, boundChangedFiles } from '../agent/git-changes.js'
 
@@ -11,8 +12,8 @@ function escapeHtml(value: string): string {
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Avoid loading the task's potentially large log just to locate its checkout.
-  const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
-    { repo: string; commit_sha: string | null } | undefined
+  const task = db.prepare('SELECT repo, branch, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
+    { repo: string; branch: string; commit_sha: string | null } | undefined
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
@@ -26,6 +27,22 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     res.status(503).json({ error: 'could not inspect repository changes' })
     return
   }
+  // Branch provenance applies only to the live fallback, never a recorded diff.
+  let currentBranch: string | null = null
+  if (task.commit_sha == null) {
+    try { currentBranch = getCurrentBranch(task.repo) || null } catch { /* Best-effort provenance. */ }
+  }
+  const branchUnavailable = currentBranch == null || currentBranch === 'HEAD'
+  const provenance = task.commit_sha != null
+    ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
+    : `<p>Current tracked changes in the task checkout. This is a current snapshot, not preserved task output. Untracked file contents are not included.</p>
+      <p>Recorded task branch: <code>${escapeHtml(task.branch)}</code><br>
+      Current checkout branch: <code>${escapeHtml(currentBranch === 'HEAD' ? 'unavailable (detached HEAD)' : currentBranch ?? 'unavailable')}</code></p>
+      ${branchUnavailable
+        ? '<p class="warning" role="status">Warning: current checkout branch is unavailable; these changes may be unrelated to this task.</p>'
+        : currentBranch !== task.branch
+          ? '<p class="warning" role="status">Warning: checkout branch differs from the recorded task branch; these changes may be unrelated to this task.</p>'
+          : ''}`
   const summary = summarizeChangedFiles(files)
   const bounded = boundChangedFiles(files)
   const fileList = bounded.changedFiles.map(file =>
@@ -39,6 +56,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   }).join('\n')
   const id = escapeHtml(req.params.id)
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
+  const logHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/log/view`)
   res.setHeader('X-Patch-Truncated', String(result.truncated))
   res.type('html').send(`<!doctype html>
 <html lang="en">
@@ -64,12 +82,10 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
 <body>
   <header><h1>forge changes · ${id}</h1>
     <p>Repository: ${escapeHtml(task.repo)}</p>
-    <a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
+    <a href="${logHref}">task log</a><a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
   </header>
   <main>
-    ${task.commit_sha != null
-      ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
-      : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
+    ${provenance}
     <section aria-label="Changed files">
       <h2>Changed files</h2>
       <p>${summary.total} changed files: ${summary.added} added, ${summary.modified} modified, ${summary.deleted} deleted, ${summary.renamed} renamed, ${summary.copied} copied, ${summary.untracked} untracked.</p>
