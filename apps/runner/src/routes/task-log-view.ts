@@ -157,7 +157,10 @@ function viewHtml(id: string, meta: LaunchMeta): string {
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log"><span id="empty">waiting for output…</span></pre>
-    <footer>Live tail via <code>/tasks/:id/stream</code> · scroll up to pause autoscroll</footer>
+    <footer>
+      <span id="followStatus" role="status" aria-live="polite">Following latest output</span>
+      <button type="button" id="jumpLatest" aria-controls="log">Jump to latest</button>
+    </footer>
     <script>
       (function () {
         var STREAM_URL = ${streamLiteral};
@@ -175,6 +178,18 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         var MAX_LOG_UNITS = 128 * 1024;
         var transcript = null;
         var omittedEl = document.getElementById('omitted');
+        var followEl = document.getElementById('followStatus');
+        var jumpEl = document.getElementById('jumpLatest');
+        var following = true;
+        function setFollowing(value) {
+          following = value;
+          followEl.textContent = value ? 'Following latest output' : 'Paused · scroll to the end or jump to latest';
+        }
+        logEl.onscroll = function () { setFollowing(atBottom()); };
+        jumpEl.onclick = function () {
+          logEl.scrollTop = logEl.scrollHeight;
+          setFollowing(true);
+        };
         var done = false;
         var statusVersion = 0;
         try { tokenEl.value = sessionStorage.getItem('forge.authToken') || ''; } catch (e) {}
@@ -240,7 +255,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         }
         function appendLog(text) {
           if (typeof text !== 'string' || text.length === 0) return;
-          var pinned = atBottom();
+          var pinned = following && atBottom();
+          setFollowing(pinned);
           var previousTop = logEl.scrollTop;
           if (emptyEl) { emptyEl.remove(); emptyEl = null; }
           if (!transcript) {
@@ -306,6 +322,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
                 if (index === 0) node.textContent = '';
                 else node.remove();
               });
+              logEl.scrollTop = 0;
+              setFollowing(true);
               document.getElementById('replayNotice').hidden = false;
               var omitted = document.getElementById('omitted');
               if (omitted) omitted.hidden = true;
