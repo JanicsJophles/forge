@@ -81,6 +81,9 @@ function landingHtml(): string {
     <ul>
       <li>Accepting work: <strong id="accepting">…</strong></li>
       <li>Slots in use: <span id="slots">…</span></li>
+      <li>Repository volume free: <span id="repo-disk">…</span></li>
+      <li>Database volume free: <span id="data-disk">…</span></li>
+      <li>Minimum free disk required: <span id="min-disk">…</span></li>
       <li>Uptime: <span id="uptime">…</span></li>
       <li>Reported version: <code id="live-version">…</code></li>
     </ul>
@@ -108,6 +111,15 @@ ${rows}
           if (m) parts.push(m + 'm')
           parts.push((s % 60) + 's')
           return parts.join(' ')
+        }
+        function fmtDisk(value) {
+          return typeof value === 'number' && isFinite(value) && value >= 0
+            ? value + ' MiB' : 'unknown'
+        }
+        function setDisk(h) {
+          setText('repo-disk', fmtDisk(h.freeDiskMb))
+          setText('data-disk', fmtDisk(h.dataFreeDiskMb))
+          setText('min-disk', fmtDisk(h.minFreeDiskMb))
         }
         function setText(id, value) {
           var el = document.getElementById(id)
@@ -201,6 +213,7 @@ ${rows}
             } else {
               setText('slots', 'unknown')
             }
+            setDisk(h)
             setText('uptime', fmtUptime(h.uptimeSeconds))
             setText('live-version', typeof h.version === 'string' ? h.version : 'unknown')
             hasHealth = true
@@ -212,6 +225,7 @@ ${rows}
             if (hasHealth) return
             setText('accepting', 'unknown (health unreachable)')
             setText('slots', 'unknown')
+            setDisk({})
             setText('uptime', 'unknown')
             setText('live-version', 'unknown')
           })
