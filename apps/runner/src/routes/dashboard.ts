@@ -747,6 +747,7 @@ const HTML = `<!DOCTYPE html>
     async function submitNewTask(event) {
       if (event && event.preventDefault) event.preventDefault();
       const button = document.getElementById('launchSubmit');
+      if (button.disabled) return;
       const errEl = document.getElementById('launchErr');
       const successEl = document.getElementById('launchSuccess');
       successEl.textContent = '';
@@ -768,20 +769,38 @@ const HTML = `<!DOCTYPE html>
       button.disabled = true;
       const original = button.textContent;
       button.textContent = 'launching…';
+      const controller = new AbortController();
+      let timer;
+      let uncertain = true;
       try {
         // Only send model when the operator typed one; a blank field POSTs no
         // model so the server applies the provider default. An invalid value
         // comes back 400 and surfaces inline via the throw below.
         const body = { repo, prompt, provider, autoCommit };
         if (model) body.model = model;
-        const r = await fetch('/tasks', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify(body),
-        });
-        let result;
-        try { result = await r.json(); } catch (_) { /* Use a fixed fallback, never raw HTML. */ }
+        // Transport work must not mutate the UI after the deadline wins.
+        const received = await Promise.race([
+          (async () => {
+            const r = await fetch('/tasks', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeaders() },
+              body: JSON.stringify(body),
+              signal: controller.signal,
+            });
+            let result;
+            try { result = await r.json(); } catch (_) { /* Use a fixed fallback, never raw HTML. */ }
+            return { r, result };
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('15-second deadline exceeded'));
+              controller.abort();
+            }, 15000);
+          }),
+        ]);
+        const { r, result } = received;
         if (!r.ok) {
+          uncertain = false;
           const detail = result && typeof result.error === 'string' && result.error.trim()
             ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
             : 'server returned no usable JSON error; check runner logs';
@@ -796,10 +815,14 @@ const HTML = `<!DOCTYPE html>
         successEl.innerHTML = 'Task launched. <a href="' + escape(href).replace(/"/g, '&quot;') + '">View task log</a>';
         document.getElementById('launchPrompt').value = '';
       } catch (e) {
-        // Non-2xx (401/400/409/429/507) or a network error: surface inline next to
-        // the button and leave the typed prompt intact so the user can retry.
+        // A lost response does not prove the runner rejected the launch.
         errEl.textContent = 'launch failed: ' + safeMessage(e && e.message ? e.message : 'network request failed');
+        if (uncertain) {
+          errEl.textContent += ' Launch outcome unknown; a task may have started. Inspect task history before launching again.';
+          errEl.innerHTML += ' <a href="#recentTasks">Task history</a>';
+        }
       } finally {
+        clearTimeout(timer);
         button.disabled = false;
         button.textContent = original;
       }
