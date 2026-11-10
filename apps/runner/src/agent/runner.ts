@@ -41,7 +41,8 @@ function launchFailureDetail(err: unknown): string {
 function loginFailureDetail(err: unknown): string {
   const message = err instanceof Error ? err.message : ''
   // checkCodexLogin constructs these reasons without child output.
-  if (message === 'Codex CLI is unavailable for the configured runner account' ||
+  if (message === 'Codex CLI was not found on PATH for the configured runner user' ||
+      message === 'Codex CLI is unavailable for the configured runner account' ||
       message === 'Codex login check timed out' ||
       /^Codex login probe failed \(exit code (?:-?\d+|unknown)\)$/.test(message) ||
       /^Codex login probe failed \(signal (?:SIG[A-Z0-9]+|unknown)\)$/.test(message)) return message
