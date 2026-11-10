@@ -242,7 +242,7 @@ export function getChangedFiles(repoPath: string, commitSha?: string | null): Ch
     parseNameStatusZ(readGit([...commitArgs(commitSha), '--name-status', '-z', '--'], repoPath), files)
   } else {
     parseNameStatusZ(readGit([...checkoutDiffArgs(repoPath), '--name-status', '-z', '--'], repoPath), files)
-    parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z'], repoPath), files)
+    parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z', '--untracked-files=all'], repoPath), files)
   }
   return [...files].map(([path, status]) => ({ path, status }))
 }
