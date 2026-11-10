@@ -61,7 +61,7 @@ test('GET / embeds a client-side fetch of /health and keeps the static fallback'
     assert.equal(response.status, 200)
     const body = await response.text()
     // The live status block fetches /health on each page load.
-    assert.match(body, /fetch\('\/health'/, 'landing page fetches /health client-side')
+    assert.match(body, /readJson\('\/health'/, 'landing page fetches /health client-side')
     // The rendered fields the script fills in are present as targets.
     for (const id of ['accepting', 'slots', 'uptime', 'live-version']) {
       assert.ok(body.includes(`id="${id}"`), `status field #${id} is present`)
@@ -158,6 +158,8 @@ async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network')
         return new Element()
       },
     },
+    AbortController,
+    clearTimeout: () => {},
     setTimeout: () => 0,
     fetch: async (url: string) => {
       requests.push(url)
