@@ -648,32 +648,77 @@ const HTML = `<!DOCTYPE html>
       if (!entries.length) { root.innerHTML = ''; return; }
       root.innerHTML = entries.map(([repo, n]) => '<span class="pill"><b>' + n + '</b>' + escape(repo) + '</span>').join('');
     }
-    async function cancelTask(button) {
-      // data-task-id is already encodeURIComponent'd, so it is a safe URL path
-      // segment and a safe HTML attribute value.
-      const encodedId = button.dataset.taskId;
-      if (!encodedId) return;
-      if (!confirm('Cancel this runner task?')) return;
-      button.disabled = true;
-      button.textContent = 'cancelling…';
-      // Clear any stale error left from a previous attempt on this row.
+    const cancellations = new Map();
+    function cancelLabel(state) {
+      return state && state.pending ? 'cancelling…' : state && state.success ? 'cancel requested' : 'cancel';
+    }
+    function paintCancellation(button, state) {
+      button.disabled = !!(state.pending || state.success);
+      button.textContent = cancelLabel(state);
       const row = button.closest ? button.closest('.task-row') : null;
-      const prevErr = row ? row.querySelector('.cancel-err') : null;
-      if (prevErr) prevErr.remove();
+      const previous = row ? row.querySelector('.cancel-err') : null;
+      if (previous) previous.remove();
+      if (state.message) {
+        const error = document.createElement('span');
+        error.className = 'cancel-err';
+        error.textContent = state.message;
+        button.insertAdjacentElement('afterend', error);
+      }
+    }
+    async function cancelTask(button) {
+      const encodedId = button.dataset.taskId;
+      const previous = cancellations.get(encodedId);
+      if (!encodedId || (previous && (previous.pending || previous.success))) return;
+      if (!confirm('Cancel this runner task?')) return;
+      const state = { pending: true, success: false, message: '' };
+      cancellations.set(encodedId, state);
+      paintCancellation(button, state);
+      const headers = authHeaders();
+      const token = (headers.Authorization || '').replace(/^Bearer /, '');
+      function safeMessage(value) {
+        const text = String(value);
+        return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
+      }
+      const controller = new AbortController();
+      let timer;
       try {
-        const r = await fetch('/tasks/' + encodedId, { method: 'DELETE', headers: authHeaders() });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        // 2xx: the task leaves the active set; the next 5s poll drops the row.
-        if (row) row.classList.add('cancelling');
-      } catch (e) {
-        // Non-2xx (401 when FORGE_AUTH_TOKEN is set, 409 if already terminal) or a
-        // network error: surface it inline and leave the row intact.
-        button.disabled = false;
-        button.textContent = 'cancel';
-        const err = document.createElement('span');
-        err.className = 'cancel-err';
-        err.textContent = 'cancel failed: ' + e.message;
-        button.insertAdjacentElement('afterend', err);
+        // Keep all transport work free of UI mutations: even an abort-ignoring
+        // fetch or JSON body can settle after the deadline or a newer attempt.
+        const result = await Promise.race([
+          (async () => {
+            const response = await fetch('/tasks/' + encodedId, { method: 'DELETE', headers, signal: controller.signal });
+            if (response.ok) return { success: true, message: '' };
+            let body;
+            try { body = await response.json(); } catch (_) { /* Fixed fallback below. */ }
+            const detail = body && typeof body.error === 'string' && body.error.trim()
+              ? body.error + (typeof body.reason === 'string' ? ': ' + body.reason : '')
+              : 'server returned no usable JSON error; check runner logs';
+            return { success: false, message: 'cancel rejected: HTTP ' + response.status + ': ' + safeMessage(detail) };
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('deadline'));
+              controller.abort();
+            }, 15000);
+          }),
+        ]);
+        if (cancellations.get(encodedId) !== state) return;
+        state.success = result.success;
+        state.message = result.message;
+      } catch (_) {
+        if (cancellations.get(encodedId) !== state) return;
+        state.message = 'Cancellation outcome unknown (timeout or connection lost). Check task status or logs before cancelling again; the request may have succeeded.';
+      } finally {
+        clearTimeout(timer);
+        if (cancellations.get(encodedId) === state) {
+          state.pending = false;
+          // Polling may have replaced the original row while DELETE was pending.
+          const buttons = document.getElementById('tasks').querySelectorAll('button.cancel');
+          for (const current of buttons) {
+            if (current.dataset.taskId === encodedId) paintCancellation(current, state);
+          }
+          if (button.isConnected !== false) paintCancellation(button, state);
+        }
       }
     }
     async function loadRepos() {
@@ -778,6 +823,7 @@ const HTML = `<!DOCTYPE html>
         const hasId = t.id != null && t.id !== '';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
         const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes/view';
+        const cancellation = cancellations.get(encodeURIComponent(t.id));
         return [
           '<div class="task-row">',
             '<div>',
@@ -788,7 +834,8 @@ const HTML = `<!DOCTYPE html>
               elapsedLabel ? '<span class="elapsed">' + escape(elapsedLabel) + '</span>' : '',
               hasId ? '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>' : '',
               hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
-              hasId && running ? '<button type="button" class="cancel" data-task-id="' + encodeURIComponent(t.id) + '" onclick="cancelTask(this)">cancel</button>' : '',
+              hasId && running ? '<button type="button" class="cancel" data-task-id="' + encodeURIComponent(t.id) + '" onclick="cancelTask(this)"' + (cancellation && (cancellation.pending || cancellation.success) ? ' disabled' : '') + '>' + cancelLabel(cancellation) + '</button>' : '',
+              hasId && running && cancellation && cancellation.message ? '<span class="cancel-err">' + escape(cancellation.message) + '</span>' : '',
             '</div>',
             t.branch ? '<div class="branch">branch: ' + escape(t.branch) + '</div>' : '',
             t.promptSnippet ? '<div class="intent">' + escape(t.promptSnippet) + '</div>' : '',
