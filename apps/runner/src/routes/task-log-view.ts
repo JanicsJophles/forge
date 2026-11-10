@@ -7,7 +7,7 @@
 // log chunk in order, and autoscrolls to the bottom unless the reader has
 // scrolled up to inspect earlier output.
 //
-// Security: the only interpolated value is the task id. It is placed into HTML
+// Security: metadata is escaped as HTML text. The task id is placed into HTML
 // text via escapeHtml, into href attributes via encodeURIComponent (which
 // cannot emit markup metacharacters), and into the inline script only as a
 // JSON string literal with '<' hardened to \u003c so a crafted id can never
@@ -18,7 +18,6 @@
 
 import { Router } from 'express'
 import { db } from '../db/schema.js'
-import { readTaskStatusMeta } from '../db/task-log.js'
 
 export const taskLogViewRouter = Router()
 
@@ -33,7 +32,23 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
-function viewHtml(id: string, status: string): string {
+interface LaunchMeta {
+  status: string | null
+  repo: string | null
+  branch: string | null
+  provider: string | null
+  model: string | null
+  auto_commit: number | null
+}
+
+function viewHtml(id: string, meta: LaunchMeta): string {
+  const configuration = [
+    ['Repository', meta.repo],
+    ['Branch', meta.branch],
+    ['Provider', meta.provider],
+    ['Model', meta.model],
+    ['Auto commit', meta.auto_commit == null ? null : meta.auto_commit === 0 ? 'off' : 'on'],
+  ].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value ?? 'unspecified')}</dd></div>`).join('')
   const safeId = escapeHtml(id)
   const encodedId = encodeURIComponent(id)
   const streamPath = `/tasks/${encodedId}/stream`
@@ -42,7 +57,7 @@ function viewHtml(id: string, status: string): string {
   // JSON.stringify yields a valid JS string literal; hardening '<' to \u003c
   // means a '</script>' inside the id can never close the inline block.
   const streamLiteral = JSON.stringify(streamPath).replace(/</g, '\\u003c')
-  const statusLiteral = JSON.stringify(status).replace(/</g, '\\u003c')
+  const statusLiteral = JSON.stringify(meta.status ?? '').replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -83,6 +98,11 @@ function viewHtml(id: string, status: string): string {
       header .id { color: var(--accent); font-family: 'SF Mono', Menlo, monospace; }
       header a { color: var(--accent); text-decoration: none; font-size: 12px; }
       header a:hover { text-decoration: underline; }
+      .configuration { flex-basis: 100%; overflow-wrap: anywhere; }
+      .configuration summary { cursor: pointer; }
+      .configuration dl { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 8px 0 0; }
+      .configuration dt { color: var(--text-dim); }
+      .configuration dd { margin: 2px 0 0; }
       .spacer { flex: 1 1 auto; }
       #status {
         padding: 2px 8px;
@@ -131,6 +151,7 @@ function viewHtml(id: string, status: string): string {
       <a href="${rawHref}">raw text</a>
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
+      <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
     </header>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
@@ -313,12 +334,13 @@ function viewHtml(id: string, status: string): string {
 // GET /tasks/:id/log/view — a distinct path segment from /:id/log, so it never
 // shadows (nor is shadowed by) the byte-slice log route. A missing task id gets
 // the same { error: 'task not found' } JSON 404 the sibling routes return;
-// readTaskStatusMeta is a narrow existence probe (no full-log read).
+// Read only status and launch metadata; never materialize prompt or log here.
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
-  const meta = readTaskStatusMeta(db, req.params.id)
+  const meta = db.prepare('SELECT status, repo, branch, provider, model, auto_commit FROM tasks WHERE id = ?')
+    .get(req.params.id) as LaunchMeta | undefined
   if (!meta) {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  res.type('html').send(viewHtml(req.params.id, meta.status))
+  res.type('html').send(viewHtml(req.params.id, meta))
 })
