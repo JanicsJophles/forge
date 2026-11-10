@@ -33,6 +33,9 @@ function escapeHtml(value: string): string {
 }
 
 interface LaunchMeta {
+  created_at: string | null
+  started_at: string | null
+  completed_at: string | null
   prompt_prefix: Buffer | null
   prompt_bytes: number | null
   status: string | null
@@ -162,6 +165,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <a href="${rawHref}">raw text</a>
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
+      <dl class="configuration" id="timing" aria-live="polite"><div><dt>Created</dt><dd id="createdTime">${escapeHtml(meta.created_at ?? '')}</dd></div><div><dt>Started</dt><dd id="startedTime">${escapeHtml(meta.started_at ?? '')}</dd></div><div><dt>Finished</dt><dd id="finishedTime">${escapeHtml(meta.completed_at ?? '')}</dd></div><div><dt>Duration</dt><dd id="duration">Unavailable</dd></div></dl>
       <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
       <details class="saved-prompt"><summary>Saved prompt</summary><pre>
 ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `<p>Additional prompt content omitted (preview limited to ${MAX_PROMPT_BYTES} UTF-8 bytes). <a href="${escapeHtml(`/tasks/${encodedId}?view=detail`)}">Full task detail JSON</a></p>` : ''}</details>
@@ -173,6 +177,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
     <script>
       (function () {
         var STREAM_URL = ${streamLiteral};
+        var INITIAL_STATUS = '';
         var logEl = document.getElementById('log');
         var statusEl = document.getElementById('status');
         var emptyEl = document.getElementById('empty');
@@ -198,10 +203,52 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           } catch (e) {}
         };
         function taskStatus(status) {
+          INITIAL_STATUS = status;
           statusVersion++;
           cancelEl.hidden = status !== 'running' && status !== 'queued';
           retryEl.hidden = status !== 'completed' && status !== 'failed';
           setStatus(status, status === 'completed' ? 'done' : status === 'failed' ? 'fail' : '');
+        }
+        function timestamp(value) {
+          if (typeof value !== 'string' || !value.trim()) return null;
+          // SQLite stores timezone-less UTC; require a full timestamp, never a local date.
+          var normalized = value.trim().replace(' ', 'T');
+          if (/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?$/.test(normalized)) normalized += 'Z';
+          if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$/.test(normalized)) return NaN;
+          var wall = Date.parse(normalized.slice(0, 19) + 'Z');
+          if (!Number.isFinite(wall) || new Date(wall).toISOString().slice(0, 19) !== normalized.slice(0, 19) || value.length > 64) return NaN;
+          return Date.parse(normalized);
+        }
+        function timing(task) {
+          var values = [task.createdAt, task.startedAt, task.completedAt];
+          ['createdTime', 'startedTime', 'finishedTime'].forEach(function (id, index) {
+            var time = timestamp(values[index]);
+            document.getElementById(id).textContent = time === null
+              ? (index === 1 && task.status === 'queued' ? 'Not started' : index === 2 && (task.status === 'queued' || task.status === 'running') ? 'Not finished' : 'Not recorded')
+              : !Number.isFinite(time) ? 'Invalid timestamp' : new Date(time).toISOString();
+          });
+          var start = timestamp(task.startedAt), finish = timestamp(task.completedAt);
+          document.getElementById('duration').textContent = start === null || finish === null ? 'Unavailable (start or finish not recorded)'
+            : !Number.isFinite(start) || !Number.isFinite(finish) ? 'Unavailable (invalid timestamp)'
+            : finish < start ? 'Unavailable (finish precedes start; clock skew)'
+            : String((finish - start) / 1000) + ' s';
+        }
+        async function refreshTiming() {
+          var timer;
+          try {
+            var controller = new AbortController();
+            var task = await Promise.race([
+              fetch(taskUrl + '?view=status', { signal: controller.signal }).then(function (response) {
+                if (!response.ok) throw new Error('Timing refresh failed');
+                return response.json();
+              }),
+              new Promise(function (_, reject) {
+                timer = setTimeout(function () { controller.abort(); reject(new Error('Timing deadline')); }, 5000);
+              })
+            ]);
+            timing(task);
+          } catch (e) { /* Keep the last recorded timing on failure or deadline. */ }
+          finally { if (timer !== undefined) clearTimeout(timer); }
         }
         async function refreshStatus() {
           var version = statusVersion;
@@ -209,7 +256,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           if (!response.ok) throw new Error('Status refresh failed (HTTP ' + response.status + ')');
           var task = await response.json();
           // A newer stream event takes precedence over an in-flight read.
-          if (version === statusVersion) taskStatus(task.status);
+          if (version === statusVersion) { taskStatus(task.status); timing(task); }
         }
         async function action(retry) {
           cancelEl.disabled = retryEl.disabled = true;
@@ -240,6 +287,10 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
         cancelEl.onclick = function () { return action(false); };
         retryEl.onclick = function () { return action(true); };
         taskStatus(${statusLiteral});
+        timing({ status: INITIAL_STATUS,
+          createdAt: document.getElementById('createdTime').textContent,
+          startedAt: document.getElementById('startedTime').textContent,
+          completedAt: document.getElementById('finishedTime').textContent });
         refreshStatus().catch(function (e) { messageEl.textContent = e.message; });
         function setStatus(text, cls) {
           statusEl.textContent = text;
@@ -338,6 +389,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             reconnectEl.hidden = true;
             taskStatus('completed');
             current.close();
+            refreshTiming();
           });
           current.addEventListener('error', function (e) {
             if (done || source !== current) return;
@@ -350,6 +402,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
               taskStatus('failed');
               reconnectEl.hidden = true;
               current.close();
+              refreshTiming();
             } else if (!done) {
               setStatus('reconnecting…', 'warn');
               reconnectEl.hidden = false;
@@ -371,6 +424,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
 // Bound the prompt in SQLite before crossing into JS; never materialize the log.
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
   const meta = db.prepare(`SELECT status, repo, branch, provider, model, auto_commit,
+    substr(created_at, 1, 64) AS created_at, substr(started_at, 1, 64) AS started_at,
+    substr(completed_at, 1, 64) AS completed_at,
     substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
     length(CAST(prompt AS BLOB)) AS prompt_bytes FROM tasks WHERE id = ?`)
     .get(req.params.id) as LaunchMeta | undefined
