@@ -123,7 +123,7 @@ function checkoutDiffArgs(repoPath: string): string[] {
 
 // Byte cap on the unified diff returned to a reviewer: a response body bound so a
 // large refactor cannot stream an unbounded transcript back on the request thread.
-// The caller receives the first CHANGES_PATCH_BYTE_CAP bytes plus a `truncated` flag.
+// The caller receives at most CHANGES_PATCH_BYTE_CAP bytes plus a `truncated` flag.
 export const CHANGES_PATCH_BYTE_CAP = 1_000_000
 
 // Hard ceiling on the raw diff the probe will buffer before the cap is applied.
@@ -167,7 +167,7 @@ function commitArgs(commitSha: string): string[] {
  * the same tracked footprint getChangedFiles lists, as a reviewable patch. For an
  * unborn HEAD, compare staged content against the empty tree. Read-only probes
  * use argument arrays, each bounded to 2s and SIGKILLed, with core.quotepath=false so non-ASCII paths stay readable.
- * The returned patch is capped at CHANGES_PATCH_BYTE_CAP bytes (first bytes kept,
+ * The returned patch is capped at CHANGES_PATCH_BYTE_CAP bytes (whole UTF-8 codepoints kept for valid input,
  * `truncated: true` when the cap bit). Throws a static-message Error on failure;
  * never surfaces raw Git stderr.
  */
@@ -176,7 +176,12 @@ export function getChangesPatch(repoPath: string, commitSha?: string | null): { 
   if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
     return { patch: diff.toString('utf8'), truncated: false }
   }
-  return { patch: diff.subarray(0, CHANGES_PATCH_BYTE_CAP).toString('utf8'), truncated: true }
+  let end = CHANGES_PATCH_BYTE_CAP
+  // For valid UTF-8, a continuation byte at the first excluded position means
+  // the cap split a codepoint. Drop its leading bytes too (at most three).
+  // This does not validate or repair inherently non-UTF-8 repository content.
+  while (end > CHANGES_PATCH_BYTE_CAP - 3 && (diff[end] & 0xc0) === 0x80) end -= 1
+  return { patch: diff.subarray(0, end).toString('utf8'), truncated: true }
 }
 
 // `git diff --name-status -z HEAD` emits NUL-terminated fields. A normal entry is
