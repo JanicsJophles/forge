@@ -143,7 +143,13 @@ export function gitPull(repoPath: string, opts: RunOpts = {}, timeoutMs = 30_000
 
   // Inspect configuration, not resolution of @{u}: an upstream whose remote
   // tracking ref is missing must still attempt the pull and surface failures.
-  const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], "branch detection")
+  const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"], "branch detection", true)
+  if (!branch) {
+    // Exit 1 can mean detached HEAD, but only a resolvable commit makes this
+    // a valid checkout. Missing/corrupt HEAD must still fail before launch.
+    git(["rev-parse", "--verify", "HEAD^{commit}"], "HEAD verification")
+    return
+  }
   const merge = git(["config", "--get", `branch.${branch}.merge`], "upstream detection", true)
   if (!merge) return
   git(["pull", "--ff-only"], "pull")
