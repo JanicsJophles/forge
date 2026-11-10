@@ -28,7 +28,7 @@ test('history reviews saved reasons, commits and changes using only list respons
   }
   const requests: { url: string; resolve: (value: any) => void; reject: (error: Error) => void }[] = []
   runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], {
-    document: { getElementById: el, createElement: element }, URLSearchParams,
+    document: { getElementById: el, createElement: element }, URLSearchParams, AbortController, setTimeout, clearTimeout,
     fetch: (url: string) => new Promise((resolve, reject) => requests.push({ url, resolve, reject })),
   })
   const tick = () => new Promise(resolve => setImmediate(resolve))
