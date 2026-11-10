@@ -30,7 +30,7 @@ button:disabled{opacity:.5}
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
 <div class="table-region" role="region" aria-label="Task history table" tabindex="0">
-<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th></tr></thead><tbody id="rows"></tbody></table>
+<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th><th>Task ID</th></tr></thead><tbody id="rows"></tbody></table>
 </div>
 <div class="paging" role="group" aria-label="History pages">
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
@@ -150,10 +150,13 @@ async function load(targetCursors, targetSelection = selection) {
         row.children[0].appendChild(reason);
       }
       const cell = document.createElement('td');
-      const link = document.createElement('a');
-      link.href = '/tasks/' + encodeURIComponent(task.id) + '/log/view';
-      link.textContent = 'View logs';
-      cell.appendChild(link);
+      const taskId = typeof task.id === 'string' ? task.id : '';
+      if (taskId) {
+        const link = document.createElement('a');
+        link.href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
+        link.textContent = 'View logs';
+        cell.appendChild(link);
+      }
       row.appendChild(cell);
       const commit = document.createElement('td');
       commit.textContent = typeof task.commitSha === 'string' ? task.commitSha.slice(0, 7) : '';
@@ -178,6 +181,20 @@ async function load(targetCursors, targetSelection = selection) {
         'Auto-commit: ' + (task.autoCommit === true ? 'on' : task.autoCommit === false ? 'off' : 'unspecified'),
       ].join(' · ');
       row.appendChild(settings);
+      const identity = document.createElement('td');
+      const idText = document.createElement('code');
+      idText.textContent = taskId || 'Unavailable';
+      identity.appendChild(idText);
+      if (taskId) {
+        const detail = document.createElement('a');
+        detail.href = '/tasks/' + encodeURIComponent(taskId);
+        detail.textContent = 'Task JSON';
+        const space = document.createElement('span');
+        space.textContent = ' ';
+        identity.appendChild(space);
+        identity.appendChild(detail);
+      }
+      row.appendChild(identity);
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);

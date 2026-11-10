@@ -63,8 +63,11 @@ test('history renders saved launch settings as text from a single list request',
     'Provider: codex · Model: gpt-5 · Auto-commit: on',
     'Provider: <img src=x onerror=evil()> · Model: </td><script>evil()</script> · Auto-commit: unspecified',
   ]
+  const headers = [...html.matchAll(/<th>([^<]+)<\/th>/g)].map(match => match[1])
+  const settingsColumn = headers.indexOf('Launch settings')
+  assert.ok(settingsColumn >= 0)
   for (const [index, row] of rows.entries()) {
-    const cell = row.children.at(-1)
+    const cell = row.children[settingsColumn]
     assert.equal(cell.textContent, expected[index])
     assert.equal(cell.children.length, 0)
     assert.equal(row.children[4].children[0].href, `/tasks/${index}/log/view`)
