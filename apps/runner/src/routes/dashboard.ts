@@ -426,7 +426,8 @@ const HTML = `<!DOCTYPE html>
       <form id="newTaskForm" class="launch-form">
         <div class="launch-row">
           <label for="launchRepo">Repository</label>
-          <select id="launchRepo"><option value="">loading repositories…</option></select>
+          <select id="launchRepo" aria-describedby="launchRepoState"><option value="">loading repositories…</option></select>
+          <span id="launchRepoState" role="status" aria-live="polite" style="overflow-wrap:anywhere"></span>
           <label for="launchProvider">Provider</label>
           <select id="launchProvider">
             <option value="claude">claude</option>
@@ -676,6 +677,25 @@ const HTML = `<!DOCTYPE html>
         button.insertAdjacentElement('afterend', err);
       }
     }
+    let launchRepos = [];
+    let launchReposStale = false;
+    function renderLaunchRepoState() {
+      const path = document.getElementById('launchRepo').value;
+      const repo = launchRepos.find(repo => repo.path === path);
+      const status = document.getElementById('launchRepoState');
+      if (!repo) {
+        status.textContent = path ? 'Repository state unknown.' : 'Select a repository to see checkout state.';
+        return;
+      }
+      const branch = repo.branchError ? 'branch probe failed'
+        : typeof repo.currentBranch === 'string' && repo.currentBranch ? 'branch: ' + repo.currentBranch : 'branch unknown';
+      const dirty = repo.statusError ? 'status unknown (status probe failed)'
+        : repo.dirty === true ? 'Warning: dirty checkout — uncommitted changes'
+        : repo.dirty === false ? 'clean checkout' : 'status unknown';
+      // Repository metadata is untrusted; never interpret it as markup.
+      status.textContent = (launchReposStale ? 'Stale repository state (reload failed): ' : '')
+        + repo.path + ' · ' + branch + ' · ' + dirty;
+    }
     async function loadRepos() {
       // Populate the launcher's repo <select> from GET /repos, once on load.
       // A read endpoint, so it is never auth-gated. Option values are repo paths
@@ -694,9 +714,16 @@ const HTML = `<!DOCTYPE html>
             return '<option value="' + escape(repo.path).replace(/"/g, '&quot;') + '">' + escape(label) + '</option>';
           })
           .join('');
+        const previous = select.value;
         select.innerHTML = options || '<option value="">no repositories available</option>';
+        launchRepos = repos.filter(repo => repo && typeof repo.path === 'string' && repo.path);
+        if (launchRepos.some(repo => repo.path === previous)) select.value = previous;
+        launchReposStale = false;
+        renderLaunchRepoState();
       } catch (e) {
-        select.innerHTML = '<option value="">could not load repositories</option>';
+        launchReposStale = true;
+        if (!launchRepos.length) select.innerHTML = '<option value="">could not load repositories</option>';
+        renderLaunchRepoState();
       }
     }
     async function submitNewTask(event) {
@@ -762,6 +789,7 @@ const HTML = `<!DOCTYPE html>
     function wireNewTaskForm() {
       const form = document.getElementById('newTaskForm');
       if (form) form.onsubmit = submitNewTask;
+      document.getElementById('launchRepo').onchange = renderLaunchRepoState;
       loadRepos();
     }
     function renderTasks(tasks) {
