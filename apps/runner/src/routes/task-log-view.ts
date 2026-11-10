@@ -146,6 +146,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <input type="password" id="authToken" placeholder="Bearer token" autocomplete="off" />
       <button type="button" id="cancel" hidden>Cancel</button>
       <button type="button" id="retry" hidden>Retry</button>
+      <button type="button" id="reconnect" hidden>Reconnect stream</button>
       <span id="actionMessage" role="status" aria-live="polite"></span>
       <div class="spacer"></div>
       <a href="${rawHref}">raw text</a>
@@ -165,6 +166,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         var emptyEl = document.getElementById('empty');
         var cancelEl = document.getElementById('cancel');
         var retryEl = document.getElementById('retry');
+        var reconnectEl = document.getElementById('reconnect');
         var tokenEl = document.getElementById('authToken');
         var messageEl = document.getElementById('actionMessage');
         var taskUrl = STREAM_URL.slice(0, -'/stream'.length);
@@ -278,52 +280,72 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         }
         var opened = false;
         var source;
-        try {
-          source = new EventSource(STREAM_URL);
-        } catch (e) {
-          setStatus('unavailable', 'fail');
-          return;
-        }
-        source.addEventListener('open', function () {
+        function connect() {
           if (done) return;
-          if (opened) {
-            // Each connection starts with a fresh server tail, not a resume.
-            // Clear text in place so a retained transcript node (DOM cap) stays valid.
-            Array.from(logEl.childNodes).forEach(function (node, index) {
-              if (index === 0) node.textContent = '';
-              else node.remove();
-            });
-            document.getElementById('replayNotice').hidden = false;
-            var omitted = document.getElementById('omitted');
-            if (omitted) omitted.hidden = true;
+          var previous = source;
+          source = null;
+          if (previous) previous.close();
+          reconnectEl.hidden = true;
+          setStatus('connecting…', '');
+          var current;
+          try {
+            current = new EventSource(STREAM_URL);
+            source = current;
+          } catch (e) {
+            setStatus('unavailable', 'fail');
+            reconnectEl.hidden = false;
+            return;
           }
-          opened = true;
-          setStatus('streaming', '');
-        });
-        source.addEventListener('log', function (e) {
-          appendLog(parse(e.data));
-        });
-        source.addEventListener('status', function (e) {
-          if (!done) taskStatus(parse(e.data) || 'streaming');
-        });
-        source.addEventListener('complete', function () {
-          done = true;
-          taskStatus('completed');
-          source.close();
-        });
-        source.addEventListener('error', function (e) {
-          // The server's named 'error' frame is a MessageEvent carrying .data;
-          // a bare connection drop is a plain Event with none. Only the former
-          // is a terminal task failure — the latter lets EventSource retry.
-          if (e && typeof e.data === 'string') {
-            done = true;
+          current.addEventListener('open', function () {
+            if (done || source !== current) return;
+            reconnectEl.hidden = true;
+            if (opened) {
+              // Each connection starts with a fresh server tail, not a resume.
+              // Clear text in place so a retained transcript node (DOM cap) stays valid.
+              Array.from(logEl.childNodes).forEach(function (node, index) {
+                if (index === 0) node.textContent = '';
+                else node.remove();
+              });
+              document.getElementById('replayNotice').hidden = false;
+              var omitted = document.getElementById('omitted');
+              if (omitted) omitted.hidden = true;
+            }
+            opened = true;
+            setStatus('streaming', '');
+          });
+          current.addEventListener('log', function (e) {
+            if (done || source !== current) return;
             appendLog(parse(e.data));
-            taskStatus('failed');
-            source.close();
-          } else if (!done) {
-            setStatus('reconnecting…', 'warn');
-          }
-        });
+          });
+          current.addEventListener('status', function (e) {
+            if (!done && source === current) taskStatus(parse(e.data) || 'streaming');
+          });
+          current.addEventListener('complete', function () {
+            if (done || source !== current) return;
+            done = true;
+            reconnectEl.hidden = true;
+            taskStatus('completed');
+            current.close();
+          });
+          current.addEventListener('error', function (e) {
+            if (done || source !== current) return;
+            // The server's named 'error' frame is a MessageEvent carrying .data;
+            // a bare connection drop is a plain Event with none. Only the former
+            // is a terminal task failure — the latter lets EventSource retry.
+            if (e && typeof e.data === 'string') {
+              done = true;
+              appendLog(parse(e.data));
+              taskStatus('failed');
+              reconnectEl.hidden = true;
+              current.close();
+            } else if (!done) {
+              setStatus('reconnecting…', 'warn');
+              reconnectEl.hidden = false;
+            }
+          });
+        }
+        reconnectEl.onclick = connect;
+        connect();
       })();
     </script>
   </body>
