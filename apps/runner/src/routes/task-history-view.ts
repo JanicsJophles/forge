@@ -27,7 +27,20 @@ const newer = document.getElementById('newer');
 const latest = document.getElementById('latest');
 let generation = 0;
 let next = null;
-let selection = { repo: '', status: '' };
+const browser = typeof window === 'undefined' ? null : window;
+function readSelection() {
+  const params = new URLSearchParams(browser ? browser.location.search : '');
+  const requestedStatus = params.get('status') || '';
+  const valid = ['', 'queued', 'running', 'completed', 'failed'].includes(requestedStatus);
+  return { repo: params.get('repo') || '', status: valid ? requestedStatus : '', invalidStatus: !valid };
+}
+function populate(selection) {
+  repo.value = selection.repo;
+  status.value = selection.status;
+}
+let selection = readSelection();
+populate(selection);
+let displayedSelection = null;
 let cursors = [null];
 let failedCursors = cursors;
 let loading = false;
@@ -89,13 +102,15 @@ async function load(targetCursors) {
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);
+    displayedSelection = { repo: query.get('repo') || '', status: query.get('status') || '' };
     next = response.headers.get('X-Next-Before');
     cursors = targetCursors;
-    message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
+    message.textContent = (tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.') + (selection.invalidStatus ? ' Invalid URL status ignored; showing all statuses.' : '');
   } catch (error) {
     if (current !== generation) return;
     failedCursors = targetCursors;
-    message.textContent = 'Request failed: ' + error.message;
+    const previous = displayedSelection && (displayedSelection.repo !== (query.get('repo') || '') || displayedSelection.status !== (query.get('status') || ''));
+    message.textContent = 'Request failed: ' + error.message + (previous ? ' Rows still show previous filters: ' + JSON.stringify(displayedSelection) : '');
     retry.hidden = false;
   } finally {
     if (current === generation) {
@@ -106,6 +121,13 @@ async function load(targetCursors) {
 }
 function reset() {
   selection = { repo: repo.value, status: status.value };
+  if (browser) {
+    const params = new URLSearchParams();
+    if (selection.repo) params.set('repo', selection.repo);
+    if (selection.status) params.set('status', selection.status);
+    const url = browser.location.pathname + (params.size ? '?' + params : '') + browser.location.hash;
+    if (url !== browser.location.pathname + browser.location.search + browser.location.hash) browser.history.pushState(null, '', url);
+  }
   next = null;
   cursors = [null];
   return load(cursors);
@@ -117,6 +139,13 @@ older.onclick = () => { if (!older.disabled) return load([...cursors, next]); };
 newer.onclick = () => { if (!newer.disabled) return load(cursors.slice(0, -1)); };
 latest.onclick = () => { if (!latest.disabled) return load([null]); };
 retry.onclick = () => load(failedCursors);
+if (browser) browser.addEventListener('popstate', () => {
+  selection = readSelection();
+  populate(selection);
+  next = null;
+  cursors = [null];
+  return load(cursors);
+});
 load(cursors);
 </script></body></html>`)
 })
