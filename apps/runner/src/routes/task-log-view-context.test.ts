@@ -5,7 +5,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
 
-test('log viewer projects and escapes launch context without reading prompt or log', async t => {
+test('log viewer projects and escapes launch context without reading the log', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'forge-log-context-'))
   process.env.DATA_DIR = directory
   process.env.DOTENV_CONFIG_PATH = path.join(directory, 'no-env-file')
@@ -45,7 +45,7 @@ test('log viewer projects and escapes launch context without reading prompt or l
   assert.equal(html.split(escaped).length - 1, 4)
   assert.ok(!html.includes(hostile))
   assert.match(html, /<dt>Auto commit<\/dt><dd>on<\/dd>/)
-  assert.doesNotMatch(html, /PRIVATE_PROMPT|PRIVATE_LOG/)
+  assert.doesNotMatch(html, /PRIVATE_LOG/)
   const legacy = await (await fetch(`${base}/legacy/log/view`)).text()
   for (const [label, value] of [['Repository', '/repo'], ['Branch', 'topic'], ['Provider', 'codex'],
     ['Model', 'unspecified'], ['Auto commit', 'unspecified']]) {
@@ -59,7 +59,7 @@ test('log viewer projects and escapes launch context without reading prompt or l
   assert.deepEqual(await missing.json(), { error: 'task not found' })
   assert.equal(queries.length, 4)
   for (const query of queries) {
-    assert.equal(query, 'SELECT status, repo, branch, provider, model, auto_commit FROM tasks WHERE id = ?')
-    assert.doesNotMatch(query, /\b(prompt|log|error_message)\b|\*/i)
+    assert.match(query, /substr\(CAST\(prompt AS BLOB\), 1, 16384\)/)
+    assert.doesNotMatch(query, /\b(log|error_message)\b|\*/i)
   }
 })
