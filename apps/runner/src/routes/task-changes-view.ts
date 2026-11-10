@@ -4,15 +4,20 @@ import { getChangesPatch, getChangedFiles, summarizeChangedFiles, boundChangedFi
 
 export const taskChangesViewRouter = Router()
 
+const MAX_PROMPT_BYTES = 16 * 1024
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
-  // Avoid loading the task's potentially large log just to locate its checkout.
-  const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
-    { repo: string; commit_sha: string | null } | undefined
+  // Bound the prompt in SQLite; never load the stored log for review.
+  const task = db.prepare(`SELECT repo, commit_sha,
+    substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
+    length(CAST(prompt AS BLOB)) AS prompt_bytes FROM tasks WHERE id = ?`).get(req.params.id) as
+    { repo: string; commit_sha: string | null;
+      prompt_prefix: Buffer | null; prompt_bytes: number | null } | undefined
   if (!task) {
     res.status(404).json({ error: 'task not found' })
     return
@@ -37,6 +42,10 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
         : line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'context'
     return `<span class="${kind}">${escapeHtml(line)}</span>`
   }).join('\n')
+  // Streaming decode omits a partial final UTF-8 codepoint at the byte cap.
+  const prompt = new TextDecoder().decode(task.prompt_prefix ?? new Uint8Array(), { stream: true })
+  const promptTruncated = (task.prompt_bytes ?? 0) > MAX_PROMPT_BYTES
+  const detailHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}`)
   const id = escapeHtml(req.params.id)
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
   res.setHeader('X-Patch-Truncated', String(result.truncated))
@@ -58,6 +67,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     .file { color: #93c5fd; font-weight: bold; }
     .hunk { color: #c4b5fd; }
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .saved-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
   </style>
 </head>
@@ -67,6 +77,11 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     <a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
   </header>
   <main>
+    <details>
+      <summary>Saved prompt</summary>
+      ${prompt ? `<pre class="saved-prompt">${escapeHtml(prompt)}</pre>` : '<p>No saved prompt is available.</p>'}
+      ${promptTruncated ? `<p class="warning">Prompt truncated: showing at most ${MAX_PROMPT_BYTES} UTF-8 bytes. See the saved prompt in <a href="${detailHref}">detail JSON</a>.</p>` : ''}
+    </details>
     ${task.commit_sha != null
       ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
       : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
