@@ -128,6 +128,8 @@ function readGitBuffer(args: string[], repoPath: string): Buffer {
   }
 }
 
+// Diff/show probes disable external diff and textconv: repository configuration
+// must not execute helpers or substitute their output during review reads.
 // Accept only recorded object IDs, never arbitrary revisions or Git options.
 // --root compares a parentless commit with the empty tree; merge commits use
 // their first parent so file and patch responses describe the same footprint.
@@ -135,7 +137,7 @@ function commitArgs(commitSha: string): string[] {
   if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(commitSha)) {
     throw new Error('Git change inspection unavailable; invalid commit ID')
   }
-  return ['show', '--format=', '--root', '--diff-merges=first-parent', commitSha]
+  return ['show', '--no-ext-diff', '--no-textconv', '--format=', '--root', '--diff-merges=first-parent', commitSha]
 }
 
 /**
@@ -149,7 +151,7 @@ function commitArgs(commitSha: string): string[] {
  * never surfaces raw Git stderr.
  */
 export function getChangesPatch(repoPath: string, commitSha?: string | null): { patch: string; truncated: boolean } {
-  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--'] : ['diff', 'HEAD'])], repoPath)
+  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--'] : ['diff', '--no-ext-diff', '--no-textconv', 'HEAD'])], repoPath)
   if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
     return { patch: diff.toString('utf8'), truncated: false }
   }
@@ -218,7 +220,7 @@ export function getChangedFiles(repoPath: string, commitSha?: string | null): Ch
   if (commitSha != null) {
     parseNameStatusZ(readGit([...commitArgs(commitSha), '--name-status', '-z', '--'], repoPath), files)
   } else {
-    parseNameStatusZ(readGit(['diff', '--name-status', '-z', 'HEAD'], repoPath), files)
+    parseNameStatusZ(readGit(['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', 'HEAD'], repoPath), files)
     parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z'], repoPath), files)
   }
   return [...files].map(([path, status]) => ({ path, status }))
