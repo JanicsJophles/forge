@@ -737,9 +737,16 @@ const HTML = `<!DOCTYPE html>
       const dirty = repo.statusError ? 'status unknown (status probe failed)'
         : repo.dirty === true ? 'Warning: dirty checkout — uncommitted changes'
         : repo.dirty === false ? 'clean checkout' : 'status unknown';
+      const count = value => Number.isSafeInteger(value) && value >= 0 ? String(value) : 'unknown';
+      const tracking = 'local tracking (no fetch; freshness unknown): ahead ' + count(repo.ahead)
+        + ', behind ' + count(repo.behind);
+      const head = repo.head && typeof repo.head === 'object' ? repo.head : {};
+      const sha = typeof head.sha === 'string' && /^[0-9a-f]{4,40}$/i.test(head.sha) ? head.sha : '';
+      const subject = typeof head.subject === 'string' && head.subject.trim() ? head.subject : '';
+      const revision = 'HEAD: ' + (sha || 'revision unknown') + (subject ? ' — ' + subject : '');
       // Repository metadata is untrusted; never interpret it as markup.
       status.textContent = (launchReposStale ? 'Stale repository state (reload failed): ' : '')
-        + repo.path + ' · ' + branch + ' · ' + dirty;
+        + repo.path + ' · ' + branch + ' · ' + dirty + ' · ' + tracking + ' · ' + revision;
     }
     async function loadRepos() {
       // Populate the launcher's repo <select> from GET /repos, once on load.
