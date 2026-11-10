@@ -33,6 +33,8 @@ function escapeHtml(value: string): string {
 }
 
 interface LaunchMeta {
+  prompt_prefix: Buffer | null
+  prompt_bytes: number | null
   status: string | null
   repo: string | null
   branch: string | null
@@ -41,7 +43,12 @@ interface LaunchMeta {
   auto_commit: number | null
 }
 
+const MAX_PROMPT_BYTES = 16 * 1024
+
 function viewHtml(id: string, meta: LaunchMeta): string {
+  // Streaming decode drops an incomplete final UTF-8 sequence at the byte cap.
+  const prompt = new TextDecoder().decode(meta.prompt_prefix ?? new Uint8Array(), { stream: true })
+  const promptTruncated = (meta.prompt_bytes ?? 0) > MAX_PROMPT_BYTES
   const configuration = [
     ['Repository', meta.repo],
     ['Branch', meta.branch],
@@ -103,6 +110,9 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       .configuration dl { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 8px 0 0; }
       .configuration dt { color: var(--text-dim); }
       .configuration dd { margin: 2px 0 0; }
+      .saved-prompt { flex-basis: 100%; min-width: 0; }
+      .saved-prompt summary { cursor: pointer; }
+      .saved-prompt pre { max-height: 30vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
       .spacer { flex: 1 1 auto; }
       #status {
         padding: 2px 8px;
@@ -153,6 +163,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
       <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
+      <details class="saved-prompt"><summary>Saved prompt</summary><pre>
+${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `<p>Additional prompt content omitted (preview limited to ${MAX_PROMPT_BYTES} UTF-8 bytes). <a href="${escapeHtml(`/tasks/${encodedId}?view=detail`)}">Full task detail JSON</a></p>` : ''}</details>
     </header>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
@@ -356,9 +368,11 @@ function viewHtml(id: string, meta: LaunchMeta): string {
 // GET /tasks/:id/log/view — a distinct path segment from /:id/log, so it never
 // shadows (nor is shadowed by) the byte-slice log route. A missing task id gets
 // the same { error: 'task not found' } JSON 404 the sibling routes return;
-// Read only status and launch metadata; never materialize prompt or log here.
+// Bound the prompt in SQLite before crossing into JS; never materialize the log.
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
-  const meta = db.prepare('SELECT status, repo, branch, provider, model, auto_commit FROM tasks WHERE id = ?')
+  const meta = db.prepare(`SELECT status, repo, branch, provider, model, auto_commit,
+    substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
+    length(CAST(prompt AS BLOB)) AS prompt_bytes FROM tasks WHERE id = ?`)
     .get(req.params.id) as LaunchMeta | undefined
   if (!meta) {
     res.status(404).json({ error: 'task not found' })
