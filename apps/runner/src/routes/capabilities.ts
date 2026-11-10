@@ -3,6 +3,10 @@ import { config } from '../config.js'
 import { version } from '../version.js'
 import { MAX_LOG_SLICE_BYTES } from '../db/task-log.js'
 import { LOG_TAIL_BYTES } from '../db/task-projection.js'
+import { RETENTION_INTERVAL_MS } from '../db/retention.js'
+
+// config evaluates retentionDaysFromEnv once at module load, shared with startup.
+const retentionDays = config.retentionDays
 
 export const capabilitiesRouter = Router()
 
@@ -24,6 +28,12 @@ capabilitiesRouter.get('/capabilities', (_req, res) => {
       version,
       gitShaPinned: config.gitSha !== undefined,
       commitMessagePrefix: config.commitMessagePrefix,
+    },
+    // Pruning frees reusable SQLite pages; it does not promise file shrinkage.
+    retention: {
+      enabled: retentionDays > 0,
+      days: retentionDays,
+      intervalSeconds: RETENTION_INTERVAL_MS / 1000,
     },
     limits: {
       maxConcurrentTasks: config.maxConcurrentTasks,
