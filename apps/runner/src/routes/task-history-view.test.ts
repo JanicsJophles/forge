@@ -92,7 +92,7 @@ test('history shell pages opaque same-second cursors, resets filters and fences 
   answer(7, [task('recovered')], 'retry-anchor')
   await tick()
   el('older').onclick()
-  requests[8].resolve({ ok: false, status: 404 })
+  requests[8].resolve({ ok: false, status: 503 })
   await tick()
   el('retry').onclick()
   assert.equal(new URL(requests[9].url, 'http://fake').searchParams.get('before'), 'retry-anchor')
