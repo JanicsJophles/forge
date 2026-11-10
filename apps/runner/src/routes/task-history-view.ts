@@ -30,7 +30,7 @@ button:disabled{opacity:.5}
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
 <div class="table-region" role="region" aria-label="Task history table" tabindex="0">
-<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th><th>Task ID</th></tr></thead><tbody id="rows"></tbody></table>
+<table><caption id="displayed">No task history loaded.</caption><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th><th>Task ID</th></tr></thead><tbody id="rows"></tbody></table>
 </div>
 <div class="paging" role="group" aria-label="History pages">
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
@@ -71,6 +71,7 @@ function completionText(task) {
 const repo = document.getElementById('repo');
 const status = document.getElementById('status');
 const rows = document.getElementById('rows');
+const displayed = document.getElementById('displayed');
 const message = document.getElementById('message');
 const older = document.getElementById('older');
 const retry = document.getElementById('retry');
@@ -86,6 +87,11 @@ let loading = false;
 let successfulPage = null;
 let failedSelection = selection;
 let cancelRequest = null;
+function describe(pageCursors, pageSelection) {
+  return 'Repository: ' + (pageSelection.repo || 'All repositories') +
+    '; Status: ' + (pageSelection.status || 'All statuses') + '; Page ' + pageCursors.length +
+    (pageCursors[pageCursors.length - 1] ? ' (before ' + pageCursors[pageCursors.length - 1] + ')' : ' (latest)');
+}
 function updateControls() {
   refresh.disabled = loading;
   older.disabled = loading || !next;
@@ -202,12 +208,17 @@ async function load(targetCursors, targetSelection = selection) {
     cursors = targetCursors;
     selection = targetSelection;
     successfulPage = { cursors, selection };
+    displayed.textContent = describe(cursors, selection);
     message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
   } catch (error) {
     if (current !== generation) return;
     failedCursors = targetCursors;
     failedSelection = targetSelection;
-    message.textContent = 'Request failed: ' + error.message;
+    message.textContent = 'Request failed: ' + error.message + ' Requested ' + describe(targetCursors, targetSelection) +
+      (successfulPage ? '. Rows still show previous filters/page; see displayed selection.' : '. No task history loaded.');
+    displayed.textContent = successfulPage
+      ? 'Stale — showing last successful selection. ' + describe(successfulPage.cursors, successfulPage.selection)
+      : 'No task history loaded.';
     retry.hidden = false;
   } finally {
     clearTimeout(timer);
@@ -219,10 +230,7 @@ async function load(targetCursors, targetSelection = selection) {
   }
 }
 function reset() {
-  selection = { repo: repo.value, status: status.value };
-  next = null;
-  cursors = [null];
-  return load(cursors);
+  return load([null], { repo: repo.value, status: status.value });
 }
 document.getElementById('filters').onsubmit = event => { event.preventDefault(); return reset(); };
 repo.onchange = reset;
