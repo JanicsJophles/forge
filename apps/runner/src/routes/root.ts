@@ -115,12 +115,44 @@ ${rows}
         }
         var hasHealth = false
         var hasTasks = false
-        function refreshTasks() {
-          return fetch('/tasks?limit=5', { cache: 'no-store', headers: { accept: 'application/json' } })
-          .then(function (r) {
-            if (!r.ok) throw new Error('tasks ' + r.status)
-            return r.json()
+        // Keep ownership until the actual transport/body settles, even after a
+        // deadline. Abort-ignoring transports must not accumulate every cycle.
+        var pendingReads = Object.create(null)
+        function readJson(url) {
+          if (pendingReads[url]) return Promise.reject(new Error('read still pending'))
+          var controller = new AbortController()
+          var owner = {}
+          pendingReads[url] = owner
+          return new Promise(function (resolve, reject) {
+            var expired = false
+            var timer = setTimeout(function () {
+              expired = true
+              reject(new Error('read deadline'))
+              controller.abort()
+            }, 10000)
+            Promise.resolve().then(function () {
+              return fetch(url, {
+                cache: 'no-store', headers: { accept: 'application/json' }, signal: controller.signal
+              })
+            }).then(function (response) {
+              if (expired) throw new Error('read expired')
+              if (!response.ok) throw new Error('read ' + response.status)
+              return response.json()
+            }).then(function (value) {
+              finish()
+              if (!expired) resolve(value)
+            }, function (error) {
+              finish()
+              if (!expired) reject(error)
+            })
+            function finish() {
+              clearTimeout(timer)
+              if (pendingReads[url] === owner) delete pendingReads[url]
+            }
           })
+        }
+        function refreshTasks() {
+          return readJson('/tasks?limit=5')
           .then(function (tasks) {
             if (!Array.isArray(tasks)) throw new Error('invalid tasks')
             var list = document.getElementById('recent-tasks')
@@ -150,11 +182,7 @@ ${rows}
           })
         }
         function refreshHealth() {
-          return fetch('/health', { cache: 'no-store', headers: { accept: 'application/json' } })
-          .then(function (r) {
-            if (!r.ok) throw new Error('health ' + r.status)
-            return r.json()
-          })
+          return readJson('/health')
           .then(function (h) {
             if (!h || typeof h !== 'object' || Array.isArray(h)) throw new Error('invalid health')
             var accepting = h.acceptingTasks === true
@@ -189,8 +217,8 @@ ${rows}
           })
         }
         function refresh() {
-          // Schedule only after both independent updates settle: slow requests
-          // cannot overlap later cycles or build up a queue of pending polls.
+          // Each update settles by its deadline, independently of transport abort.
+          // readJson retains ownership of any underlying read still pending.
           Promise.all([refreshTasks(), refreshHealth()]).then(function () {
             setTimeout(refresh, 5000)
           })

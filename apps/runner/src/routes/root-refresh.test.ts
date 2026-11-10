@@ -39,9 +39,11 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
       assert.equal(options.cache, 'no-store')
       return new Promise<Reply>((resolve, reject) => requests.push({ url, resolve, reject }))
     },
+    AbortController,
+    clearTimeout: () => {},
     setTimeout: (callback: () => void, delay: number) => {
-      assert.equal(delay, 5000)
-      timers.push(callback)
+      if (delay === 5000) timers.push(callback)
+      else assert.equal(delay, 10000)
     },
   })
   const reply = (index: number, value: unknown, ok = true) =>
@@ -51,6 +53,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   const tasks = (status: string) => Array.from({ length: 6 }, () => ({
     id: '12345678-abcd', repo: '/opt/repos/<img>', status,
   }))
+  await flush()
   assert.deepEqual(requests.map(r => r.url), ['/tasks?limit=5', '/health'])
   // An initial failed endpoint does not suppress the successful one.
   requests[0].reject(new Error('offline'))
@@ -60,6 +63,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   assert.equal(el('accepting').textContent, 'yes')
   assert.equal(timers.length, 1)
   timers.shift()!()
+  await flush()
   reply(2, tasks('<b>running</b>'))
   await flush()
   assert.equal(el('recent-tasks').children.length, 5)
@@ -74,6 +78,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   assert.equal(el('slots').textContent, '2 / 2')
   assert.equal(el('accepting').textContent, 'no (at capacity)')
   timers.shift()!()
+  await flush()
   reply(4, [], false)
   requests[5].reject(new Error('offline'))
   await flush()
@@ -82,6 +87,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   assert.equal(el('recent-tasks').children.length, 5)
   assert.equal(el('slots').textContent, '2 / 2')
   timers.shift()!()
+  await flush()
   reply(6, tasks('completed'))
   reply(7, health(0))
   await flush()
@@ -91,6 +97,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   assert.equal(el('slots').textContent, '0 / 2')
   // The reverse partial failure also permits task updates.
   timers.shift()!()
+  await flush()
   reply(8, [])
   reply(9, null)
   await flush()
