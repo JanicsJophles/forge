@@ -21,6 +21,7 @@ for (const branchFails of [false, true]) {
           if (path === subject && branchFails) throw new Error('private branch stderr')
           return path === subject ? 'unknown' : 'healthy'
         },
+        getAheadBehind: () => ({ ahead: 0, behind: 0 }),
         getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
         hasUncommittedChanges: path => {
           statusReads.push(path)
@@ -30,9 +31,9 @@ for (const branchFails of [false, true]) {
       })
       assert.deepEqual(repos, [
         { name: 'sibling', path: sibling, currentBranch: 'healthy', dirty: false,
-          head: { sha: 'abc1234', subject: 'initial' } },
+          head: { sha: 'abc1234', subject: 'initial' }, ahead: 0, behind: 0 },
         { name: 'subject', path: subject, currentBranch: 'unknown', dirty: statusFails,
-          head: { sha: 'abc1234', subject: 'initial' },
+          head: { sha: 'abc1234', subject: 'initial' }, ahead: 0, behind: 0,
           ...(branchFails ? { branchError: 'unavailable' } : {}),
           ...(statusFails ? { statusError: 'unavailable' } : {}) },
       ])

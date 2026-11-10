@@ -10,6 +10,7 @@ const cleanGit = {
   getCurrentBranch: () => 'main',
   getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
   hasUncommittedChanges: () => false,
+  getAheadBehind: () => null,
 }
 
 function fixture(t: { after: (fn: () => void) => void }) {
@@ -30,7 +31,7 @@ test('includes an allowed checkout root and preserves response fields', t => {
   const path = checkout('repo')
   assert.deepEqual(discoverRepos([path], cleanGit), [
     { name: 'repo', path, currentBranch: 'main', dirty: false,
-      head: { sha: 'abc1234', subject: 'initial' } },
+      head: { sha: 'abc1234', subject: 'initial' }, ahead: null, behind: null },
   ])
 })
 
@@ -67,12 +68,14 @@ test('status failure is conservative and does not hide healthy repositories', t 
       if (path === bad) throw new Error('sensitive stderr must not be exposed')
       return false
     },
+    getAheadBehind: () => null,
   })
   assert.deepEqual(repos, [
     { name: 'bad', path: bad, currentBranch: 'unknown', dirty: true,
-      head: { sha: 'abc1234', subject: 'initial' }, branchError: 'unavailable', statusError: 'unavailable' },
+      head: { sha: 'abc1234', subject: 'initial' }, ahead: null, behind: null,
+      branchError: 'unavailable', statusError: 'unavailable' },
     { name: 'good', path: good, currentBranch: 'main', dirty: false,
-      head: { sha: 'abc1234', subject: 'initial' } },
+      head: { sha: 'abc1234', subject: 'initial' }, ahead: null, behind: null },
   ])
 })
 
@@ -87,11 +90,13 @@ test('a failed head probe yields head null without hiding healthy repositories',
       return { sha: 'def5678', subject: 'second commit' }
     },
     hasUncommittedChanges: () => false,
+    getAheadBehind: () => null,
   })
   assert.deepEqual(repos, [
-    { name: 'empty', path: empty, currentBranch: 'main', dirty: false, head: null },
+    { name: 'empty', path: empty, currentBranch: 'main', dirty: false, head: null,
+      ahead: null, behind: null },
     { name: 'ready', path: ready, currentBranch: 'main', dirty: false,
-      head: { sha: 'def5678', subject: 'second commit' } },
+      head: { sha: 'def5678', subject: 'second commit' }, ahead: null, behind: null },
   ])
 })
 

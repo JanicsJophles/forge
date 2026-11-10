@@ -21,6 +21,7 @@ const cleanGit = {
   getCurrentBranch: () => 'main',
   getHeadCommit: () => ({ sha: 'abc1234', subject: 'initial' }),
   hasUncommittedChanges: () => false,
+  getAheadBehind: () => null,
 }
 
 test('direct aliases and overlapping containers yield one canonical entry and Git read', t => {
@@ -37,9 +38,10 @@ test('direct aliases and overlapping containers yield one canonical entry and Gi
       getCurrentBranch: path => { reads.push(path); return 'main' },
       getHeadCommit: path => { reads.push(path); return { sha: 'abc1234', subject: 'initial' } },
       hasUncommittedChanges: path => { reads.push(path); return false },
+      getAheadBehind: path => { reads.push(path); return { ahead: 2, behind: 3 } },
     }), [{ name: 'repo', path: repo, currentBranch: 'main', dirty: false,
-      head: { sha: 'abc1234', subject: 'initial' } }])
-    assert.deepEqual(reads, [repo, repo, repo])
+      head: { sha: 'abc1234', subject: 'initial' }, ahead: 2, behind: 3 }])
+    assert.deepEqual(reads, [repo, repo, repo, repo])
   }
 })
 

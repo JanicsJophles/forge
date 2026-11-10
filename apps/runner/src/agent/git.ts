@@ -7,7 +7,7 @@ interface RunOpts {
 
 // Bind every Git subprocess to its supplied cwd, even when the runner was
 // launched from a Git hook or another checkout. Never alter the parent env.
-function gitEnvironment(): NodeJS.ProcessEnv {
+export function gitEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env }
   for (const key of [
     "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
