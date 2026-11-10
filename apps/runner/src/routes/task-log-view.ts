@@ -128,6 +128,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         font-size: 12px;
         line-height: 1.5;
       }
+      #findForm { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 20px; }
+      #findScope { flex-basis: 100%; color: var(--text-dim); }
       #empty { color: var(--text-dim); }
       #omitted { margin: 0; padding: 8px 20px; color: var(--warn); }
       footer {
@@ -153,6 +155,14 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <a href="/dashboard">dashboard</a>
       <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
     </header>
+    <form id="findForm" role="search">
+      <label for="findText">Find literal text in currently retained log</label>
+      <input id="findText" type="text" aria-describedby="findScope" autocomplete="off" />
+      <button id="findPrevious" type="button" disabled>Find previous</button>
+      <button id="findNext" type="submit" disabled>Find next</button>
+      <span id="findResult" role="status" aria-live="polite">Enter text to find</span>
+      <span id="findScope">Case-sensitive; retained output only. Earlier omitted output is not searched. Enter: next; Shift+Enter: previous. Clear to resume tail-follow.</span>
+    </form>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log"><span id="empty">waiting for output…</span></pre>
@@ -173,6 +183,78 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         var MAX_LOG_UNITS = 128 * 1024;
         var transcript = null;
         var omittedEl = document.getElementById('omitted');
+        var findEl = document.getElementById('findText');
+        var findResult = document.getElementById('findResult');
+        var findNext = document.getElementById('findNext');
+        var findPrevious = document.getElementById('findPrevious');
+        var selectedStart = -1;
+        var matchCount = 0;
+        var findRange = null;
+        function clearFindRange() {
+          if (!findRange) return;
+          var selection = window.getSelection();
+          if (selection) {
+            for (var i = selection.rangeCount - 1; i >= 0; i--) {
+              if (selection.getRangeAt(i) === findRange) selection.removeRange(findRange);
+            }
+          }
+          findRange = null;
+        }
+        // Scan the bounded text directly: no regex, match arrays, or DOM wrappers.
+        function updateFind(target, reveal) {
+          clearFindRange();
+          var text = transcript ? transcript.textContent : '';
+          var query = findEl.value;
+          var chosen = -1;
+          var current = 0;
+          matchCount = 0;
+          if (query) {
+            for (var at = text.indexOf(query); at !== -1; at = text.indexOf(query, at + query.length)) {
+              matchCount++;
+              if (chosen === -1 || (chosen < target && at <= target)) {
+                chosen = at;
+                current = matchCount;
+              }
+            }
+          }
+          selectedStart = chosen;
+          findNext.disabled = findPrevious.disabled = matchCount === 0;
+          findResult.textContent = !query ? 'Enter text to find' : !matchCount ?
+            'No matches in retained log' : current + ' / ' + matchCount + ' in retained log';
+          if (chosen < 0) return;
+          findRange = document.createRange();
+          findRange.setStart(transcript, chosen);
+          findRange.setEnd(transcript, chosen + query.length);
+          var selection = window.getSelection();
+          if (selection) { selection.removeAllRanges(); selection.addRange(findRange); }
+          if (reveal) {
+            var rect = findRange.getBoundingClientRect();
+            var viewport = logEl.getBoundingClientRect();
+            logEl.scrollTop += rect.top - viewport.top - logEl.clientHeight / 2;
+          }
+        }
+        function navigateFind(backwards) {
+          var text = transcript ? transcript.textContent : '';
+          var query = findEl.value;
+          if (!query) return;
+          var target = backwards ? text.lastIndexOf(query, selectedStart - 1) :
+            text.indexOf(query, selectedStart + query.length);
+          if (backwards && selectedStart <= 0) target = -1;
+          if (target < 0) target = backwards ? text.lastIndexOf(query) : 0;
+          updateFind(target, true);
+        }
+        findEl.oninput = function () { updateFind(0, true); };
+        document.getElementById('findForm').onsubmit = function (event) {
+          event.preventDefault();
+          navigateFind(false);
+        };
+        findEl.onkeydown = function (event) {
+          if (event.key === 'Enter' && event.shiftKey) {
+            event.preventDefault();
+            navigateFind(true);
+          }
+        };
+        findPrevious.onclick = function () { navigateFind(true); };
         var done = false;
         var statusVersion = 0;
         try { tokenEl.value = sessionStorage.getItem('forge.authToken') || ''; } catch (e) {}
@@ -238,7 +320,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         }
         function appendLog(text) {
           if (typeof text !== 'string' || text.length === 0) return;
-          var pinned = atBottom();
+          var pinned = atBottom() && selectedStart < 0;
+          clearFindRange();
           var previousTop = logEl.scrollTop;
           if (emptyEl) { emptyEl.remove(); emptyEl = null; }
           if (!transcript) {
@@ -263,6 +346,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
             removedHeight = oldHeight - logEl.scrollHeight;
           }
           transcript.textContent = combined.slice(cut);
+          updateFind(Math.max(0, selectedStart - cut), false);
           if (pinned) logEl.scrollTop = logEl.scrollHeight;
           else logEl.scrollTop = Math.max(0, previousTop - removedHeight);
         }
@@ -289,10 +373,12 @@ function viewHtml(id: string, meta: LaunchMeta): string {
           if (opened) {
             // Each connection starts with a fresh server tail, not a resume.
             // Clear text in place so a retained transcript node (DOM cap) stays valid.
+            clearFindRange();
             Array.from(logEl.childNodes).forEach(function (node, index) {
               if (index === 0) node.textContent = '';
               else node.remove();
             });
+            updateFind(0, false);
             document.getElementById('replayNotice').hidden = false;
             var omitted = document.getElementById('omitted');
             if (omitted) omitted.hidden = true;
