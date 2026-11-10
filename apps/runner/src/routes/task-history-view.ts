@@ -14,9 +14,41 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
-<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th></tr></thead><tbody id="rows"></tbody></table>
+<table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th></tr></thead><tbody id="rows"></tbody></table>
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 <script>
+// SQLite stores UTC without a zone; require a zone for ISO timestamps.
+function parseTimestamp(value) {
+  if (typeof value !== 'string') return null;
+  const sqlite = /^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?$/.test(value);
+  const normalized = sqlite ? value.replace(' ', 'T') + 'Z' : value;
+  if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,3})?(?:Z|[+-]\\d{2}:\\d{2})$/.test(normalized)) return null;
+  if (Number(normalized.slice(11, 13)) > 23 || Number(normalized.slice(14, 16)) > 59 || Number(normalized.slice(17, 19)) > 59) return null;
+  // Date.parse normalizes impossible calendar dates such as February 30.
+  const calendar = new Date(normalized.slice(0, 10) + 'T00:00:00Z');
+  if (!Number.isFinite(calendar.getTime()) || calendar.toISOString().slice(0, 10) !== normalized.slice(0, 10)) return null;
+  const time = Date.parse(normalized);
+  return Number.isFinite(time) ? time : null;
+}
+function durationText(task, readTime) {
+  if (task.status === 'queued') return 'Unknown';
+  const active = task.status === 'running';
+  if (!active && task.status !== 'completed' && task.status !== 'failed') return 'Unknown';
+  const start = parseTimestamp(task.startedAt);
+  const end = active ? readTime : parseTimestamp(task.completedAt);
+  if (start === null || end === null) return active ? 'Running · unknown elapsed' : 'Unknown';
+  const seconds = Math.floor(Math.max(0, end - start) / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  const elapsed = hours ? hours + 'h ' + minutes + 'm ' + seconds % 60 + 's'
+    : minutes ? minutes + 'm ' + seconds % 60 + 's' : seconds + 's';
+  return active ? 'Running · ' + elapsed + ' elapsed' : elapsed;
+}
+function completionText(task) {
+  if (task.status !== 'completed' && task.status !== 'failed') return 'Unknown';
+  const time = parseTimestamp(task.completedAt);
+  return time === null ? 'Unknown' : new Date(time).toISOString().replace('T', ' ').replace('.000Z', ' UTC').replace('Z', ' UTC');
+}
 const repo = document.getElementById('repo');
 const status = document.getElementById('status');
 const rows = document.getElementById('rows');
@@ -77,6 +109,7 @@ async function load(targetCursors, targetSelection = selection) {
     ]);
     if (current !== generation) return;
     if (!Array.isArray(tasks)) throw new Error('Invalid response');
+    const readTime = Date.now();
     const pageRows = [];
     for (const task of tasks) {
       const row = document.createElement('tr');
@@ -111,6 +144,11 @@ async function load(targetCursors, targetSelection = selection) {
         changes.appendChild(link);
       }
       row.appendChild(changes);
+      for (const value of [durationText(task, readTime), completionText(task)]) {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);
