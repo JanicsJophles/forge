@@ -9,7 +9,7 @@ import { getCurrentBranch, hasUncommittedChanges } from './git.js'
 test('read probes use bounded argv-only, noninteractive execution', t => {
   const hostilePath = '/tmp/repo $(touch OWNED); `echo SECRET` " spaced'
   const calls: unknown[][] = []
-  const results = [' fleet/next\n', '', ' M file\n']
+  const results = [' refs/heads/fleet/next\n', 'abc refs/heads/fleet/next\n', '', ' M file\n']
   t.mock.method(childProcess, 'execFileSync', (...args: unknown[]) => {
     calls.push(args)
     return results.shift()
@@ -20,7 +20,8 @@ test('read probes use bounded argv-only, noninteractive execution', t => {
     assert.equal(hasUncommittedChanges(hostilePath), false)
     assert.equal(hasUncommittedChanges(hostilePath, { uid: 123, gid: 456 }), true)
     assert.deepEqual(calls.map(call => call.slice(0, 2)), [
-      ['git', ['rev-parse', '--abbrev-ref', 'HEAD']],
+      ['git', ['symbolic-ref', '--quiet', 'HEAD']],
+      ['git', ['show-ref', '--verify', '--quiet', 'refs/heads/fleet/next']],
       ['git', ['status', '--porcelain']],
       ['git', ['status', '--porcelain']],
     ])
@@ -38,8 +39,8 @@ test('read probes use bounded argv-only, noninteractive execution', t => {
       assert.equal(opts.env?.GIT_SSH_COMMAND, 'ssh -oBatchMode=yes')
     }
     assert.equal((calls[0][2] as childProcess.ExecFileSyncOptions).uid, undefined)
-    assert.equal((calls[2][2] as childProcess.ExecFileSyncOptions).uid, 123)
-    assert.equal((calls[2][2] as childProcess.ExecFileSyncOptions).gid, 456)
+    assert.equal((calls[3][2] as childProcess.ExecFileSyncOptions).uid, 123)
+    assert.equal((calls[3][2] as childProcess.ExecFileSyncOptions).gid, 456)
   } finally {
     t.mock.restoreAll()
     syncBuiltinESMExports()

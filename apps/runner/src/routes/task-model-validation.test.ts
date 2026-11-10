@@ -19,7 +19,7 @@ test('POST /tasks validates model and forwards a valid one to the provider argv'
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-model-'))
   const repo = path.join(root, 'repo')
   fs.mkdirSync(repo)
-  childProcess.execFileSync('git', ['init', '-q', repo])
+  childProcess.execFileSync('git', ['init', '-q', '-b', 'main', repo])
   process.env.DATA_DIR = path.join(root, 'data')
   process.env.ALLOWED_REPO_PATHS = root
   process.env.MAX_CONCURRENT_TASKS = '10'

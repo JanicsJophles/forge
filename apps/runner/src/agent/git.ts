@@ -39,7 +39,7 @@ function exec(file: string, args: string[], cwd: string, opts: RunOpts = {}): st
 // Git process (including a filesystem monitor hook) cannot block it indefinitely.
 const GIT_READ_TIMEOUT_MS = 2_000
 
-function readGit(args: string[], repoPath: string, operation: string, opts: RunOpts = {}): string {
+function readGit(args: string[], repoPath: string, operation: string, opts: RunOpts = {}, allowMissing = false): string {
   try {
     return execFileSync("git", args, {
       cwd: repoPath,
@@ -51,7 +51,9 @@ function readGit(args: string[], repoPath: string, operation: string, opts: RunO
       ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
       ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
     }).trim()
-  } catch {
+  } catch (error) {
+    const failure = error as { status?: number; code?: string; signal?: string }
+    if (allowMissing && failure.status === 1 && !failure.code && !failure.signal) return ""
     // Never attach the original error: callers may persist or return this message,
     // and child-process errors can contain stderr, paths, URLs, and credentials.
     throw new Error(`Git ${operation} unavailable; read probe failed or exceeded 2000ms`)
@@ -59,7 +61,18 @@ function readGit(args: string[], repoPath: string, operation: string, opts: RunO
 }
 
 export function getCurrentBranch(repoPath: string): string {
-  return readGit(["rev-parse", "--abbrev-ref", "HEAD"], repoPath, "branch")
+  const ref = readGit(["symbolic-ref", "--quiet", "HEAD"], repoPath, "branch", {}, true)
+  if (!ref) {
+    readGit(["rev-parse", "--verify", "HEAD^{commit}"], repoPath, "branch")
+    return "HEAD"
+  }
+  if (!ref.startsWith("refs/heads/")) {
+    throw new Error("Git branch unavailable; read probe failed or exceeded 2000ms")
+  }
+  // A missing ref is an unborn branch; malformed refs or missing objects must
+  // still fail. show-ref distinguishes absence (1) from corruption (128).
+  readGit(["show-ref", "--verify", "--quiet", ref], repoPath, "branch", {}, true)
+  return ref.slice("refs/heads/".length)
 }
 
 export interface HeadCommit {
