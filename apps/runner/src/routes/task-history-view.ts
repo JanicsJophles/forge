@@ -67,6 +67,24 @@ let loading = false;
 let successfulPage = null;
 let failedSelection = selection;
 let cancelRequest = null;
+// Validate the whole requested page before rendering or committing navigation.
+function validHistoryPage(tasks) {
+  if (!Array.isArray(tasks) || tasks.length > 25) return false;
+  return tasks.every(task => {
+    if (!task || typeof task !== 'object' || Array.isArray(task)) return false;
+    if (typeof task.id !== 'string' || !task.id.trim()) return false;
+    try { encodeURIComponent(task.id); } catch { return false; }
+    if (!['queued', 'running', 'completed', 'failed'].includes(task.status)) return false;
+    for (const key of ['createdAt', 'startedAt', 'completedAt', 'repo', 'branch', 'prompt',
+      'errorMessage', 'commitSha', 'provider', 'model']) {
+      if (task[key] != null && typeof task[key] !== 'string') return false;
+    }
+    for (const key of ['promptTruncated', 'autoCommit']) {
+      if (task[key] != null && typeof task[key] !== 'boolean') return false;
+    }
+    return true;
+  });
+}
 function updateControls() {
   refresh.disabled = loading;
   older.disabled = loading || !next;
@@ -108,7 +126,16 @@ async function load(targetCursors, targetSelection = selection) {
       deadline,
     ]);
     if (current !== generation) return;
-    if (!Array.isArray(tasks)) throw new Error('Invalid response');
+    if (!validHistoryPage(tasks)) {
+      // A filter reset may have staged navigation before this read failed.
+      if (successfulPage) {
+        next = successfulPage.next;
+        cursors = successfulPage.cursors;
+        selection = successfulPage.selection;
+      }
+      throw new Error('Invalid history response. ' + (successfulPage
+        ? 'Stale: showing the last successful page.' : 'Task history unavailable.'));
+    }
     const readTime = Date.now();
     const pageRows = [];
     for (const task of tasks) {
@@ -165,7 +192,7 @@ async function load(targetCursors, targetSelection = selection) {
     next = response.headers.get('X-Next-Before');
     cursors = targetCursors;
     selection = targetSelection;
-    successfulPage = { cursors, selection };
+    successfulPage = { cursors, selection, next };
     message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
   } catch (error) {
     if (current !== generation) return;
