@@ -427,6 +427,8 @@ const HTML = `<!DOCTYPE html>
         <div class="launch-row">
           <label for="launchRepo">Repository</label>
           <select id="launchRepo"><option value="">loading repositories…</option></select>
+          <button id="reloadRepos" type="button">Reload repositories</button>
+          <span id="reposStatus" role="status" aria-live="polite"></span>
           <label for="launchProvider">Provider</label>
           <select id="launchProvider">
             <option value="claude">claude</option>
@@ -675,27 +677,60 @@ const HTML = `<!DOCTYPE html>
         button.insertAdjacentElement('afterend', err);
       }
     }
+    let reposLoading = false;
+    let reposGeneration = 0;
     async function loadRepos() {
-      // Populate the launcher's repo <select> from GET /repos, once on load.
-      // A read endpoint, so it is never auth-gated. Option values are repo paths
-      // (what POST /tasks expects); labels fall back to the path if name is blank.
+      if (reposLoading) return;
+      reposLoading = true;
+      const generation = ++reposGeneration;
       const select = document.getElementById('launchRepo');
+      const button = document.getElementById('reloadRepos');
+      const status = document.getElementById('reposStatus');
+      const previous = select.value;
+      select.disabled = true;
+      button.disabled = true;
+      status.textContent = 'Loading repositories…';
+      const controller = new AbortController();
+      let timer;
       try {
-        const r = await fetch('/repos');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const repos = await r.json();
-        if (!Array.isArray(repos)) throw new Error('invalid repos');
-        const options = repos
-          .filter(repo => repo && typeof repo.path === 'string' && repo.path)
-          .map(repo => {
-            const label = typeof repo.name === 'string' && repo.name ? repo.name : repo.path;
-            // escape() neutralizes a hostile repo name/path before it reaches the DOM.
-            return '<option value="' + escape(repo.path).replace(/"/g, '&quot;') + '">' + escape(label) + '</option>';
-          })
-          .join('');
-        select.innerHTML = options || '<option value="">no repositories available</option>';
-      } catch (e) {
-        select.innerHTML = '<option value="">could not load repositories</option>';
+        const repos = await Promise.race([
+          (async () => {
+            const r = await fetch('/repos', { signal: controller.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            const result = await r.json();
+            if (!Array.isArray(result)) throw new Error('invalid repos');
+            return result;
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('deadline'));
+              controller.abort();
+            }, 10000);
+          }),
+        ]);
+        if (generation !== reposGeneration) return;
+        const available = repos.filter(repo => repo && typeof repo.path === 'string' && repo.path);
+        const options = available.map(repo => {
+          const label = typeof repo.name === 'string' && repo.name ? repo.name : repo.path;
+          return '<option value="' + escape(repo.path).replace(/"/g, '&quot;') + '">' + escape(label) + '</option>';
+        }).join('');
+        select.innerHTML = '<option value="">' + (options ? 'select a repository' : 'no repositories available') + '</option>' + options;
+        select.value = available.some(repo => repo.path === previous) ? previous : '';
+        select.disabled = !available.length;
+        status.textContent = !available.length ? 'No repositories available. Reload to try again.'
+          : previous && !select.value ? 'Selected repository is no longer available. Select a repository.'
+          : 'Repositories loaded.';
+      } catch (_) {
+        if (generation !== reposGeneration) return;
+        // Keep an existing selection for recovery, but block it until discovery succeeds.
+        if (!previous) select.innerHTML = '<option value="">could not load repositories</option>';
+        status.textContent = 'Could not load repositories. Reload to try again.';
+      } finally {
+        clearTimeout(timer);
+        if (generation === reposGeneration) {
+          reposLoading = false;
+          button.disabled = false;
+        }
       }
     }
     async function submitNewTask(event) {
@@ -761,6 +796,7 @@ const HTML = `<!DOCTYPE html>
     function wireNewTaskForm() {
       const form = document.getElementById('newTaskForm');
       if (form) form.onsubmit = submitNewTask;
+      document.getElementById('reloadRepos').onclick = loadRepos;
       loadRepos();
     }
     function renderTasks(tasks) {
