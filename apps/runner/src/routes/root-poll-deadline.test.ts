@@ -14,7 +14,7 @@ class Element {
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
 const health = (version: string) => ({ version, acceptingTasks: true })
-const tasks = (status: string) => [{ id: 'abcdefgh', repo: '/repo', status }]
+const tasks = (marker: string) => [{ id: 'abcdefgh', repo: '/repo/' + marker, status: 'running' }]
 type Reply = { ok: boolean; json: () => Promise<unknown> }
 
 for (const endpoint of ['/health', '/tasks?limit=5']) {
