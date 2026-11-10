@@ -151,7 +151,7 @@ function commitArgs(commitSha: string): string[] {
  * never surfaces raw Git stderr.
  */
 export function getChangesPatch(repoPath: string, commitSha?: string | null): { patch: string; truncated: boolean } {
-  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--'] : ['diff', '--no-ext-diff', '--no-textconv', 'HEAD'])], repoPath)
+  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--no-color', '--'] : ['diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD'])], repoPath)
   if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
     return { patch: diff.toString('utf8'), truncated: false }
   }
