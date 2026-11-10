@@ -152,15 +152,11 @@ export function gitPull(repoPath: string, opts: RunOpts = {}, timeoutMs = 30_000
 export function gitCommit(repoPath: string, message: string, opts: RunOpts = {}): string {
   // Sanitize every failure before it reaches persisted task errors. In particular,
   // a timeout must never be mistaken for a clean checkout based on hook output.
-  function write(args: string[], operation: string, allowNothing = false): string | null {
+  function write(args: string[], operation: string): string {
     try {
       return exec("git", args, repoPath, opts)
     } catch (error) {
-      const failure = error as { code?: string; status?: number; stdout?: string; stderr?: string }
-      if (allowNothing && failure.code !== "ETIMEDOUT" && failure.status === 1 &&
-        (failure.stdout?.includes("nothing to commit") || failure.stderr?.includes("nothing to commit"))) {
-        return null
-      }
+      const failure = error as { code?: string }
       const reason = failure.code === "ETIMEDOUT"
         ? "timed out after 30000ms; check Git hooks and repository filesystem responsiveness"
         : "failed; check repository permissions, Git hooks, and local changes"
@@ -170,8 +166,28 @@ export function gitCommit(repoPath: string, message: string, opts: RunOpts = {})
 
   // Stage tracked modifications only; do not commit a partial index if staging fails.
   write(["add", "-u"], "staging")
-  if (write(["commit", "-m", message], "commit", true) === null) return ""
-  return write(["rev-parse", "HEAD"], "commit SHA lookup")!
+  // Exit status describes the index independently of locale or hook output.
+  // Do not use HEAD: --cached also handles staged files in an unborn repository.
+  try {
+    execFileSync("git", ["diff", "--cached", "--quiet", "--exit-code"], {
+      cwd: repoPath,
+      env: gitEnvironment(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: GIT_READ_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
+      ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
+    })
+    return ""
+  } catch (error) {
+    const failure = error as { status?: number; code?: string; signal?: string | null }
+    if (failure.status !== 1 || failure.code || failure.signal) {
+      throw new Error("Git staged diff unavailable; read probe failed or exceeded 2000ms")
+    }
+  }
+  write(["commit", "-m", message], "commit")
+  return write(["rev-parse", "HEAD"], "commit SHA lookup")
 }
 
 export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {

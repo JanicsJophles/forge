@@ -17,16 +17,17 @@ test('git writes use finite deadlines, SIGKILL, and literal argv; return trimmed
   const calls: any[][] = []
   inject(t, (...args) => {
     calls.push(args)
+    if (args[1][0] === 'diff') throw { status: 1 }
     return args[1][0] === 'rev-parse' ? ' abc123\n' : ''
   })
   const path = '/tmp/SECRET $(touch owned); spaced'
   const message = 'SECRET `echo hook`'
   assert.equal(gitCommit(path, message, { uid: 123, gid: 456 }), 'abc123')
   assert.deepEqual(calls.map(c => c.slice(0, 2)), [
-    ['git', ['add', '-u']], ['git', ['commit', '-m', message]], ['git', ['rev-parse', 'HEAD']],
+    ['git', ['add', '-u']], ['git', ['diff', '--cached', '--quiet', '--exit-code']], ['git', ['commit', '-m', message]], ['git', ['rev-parse', 'HEAD']],
   ])
-  for (const [, , options] of calls) {
-    assert.equal(options.timeout, 30_000)
+  for (const [, args, options] of calls) {
+    assert.equal(options.timeout, args[0] === 'diff' ? 2000 : 30_000)
     assert.equal(options.killSignal, 'SIGKILL')
     assert.equal(options.shell, undefined)
     assert.equal(options.cwd, path)
@@ -41,7 +42,8 @@ for (const operation of ['staging', 'commit', 'commit SHA lookup']) {
     test(`${operation} ${timeout ? 'timeout' : 'failure'} is sanitized and stops subsequent writes`, t => {
       let calls = 0
       const failAt = ['staging', 'commit', 'commit SHA lookup'].indexOf(operation) + 1
-      inject(t, () => {
+      inject(t, (_file, args) => {
+        if (args[0] === 'diff') throw { status: 1 }
         if (++calls === failAt) throw Object.assign(new Error('https://user:SECRET@example.com'), {
           code: timeout ? 'ETIMEDOUT' : undefined, status: timeout ? null : 128,
           stdout: 'nothing to commit SECRET', stderr: 'SECRET arguments',
@@ -59,18 +61,6 @@ for (const operation of ['staging', 'commit', 'commit SHA lookup']) {
       assert.equal(calls, failAt)
     })
   }
-}
-
-for (const stream of ['stdout', 'stderr']) {
-  test(`nothing to commit on ${stream} still returns empty without a SHA lookup`, t => {
-    let calls = 0
-    inject(t, () => {
-      if (++calls === 2) throw { status: 1, [stream]: 'nothing to commit, working tree clean' }
-      return 'ok'
-    })
-    assert.equal(gitCommit('/tmp/repo', 'message'), '')
-    assert.equal(calls, 2)
-  })
 }
 
 test('recursive ownership timeout is bounded and best effort before pull probes', t => {
