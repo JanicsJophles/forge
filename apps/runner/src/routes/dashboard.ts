@@ -1017,6 +1017,38 @@ const HTML = `<!DOCTYPE html>
       recentTasksHealth('loading');
       if (typeof window !== 'undefined') refreshRecentTasks();
     };
+    // Keep shareable board state separate from launcher/auth state. replaceState
+    // updates the current investigation without adding a history entry per filter.
+    // The optional agent binding is supplied by the agent-filter board extension.
+    if (typeof window !== 'undefined' && window.location && window.history) {
+      const params = new URLSearchParams(window.location.search);
+      selectedRepo = params.get('repo') || '';
+      selectedTicket = params.get('ticket') || '';
+      selectedEventType = params.get('eventType') || '';
+      const activity = params.get('activity');
+      selectedActivity = ['working', 'finished'].includes(activity) ? activity : 'all';
+      activityFilter.value = selectedActivity;
+      if (typeof selectedAgent !== 'undefined') selectedAgent = params.get('agent') || '';
+      const filters = [
+        ['repo', repoFilter], ['ticket', ticketFilter],
+        ['eventType', eventTypeFilter], ['activity', activityFilter]
+      ];
+      if (typeof selectedAgent !== 'undefined') filters.push(['agent', document.getElementById('agentFilter')]);
+      const writeFilterUrl = () => {
+        const query = new URLSearchParams();
+        const values = { repo: selectedRepo, ticket: selectedTicket, eventType: selectedEventType,
+          activity: selectedActivity === 'all' ? '' : selectedActivity };
+        if (typeof selectedAgent !== 'undefined') values.agent = selectedAgent;
+        for (const [key, value] of Object.entries(values)) if (value) query.set(key, value);
+        const search = query.toString();
+        window.history.replaceState(null, '', window.location.pathname + (search ? '?' + search : ''));
+      };
+      for (const [, filter] of filters) {
+        const change = filter.onchange;
+        filter.onchange = () => { change(); writeFilterUrl(); };
+      }
+      writeFilterUrl();
+    }
     const record = v => v !== null && typeof v === 'object' && !Array.isArray(v);
     const count = v => Number.isSafeInteger(v) && v >= 0;
     function capacityText(c) {
