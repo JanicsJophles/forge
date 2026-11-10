@@ -83,7 +83,9 @@ function gitEnvironment(): NodeJS.ProcessEnv {
   }
 }
 
-function readGit(args: string[], repoPath: string): string {
+function readGit(args: string[], repoPath: string): string
+function readGit(args: string[], repoPath: string, allowMissing: true): string | null
+function readGit(args: string[], repoPath: string, allowMissing = false): string | null {
   try {
     return execFileSync('git', args, {
       cwd: repoPath,
@@ -93,11 +95,30 @@ function readGit(args: string[], repoPath: string): string {
       killSignal: 'SIGKILL',
       env: gitEnvironment(),
     })
-  } catch {
+  } catch (error) {
+    // Only Git's explicit "not found" exit is optional. Spawn errors, signals,
+    // timeouts and repository errors must still fail the review.
+    const failure = error as { status?: number; signal?: string; code?: string }
+    if (allowMissing && failure.status === 1 && !failure.signal && !failure.code) return null
     // Never attach the original error: child-process errors can contain stderr,
     // paths, URLs, and credentials, and callers may return this message verbatim.
     throw new Error('Git change inspection unavailable; read probe failed or exceeded 2000ms')
   }
+}
+
+// A missing HEAD alone is not proof of an unborn branch: validate the symbolic
+// branch and confirm its ref is absent. Broken/detached HEADs remain failures.
+function checkoutDiffArgs(repoPath: string): string[] {
+  if (readGit(['rev-parse', '--verify', '--quiet', 'HEAD'], repoPath, true) !== null) {
+    return ['diff', '--no-ext-diff', '--no-textconv', 'HEAD']
+  }
+  const ref = readGit(['symbolic-ref', 'HEAD'], repoPath).trim()
+  if (!ref.startsWith('refs/heads/') ||
+      readGit(['show-ref', '--verify', '--quiet', ref], repoPath, true) !== null) {
+    throw new Error('Git change inspection unavailable; invalid HEAD')
+  }
+  // With no HEAD, --cached uses Git's empty tree (also works with SHA-256).
+  return ['diff', '--no-ext-diff', '--no-textconv', '--cached']
 }
 
 // Byte cap on the unified diff returned to a reviewer: a response body bound so a
@@ -143,15 +164,15 @@ function commitArgs(commitSha: string): string[] {
 /**
  * With a commit ID, return that commit's diff (including root commits). Otherwise,
  * produce the bounded unified diff of a checkout's tracked changes against HEAD —
- * the same tracked footprint getChangedFiles lists, as a reviewable patch. Runs a
- * single read-only `git diff HEAD` probe (arg array, never a shell string), bounded
- * to 2s and SIGKILLed, with core.quotepath=false so non-ASCII paths stay readable.
+ * the same tracked footprint getChangedFiles lists, as a reviewable patch. For an
+ * unborn HEAD, compare staged content against the empty tree. Read-only probes
+ * use argument arrays, each bounded to 2s and SIGKILLed, with core.quotepath=false so non-ASCII paths stay readable.
  * The returned patch is capped at CHANGES_PATCH_BYTE_CAP bytes (first bytes kept,
  * `truncated: true` when the cap bit). Throws a static-message Error on failure;
  * never surfaces raw Git stderr.
  */
 export function getChangesPatch(repoPath: string, commitSha?: string | null): { patch: string; truncated: boolean } {
-  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--no-color', '--'] : ['diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD'])], repoPath)
+  const diff = readGitBuffer(['-c', 'core.quotepath=false', ...(commitSha != null ? [...commitArgs(commitSha), '--no-color', '--'] : [...checkoutDiffArgs(repoPath), '--no-color'])], repoPath)
   if (diff.length <= CHANGES_PATCH_BYTE_CAP) {
     return { patch: diff.toString('utf8'), truncated: false }
   }
@@ -220,7 +241,7 @@ export function getChangedFiles(repoPath: string, commitSha?: string | null): Ch
   if (commitSha != null) {
     parseNameStatusZ(readGit([...commitArgs(commitSha), '--name-status', '-z', '--'], repoPath), files)
   } else {
-    parseNameStatusZ(readGit(['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', 'HEAD'], repoPath), files)
+    parseNameStatusZ(readGit([...checkoutDiffArgs(repoPath), '--name-status', '-z', '--'], repoPath), files)
     parsePorcelainUntrackedZ(readGit(['status', '--porcelain', '-z'], repoPath), files)
   }
   return [...files].map(([path, status]) => ({ path, status }))
