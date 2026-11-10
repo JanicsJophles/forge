@@ -9,6 +9,11 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+function reviewNavigation(taskId: string): string {
+  const logHref = escapeHtml(`/tasks/${encodeURIComponent(taskId)}/log/view`)
+  return `<a href="${logHref}">task logs</a><a href="/history">task history</a>`
+}
+
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Avoid loading the task's potentially large log just to locate its checkout.
   const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
@@ -64,7 +69,9 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
 <body>
   <header><h1>forge changes · ${id}</h1>
     <p>Repository: ${escapeHtml(task.repo)}</p>
-    <a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
+    <nav aria-label="Review navigation">
+      <a href="${rawHref}">raw patch</a>${reviewNavigation(req.params.id)}<a href="/dashboard">dashboard</a>
+    </nav>
   </header>
   <main>
     ${task.commit_sha != null
