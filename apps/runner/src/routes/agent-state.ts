@@ -41,6 +41,18 @@ function badRequest(res: Response, msg: string): void {
   res.status(400).json({ error: msg })
 }
 
+// UTF-8 byte limits apply before persistence; never slice identities or JSON.
+const MAX_SCALAR_BYTES = 500
+const MAX_STRUCTURED_BYTES = 16 * 1024
+
+function exceedsBounds(body: Record<string, unknown>, fields: string[], structured: string): boolean {
+  if (fields.some(field => typeof body[field] === 'string' &&
+      Buffer.byteLength(body[field] as string, 'utf8') > MAX_SCALAR_BYTES)) return true
+  const value = body[structured]
+  return value !== null && typeof value === 'object' &&
+    Buffer.byteLength(JSON.stringify(value), 'utf8') > MAX_STRUCTURED_BYTES
+}
+
 // Use the same parser as listEvents, rather than Date.parse's different formats.
 function validSince(value: unknown): boolean {
   if (value === undefined) return true
@@ -55,6 +67,9 @@ agentStateRouter.post('/agent-state/checkpoint', (req: Request, res: Response) =
   const b = req.body ?? {}
   if (typeof b.agentId !== 'string' || !b.agentId.trim()) {
     return badRequest(res, 'agentId is required')
+  }
+  if (exceedsBounds(b, ['agentId', 'agentType', 'repo', 'branch', 'intent', 'ticket', 'status'], 'metadata')) {
+    return badRequest(res, 'checkpoint payload exceeds field size limits')
   }
   const input: CheckpointInput = {
     agentId: b.agentId.trim(),
@@ -101,6 +116,9 @@ agentStateRouter.post('/agent-events', (req: Request, res: Response) => {
   }
   if (b.prNumber != null && (!Number.isSafeInteger(b.prNumber) || b.prNumber <= 0)) {
     return badRequest(res, 'prNumber must be a positive safe integer')
+  }
+  if (exceedsBounds(b, ['eventType', 'repo', 'ticket', 'agentId'], 'details')) {
+    return badRequest(res, 'event payload exceeds field size limits')
   }
   const input: EventInput = {
     eventType: b.eventType.trim(),
