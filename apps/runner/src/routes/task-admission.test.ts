@@ -14,7 +14,7 @@ test('canonical checkout admission reserves queued probes and releases terminal 
   const other = path.join(root, 'other')
   for (const dir of [repo, other]) {
     fs.mkdirSync(dir)
-    childProcess.execFileSync('git', ['init', '-q', dir])
+    childProcess.execFileSync('git', ['init', '-q', '-b', 'main', dir])
   }
   fs.symlinkSync(repo, path.join(root, 'alias'))
   fs.writeFileSync(path.join(root, 'file'), '')

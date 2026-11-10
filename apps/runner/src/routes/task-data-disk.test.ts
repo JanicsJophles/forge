@@ -13,7 +13,7 @@ test('task admission checks checkout and actual SQLite volumes independently', a
   const repo = path.join(root, 'repo')
   const data = path.join(root, 'sqlite-volume')
   fs.mkdirSync(data)
-  childProcess.execFileSync('git', ['init', '-q', repo])
+  childProcess.execFileSync('git', ['init', '-q', '-b', 'main', repo])
   fs.mkdirSync(path.join(repo, 'nested'))
   // DATA_DIR is an alias; readings must use the actual database parent.
   fs.symlinkSync(data, path.join(root, 'data-alias'))

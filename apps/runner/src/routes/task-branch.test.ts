@@ -91,6 +91,14 @@ test('POST /tasks validates the branch claim against the checkout before admitti
     assert.equal(getTask(matched.body.taskId!)?.branch, checkoutBranch)
     assert.ok(getEmitter(matched.body.taskId!))
     assert.equal(probes.length, 1)
+
+    const unborn = path.join(root, 'unborn')
+    originalExecFile('git', ['init', '-q', '-b', 'feature/unborn', unborn])
+    const inferred = await post({ repo: unborn })
+    assert.equal(inferred.status, 201)
+    assert.ok(inferred.body.taskId)
+    assert.equal(getTask(inferred.body.taskId!)?.branch, 'feature/unborn')
+    assert.equal(probes.length, 2)
   } finally {
     for (const probe of probes) probe.emit('close', 1)
     await new Promise(resolve => setImmediate(resolve))
