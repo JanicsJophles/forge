@@ -31,7 +31,7 @@ test('history shell pages opaque same-second cursors, resets filters and fences 
       if (!elements.has(id)) elements.set(id, element())
       return elements.get(id)
     }, createElement: element },
-    URLSearchParams,
+    URLSearchParams, AbortController, setTimeout, clearTimeout,
     fetch: (url: string) => new Promise((resolve, reject) => requests.push({ url, resolve, reject })),
   })
   const el = (id: string) => elements.get(id)

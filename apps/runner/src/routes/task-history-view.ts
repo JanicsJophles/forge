@@ -15,7 +15,7 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
 <table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th></tr></thead><tbody id="rows"></tbody></table>
-<button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
+<button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 <script>
 const repo = document.getElementById('repo');
 const status = document.getElementById('status');
@@ -25,31 +25,56 @@ const older = document.getElementById('older');
 const retry = document.getElementById('retry');
 const newer = document.getElementById('newer');
 const latest = document.getElementById('latest');
+const refresh = document.getElementById('refresh');
 let generation = 0;
 let next = null;
 let selection = { repo: '', status: '' };
 let cursors = [null];
 let failedCursors = cursors;
 let loading = false;
+let successfulPage = null;
+let failedSelection = selection;
+let cancelRequest = null;
 function updateControls() {
+  refresh.disabled = loading;
   older.disabled = loading || !next;
   newer.disabled = latest.disabled = loading || cursors.length === 1;
 }
-async function load(targetCursors) {
+async function load(targetCursors, targetSelection = selection) {
+  if (cancelRequest) cancelRequest();
   const before = targetCursors[targetCursors.length - 1];
   const current = ++generation;
   const query = new URLSearchParams({ limit: '25' });
-  if (selection.repo) query.set('repo', selection.repo);
-  if (selection.status) query.set('status', selection.status);
+  if (targetSelection.repo) query.set('repo', targetSelection.repo);
+  if (targetSelection.status) query.set('status', targetSelection.status);
   if (before) query.set('before', before);
   loading = true;
   updateControls();
   retry.hidden = true;
   message.textContent = 'Loading task history…';
+  const controller = new AbortController();
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    cancelRequest = () => {
+      clearTimeout(timer);
+      reject(new Error('Request superseded'));
+      controller.abort();
+    };
+    timer = setTimeout(() => {
+      reject(new Error('Request timed out. Please retry.'));
+      controller.abort();
+    }, 15000);
+  });
   try {
-    const response = await fetch('/tasks?' + query);
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const tasks = await response.json();
+    // Race the entire read: abort alone cannot bound an uncooperative body reader.
+    const { response, tasks } = await Promise.race([
+      (async () => {
+        const response = await fetch('/tasks?' + query, { signal: controller.signal });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return { response, tasks: await response.json() };
+      })(),
+      deadline,
+    ]);
     if (current !== generation) return;
     if (!Array.isArray(tasks)) throw new Error('Invalid response');
     const pageRows = [];
@@ -91,14 +116,19 @@ async function load(targetCursors) {
     rows.replaceChildren(...pageRows);
     next = response.headers.get('X-Next-Before');
     cursors = targetCursors;
+    selection = targetSelection;
+    successfulPage = { cursors, selection };
     message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
   } catch (error) {
     if (current !== generation) return;
     failedCursors = targetCursors;
+    failedSelection = targetSelection;
     message.textContent = 'Request failed: ' + error.message;
     retry.hidden = false;
   } finally {
+    clearTimeout(timer);
     if (current === generation) {
+      cancelRequest = null;
       loading = false;
       updateControls();
     }
@@ -116,7 +146,11 @@ status.onchange = reset;
 older.onclick = () => { if (!older.disabled) return load([...cursors, next]); };
 newer.onclick = () => { if (!newer.disabled) return load(cursors.slice(0, -1)); };
 latest.onclick = () => { if (!latest.disabled) return load([null]); };
-retry.onclick = () => load(failedCursors);
+retry.onclick = () => load(failedCursors, failedSelection);
+refresh.onclick = () => {
+  if (refresh.disabled) return;
+  return successfulPage ? load(successfulPage.cursors, successfulPage.selection) : load(cursors);
+};
 load(cursors);
 </script></body></html>`)
 })
