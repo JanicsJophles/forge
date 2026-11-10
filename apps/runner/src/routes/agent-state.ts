@@ -23,6 +23,7 @@ import { Router, type Request, type Response } from 'express'
 import {
   checkpoint,
   listAgentState,
+  getAgentState,
   deleteAgentState,
   gcAgentState,
   insertEvent,
@@ -96,8 +97,7 @@ agentStateRouter.get('/agent-state', (req: Request, res: Response) => {
 })
 
 agentStateRouter.get('/agent-state/:agentId', (req: Request, res: Response) => {
-  const all = listAgentState({ includeExpired: true })
-  const found = all.find(r => r.agentId === req.params.agentId)
+  const found = getAgentState(req.params.agentId)
   if (!found) return res.status(404).json({ error: 'not found' })
   res.json(found)
 })
