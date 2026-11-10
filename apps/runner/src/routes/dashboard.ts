@@ -385,6 +385,10 @@ const HTML = `<!DOCTYPE html>
     </div>
   </header>
 
+  <div class="by-repo">
+    <button type="button" id="editAuthToken" aria-controls="authTokenRow" aria-expanded="false">Enter / edit auth token</button>
+    <span id="authDiscoveryStatus" role="status" aria-live="polite">Authentication requirements unknown; checking runner…</span>
+  </div>
   <div class="by-repo" id="authTokenRow" style="display: none;">
     <label for="authToken">Auth token</label>
     <input type="password" id="authToken" placeholder="Bearer token — required for cancel / retry / launch" autocomplete="off" />
@@ -466,8 +470,8 @@ const HTML = `<!DOCTYPE html>
     const GITHUB_ORG = __GITHUB_ORG__;
     // --- Bearer-token auth for state-changing controls -----------------------
     // When the runner is started with FORGE_AUTH_TOKEN, POST/DELETE routes answer
-    // 401 without an Authorization header. The token input (revealed only when
-    // /capabilities reports authRequired) feeds authHeaders(), which is spread
+    // 401 without an Authorization header. The manually accessible token input
+    // feeds authHeaders(), which is spread
     // into the three state-changing fetches and NO read fetch. The token lives in
     // sessionStorage so a reload keeps the operator signed in for the tab only.
     const AUTH_TOKEN_KEY = 'forge.authToken';
@@ -499,23 +503,48 @@ const HTML = `<!DOCTYPE html>
       input.value = readStoredToken();
       input.oninput = () => persistToken(String(input.value || '').trim());
     }
+    function showAuthToken() {
+      document.getElementById('authTokenRow').style.display = '';
+      document.getElementById('editAuthToken').ariaExpanded = 'true';
+    }
     async function revealAuthIfRequired() {
-      // /capabilities is a read endpoint, never auth-gated. authRequired true means
-      // the runner has a token configured, so reveal the input; otherwise it stays
-      // hidden and authHeaders() stays a no-op.
+      const edit = document.getElementById('editAuthToken');
+      edit.onclick = () => {
+        showAuthToken();
+        document.getElementById('authToken').focus();
+      };
+      const status = document.getElementById('authDiscoveryStatus');
+      const controller = new AbortController();
+      let timer;
       try {
-        const r = await fetch('/capabilities');
-        if (!r.ok) return;
-        const c = await r.json();
-        if (c && c.authRequired === true) {
-          const row = document.getElementById('authTokenRow');
-          if (row && row.style) row.style.display = '';
-        }
-      } catch (e) {
-        // Unreachable capabilities: leave the input hidden (same as auth-off). The
-        // launcher/cancel/retry controls still render and will surface a 401 inline.
+        // Race the entire read, including the body. Late transport results never
+        // mutate the UI, even when fetch or json ignores abort.
+        const required = await Promise.race([
+          (async () => {
+            const r = await fetch('/capabilities', { signal: controller.signal });
+            if (!r.ok) throw new Error('capabilities unavailable');
+            const c = await r.json();
+            if (!c || typeof c.authRequired !== 'boolean') throw new Error('invalid capabilities');
+            return c.authRequired;
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('discovery deadline'));
+              controller.abort();
+            }, 5000);
+          }),
+        ]);
+        status.textContent = required
+          ? 'Authentication required for launch, cancel and retry.'
+          : 'Runner reports authentication is off.';
+        if (required) showAuthToken();
+      } catch (_) {
+        status.textContent = 'Authentication requirements unknown. Enter a token manually if actions require one.';
+      } finally {
+        clearTimeout(timer);
       }
     }
+
     function escape(s) {
       const d = document.createElement('div');
       d.textContent = s == null ? '' : String(s);
