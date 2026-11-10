@@ -3,6 +3,7 @@ import { config } from './config.js'
 import './db/schema.js'  // runs CREATE TABLE on import
 import { capabilitiesRouter } from './routes/capabilities.js'
 import { healthRouter } from './routes/health.js'
+import { metricsRouter } from './routes/metrics.js'
 import { taskLogRouter } from './routes/task-log.js'
 import { taskLogViewRouter } from './routes/task-log-view.js'
 import { taskChangesViewRouter } from './routes/task-changes-view.js'
@@ -42,6 +43,7 @@ process.on('uncaughtException', (err) => {
 // Routes
 app.use(rootRouter)
 app.use(healthRouter)
+app.use(metricsRouter)
 app.use(capabilitiesRouter)
 app.use('/tasks', taskLogRouter)
 // Distinct /:id/log/view segment — mounted after the byte-slice log router so
