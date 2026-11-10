@@ -53,6 +53,8 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     a { color: #34d399; margin-right: 16px; }
     pre { overflow: auto; padding: 12px; background: #0a0f1e; line-height: 1.5; }
     pre span { display: inline-block; min-width: 100%; }
+    #wrap-lines:checked ~ pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+    #wrap-lines:checked ~ pre span { width: 100%; }
     .added { color: #86efac; background: #052e16; }
     .removed { color: #fca5a5; background: #450a0a; }
     .file { color: #93c5fd; font-weight: bold; }
@@ -77,7 +79,9 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
       ${bounded.truncated ? `<p class="warning" role="status">File list truncated: showing ${bounded.changedFiles.length} of ${summary.total} changed files. Counts include all changed files.</p>` : ''}
     </section>
     ${result.truncated ? '<p class="warning" role="status">Patch truncated: only the first part is shown.</p>' : ''}
-    ${result.patch ? `<pre aria-label="Unified diff">${lines}</pre>` : '<p>No tracked changes. No tracked patch to display; untracked file contents are not included.</p>'}
+    ${result.patch ? `<input type="checkbox" id="wrap-lines" aria-controls="unified-diff" />
+    <label for="wrap-lines">Wrap lines</label>
+    <pre id="unified-diff" aria-label="Unified diff">${lines}</pre>` : '<p>No tracked changes. No tracked patch to display; untracked file contents are not included.</p>'}
   </main>
 </body>
 </html>`)
