@@ -52,7 +52,7 @@ test('HTML footprint names untracked files, bounds lists and isolates recorded c
     const mixed = await html()
     assert.match(mixed, /4 changed files: 1 added, 1 modified, 0 deleted, 0 renamed, 0 copied, 2 untracked/)
     assert.match(mixed, /aria-label="Unified diff"/)
-    assert.match(mixed, /<code>M<\/code> <code>tracked.txt<\/code>/)
+    assert.match(mixed, /<code>M<\/code> <a href="#patch-section-\d+"><code>tracked.txt<\/code><\/a>/)
     git('add', 'tracked.txt')
     git('commit', '-qm', 'task commit')
     const sha = git('rev-parse', 'HEAD')

@@ -9,6 +9,57 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+// Decode Git's C-quoted byte strings without treating filenames as markup or IDs.
+function gitPath(value: string): string | null {
+  if (!value.startsWith('"')) return value.includes('"') ? null : value
+  if (!value.endsWith('"')) return null
+  const bytes: number[] = []
+  const escapes: Record<string, string> = { a: '\x07', b: '\b', t: '\t', n: '\n', v: '\v', f: '\f', r: '\r', '"': '"', '\\': '\\' }
+  for (let i = 1; i < value.length - 1; i++) {
+    const char = value[i]
+    if (char === '"') return null
+    if (char !== '\\') {
+      const point = value.codePointAt(i)!
+      bytes.push(...Buffer.from(String.fromCodePoint(point)))
+      if (point > 0xffff) i++
+      continue
+    }
+    const rest = value.slice(i + 1, -1)
+    const octal = /^[0-3][0-7]{2}/.exec(rest)
+    if (octal) { bytes.push(parseInt(octal[0], 8)); i += 3; continue }
+    const escaped = escapes[value[++i]]
+    if (escaped === undefined) return null
+    bytes.push(...Buffer.from(escaped))
+  }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes)) } catch { return null }
+}
+
+/** Only complete, unambiguous headers in the rendered patch can be targets. */
+export function patchNavigation(patch: string): { targets: Map<string, string>; anchors: Map<number, string> } {
+  const targets = new Map<string, string>()
+  const anchors = new Map<number, string>()
+  const seen = new Set<string>()
+  const lines = patch.split('\n')
+  lines.forEach((line, index) => {
+    if (index === lines.length - 1 || !line.startsWith('diff --git ')) return
+    const header = line.slice(11)
+    const candidates: string[] = []
+    for (let split = header.indexOf(' '); split !== -1; split = header.indexOf(' ', split + 1)) {
+      const before = gitPath(header.slice(0, split))
+      const after = gitPath(header.slice(split + 1))
+      if (before?.startsWith('a/') && after?.startsWith('b/')) candidates.push(after.slice(2))
+    }
+    if (candidates.length !== 1) return
+    const path = candidates[0]
+    const id = `patch-section-${index}`
+    anchors.set(index, id)
+    if (seen.has(path)) targets.delete(path)
+    else targets.set(path, id)
+    seen.add(path)
+  })
+  return { targets, anchors }
+}
+
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Avoid loading the task's potentially large log just to locate its checkout.
   const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
@@ -28,14 +79,20 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   }
   const summary = summarizeChangedFiles(files)
   const bounded = boundChangedFiles(files)
-  const fileList = bounded.changedFiles.map(file =>
-    `<li><code>${escapeHtml(file.status)}</code> <code>${escapeHtml(file.path)}</code></li>`,
-  ).join('\n')
-  const lines = result.patch.split('\n').map(line => {
+  const navigation = patchNavigation(result.patch)
+  const fileList = bounded.changedFiles.map(file => {
+    const target = file.status === '?' ? undefined : navigation.targets.get(file.path)
+    const name = `<code>${escapeHtml(file.path)}</code>`
+    return `<li><code>${escapeHtml(file.status)}</code> ${target
+      ? `<a href="#${target}">${name}</a>`
+      : `${name} <small>(no identified patch section)</small>`}</li>`
+  }).join('\n')
+  const lines = result.patch.split('\n').map((line, index) => {
     const kind = line.startsWith('diff --git ') || line.startsWith('--- ') || line.startsWith('+++ ')
       ? 'file' : line.startsWith('@@') ? 'hunk'
         : line.startsWith('+') ? 'added' : line.startsWith('-') ? 'removed' : 'context'
-    return `<span class="${kind}">${escapeHtml(line)}</span>`
+    const anchor = navigation.anchors.get(index)
+    return `<span${anchor ? ` id="${anchor}" tabindex="-1"` : ''} class="${kind}">${escapeHtml(line)}</span>`
   }).join('\n')
   const id = escapeHtml(req.params.id)
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
@@ -56,6 +113,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     .added { color: #86efac; background: #052e16; }
     .removed { color: #fca5a5; background: #450a0a; }
     .file { color: #93c5fd; font-weight: bold; }
+    pre span:target { outline: 2px solid #34d399; }
     .hunk { color: #c4b5fd; }
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
