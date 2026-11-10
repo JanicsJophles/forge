@@ -65,6 +65,7 @@ test('pull and commit receive isolated noninteractive environments', t => {
   t.mock.method(childProcess, 'execFileSync', (file: string, args: string[], options: childProcess.ExecSyncOptions) => {
     calls.push({ file, command: args, options })
     if (file !== 'git') return '' // chown (ownership), not a Git call
+    if (args[0] === 'diff') throw { status: 1 }
     return args[0] === 'symbolic-ref'
       ? 'main\n'
       : args[0] === 'config'
@@ -91,6 +92,7 @@ test('pull and commit receive isolated noninteractive environments', t => {
         ['config', '--get', 'branch.main.merge'],
         ['pull', '--ff-only'],
         ['add', '-u'],
+        ['diff', '--cached', '--quiet', '--exit-code'],
         ['commit', '-m', 'message'],
         ['rev-parse', 'HEAD'],
       ])
