@@ -7,8 +7,8 @@ import { runInNewContext } from 'node:vm'
 import express from 'express'
 
 // The live log viewer is a read endpoint: a known task id yields an HTML page
-// that wires up the SSE stream; an unknown id yields the same JSON 404 the
-// sibling log routes return. A hostile id must never escape into markup.
+// that wires up the SSE stream; an unknown id yields a recovery HTML 404.
+// A hostile id must never escape into markup.
 test('GET /:id/log/view serves the SSE viewer and 404s a missing task', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'forge-log-view-'))
   process.env.DATA_DIR = directory
@@ -33,11 +33,11 @@ test('GET /:id/log/view serves the SSE viewer and 404s a missing task', async t 
   assert.ok(address && typeof address !== 'string')
   const base = `http://127.0.0.1:${address.port}`
 
-  // Missing task → JSON 404 matching the byte-slice log route's contract.
+  // Missing task → human-facing recovery HTML.
   const missing = await fetch(`${base}/tasks/nope/log/view`)
   assert.equal(missing.status, 404)
-  assert.match(missing.headers.get('content-type') ?? '', /application\/json/)
-  assert.deepEqual(await missing.json(), { error: 'task not found' })
+  assert.match(missing.headers.get('content-type') ?? '', /text\/html/)
+  assert.match(await missing.text(), /Task not found/)
 
   // Known task → HTML page that connects to this task's /stream endpoint.
   const ok = await fetch(`${base}/tasks/view-1/log/view`)
