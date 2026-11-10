@@ -88,6 +88,16 @@ function landingHtml(): string {
     <p id="tasks-freshness" role="status">Recent tasks unavailable — waiting for first update.</p>
     <p>Refreshes five seconds after each completed update.</p>
     <ul id="recent-tasks" aria-live="polite"><li>recent tasks unavailable</li></ul>
+    <h2>Retained task history</h2>
+    <p>Counts describe retained records, not lifetime totals or scheduling guarantees.</p>
+    <p id="totals-freshness" role="status">Task totals unavailable — waiting for first update.</p>
+    <p>
+      <a href="/history">Total: <span id="total-total">…</span></a> ·
+      <a href="/history?status=completed">Completed: <span id="total-completed">…</span></a> ·
+      <a href="/history?status=failed">Failed: <span id="total-failed">…</span></a> ·
+      <a href="/history?status=queued">Queued: <span id="total-queued">…</span></a> ·
+      <a href="/history?status=running">Running: <span id="total-running">…</span></a>
+    </p>
     <h2>Endpoints</h2>
     <ul>
 ${rows}
@@ -115,6 +125,7 @@ ${rows}
         }
         var hasHealth = false
         var hasTasks = false
+        var hasTotals = false
         // Keep ownership until the actual transport/body settles, even after a
         // deadline. Abort-ignoring transports must not accumulate every cycle.
         var pendingReads = Object.create(null)
@@ -181,6 +192,23 @@ ${rows}
               ? 'Recent tasks stale — refresh unavailable.' : 'Recent tasks unavailable — retrying.')
           })
         }
+        function refreshTotals() {
+          return readJson('/tasks/stats').then(function (counts) {
+            var keys = ['total', 'completed', 'failed', 'queued', 'running']
+            if (!counts || typeof counts !== 'object' || Array.isArray(counts) ||
+                !keys.every(function (key) {
+                  return typeof counts[key] === 'number' && Number.isSafeInteger(counts[key]) && counts[key] >= 0
+                }) || counts.total !== counts.completed + counts.failed + counts.queued + counts.running) {
+              throw new Error('invalid task totals')
+            }
+            keys.forEach(function (key) { setText('total-' + key, String(counts[key])) })
+            hasTotals = true
+            setText('totals-freshness', '')
+          }).catch(function () {
+            setText('totals-freshness', hasTotals
+              ? 'Task totals stale — refresh unavailable.' : 'Task totals unavailable — retrying.')
+          })
+        }
         function refreshHealth() {
           return readJson('/health')
           .then(function (h) {
@@ -219,7 +247,7 @@ ${rows}
         function refresh() {
           // Each update settles by its deadline, independently of transport abort.
           // readJson retains ownership of any underlying read still pending.
-          Promise.all([refreshTasks(), refreshHealth()]).then(function () {
+          Promise.all([refreshTasks(), refreshHealth(), refreshTotals()]).then(function () {
             setTimeout(refresh, 5000)
           })
         }

@@ -36,6 +36,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)![1], {
     document: { getElementById: el, createElement: () => new Element() },
     fetch: (url: string, options: { cache: string }) => {
+      if (url === '/tasks/stats') return Promise.resolve({ ok: true, json: async () => ({ total: 0, completed: 0, failed: 0, queued: 0, running: 0 }) })
       assert.equal(options.cache, 'no-store')
       return new Promise<Reply>((resolve, reject) => requests.push({ url, resolve, reject }))
     },
