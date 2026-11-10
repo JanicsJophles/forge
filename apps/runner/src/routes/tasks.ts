@@ -39,9 +39,38 @@ function checkoutRoot(directory: string): string {
   }).trim())
 }
 
+// Stored paths can be legacy subdirectories or aliases changed since dispatch.
+// Resolve them with the same rules as new submissions before shared admission.
+function resolveCheckout(storedPath: string):
+  | { ok: true; repo: string }
+  | { ok: false; status: number; body: Record<string, unknown> } {
+  if (!isRepoAllowed(storedPath)) {
+    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS' } }
+  }
+
+  let repo: string
+  try {
+    repo = realpathSync(storedPath)
+    if (!statSync(repo).isDirectory()) throw new Error('not a directory')
+  } catch {
+    return { ok: false, status: 400, body: { error: 'repo must be an existing directory' } }
+  }
+  if (!isRepoAllowed(repo)) {
+    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS' } }
+  }
+
+  try {
+    repo = checkoutRoot(repo)
+  } catch {
+    return { ok: false, status: 400, body: { error: 'repo must be inside a Git checkout with a discoverable root' } }
+  }
+
+  return { ok: true, repo }
+}
+
 // Shared admission guards for dispatching work into a checkout. `repo` must be a
 // canonical checkout root — the POST / body path resolves one from untrusted
-// input; the retry path reuses the source task's stored canonical repo.
+// input; retries resolve the stored path again before admission.
 // `requestedBranch`, when present, is an already-validated non-empty string.
 // Factoring these into one place means the retry endpoint cannot bypass the
 // allowlist re-check, the active-checkout conflict, the disk guard, the
@@ -195,30 +224,12 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
-  if (!isRepoAllowed(body.repo)) {
-    res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
+  const checkout = resolveCheckout(body.repo)
+  if (!checkout.ok) {
+    res.status(checkout.status).json(checkout.body)
     return
   }
-
-  let repo: string
-  try {
-    repo = realpathSync(body.repo)
-    if (!statSync(repo).isDirectory()) throw new Error('not a directory')
-  } catch {
-    res.status(400).json({ error: 'repo must be an existing directory' })
-    return
-  }
-  if (!isRepoAllowed(repo)) {
-    res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
-    return
-  }
-
-  try {
-    repo = checkoutRoot(repo)
-  } catch {
-    res.status(400).json({ error: 'repo must be inside a Git checkout with a discoverable root' })
-    return
-  }
+  const { repo } = checkout
 
   // Reject a malformed branch claim (body-level) before running shared admission;
   // admitCheckout receives an already-validated non-empty string or undefined.
@@ -423,8 +434,13 @@ tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
     return
   }
 
-  // source.repo was canonicalized to its checkout root at the original admission.
-  const admission = admitCheckout(source.repo, undefined)
+  const checkout = resolveCheckout(source.repo)
+  if (!checkout.ok) {
+    res.status(checkout.status).json(checkout.body)
+    return
+  }
+  const { repo } = checkout
+  const admission = admitCheckout(repo, undefined)
   if (!admission.ok) {
     res.status(admission.status).json(admission.body)
     return
@@ -434,7 +450,7 @@ tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
     provider: source.provider ?? 'claude',
     autoCommit: source.autoCommit == null ? config.autoCommit : Boolean(source.autoCommit),
     model: source.model ?? undefined,
-    repo: source.repo,
+    repo,
     branch: admission.branch,
     prompt: source.prompt,
   })
