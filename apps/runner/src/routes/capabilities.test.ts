@@ -7,7 +7,7 @@ import { test } from 'node:test'
 import express from 'express'
 import { capabilitiesRouter } from './capabilities.js'
 
-test('root and legacy discovery return the same static contract; unknown paths stay 404', async () => {
+test('root discovery returns the static contract; unknown paths stay 404', async () => {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'forge-capabilities-'))
   const previous = {
     DATA_DIR: process.env.DATA_DIR,
@@ -34,7 +34,7 @@ test('root and legacy discovery return the same static contract; unknown paths s
       try {
         await new Promise<void>(resolve => server.once('listening', resolve))
         const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-        for (const route of ['/capabilities', '/tasks/capabilities']) {
+        for (const route of ['/capabilities']) {
           const response = await fetch(base + route)
           assert.equal(response.status, 200)
           assert.match(response.headers.get('content-type') ?? '', /application\/json/)
@@ -80,6 +80,13 @@ test('root and legacy discovery return the same static contract; unknown paths s
           // pagination clients can self-configure instead of hard-coding caps.
           assert.equal(body.logging.maxSliceBytes, MAX_LOG_SLICE_BYTES)
           assert.equal(body.logging.detailTailBytes, LOG_TAIL_BYTES)
+        }
+        // The removed alias is a task-ID lookup, not the app-level fallback.
+        for (const route of ['/tasks/capabilities', '/tasks/missing-task']) {
+          const response = await fetch(base + route)
+          assert.equal(response.status, 404)
+          assert.match(response.headers.get('content-type') ?? '', /application\/json/)
+          assert.deepEqual(await response.json(), { error: 'task not found' })
         }
         for (const route of ['/unknown', '/capabilities/unknown', '/tasks/capabilities/unknown']) {
           const response = await fetch(base + route)
