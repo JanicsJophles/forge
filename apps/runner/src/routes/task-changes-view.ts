@@ -4,6 +4,8 @@ import { getChangesPatch, getChangedFiles, summarizeChangedFiles, boundChangedFi
 
 export const taskChangesViewRouter = Router()
 
+const FAILURE_REASON_CHAR_CAP = 2000
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -93,9 +95,13 @@ function errorPage(taskId: string, unavailable: boolean): string {
 }
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
-  // Avoid loading the task's potentially large log just to locate its checkout.
-  const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
-    { repo: string; commit_sha: string | null } | undefined
+  // Bound diagnostics in SQLite; never load the stored log or prompt for review.
+  const task = db.prepare(`SELECT repo, commit_sha, status,
+    substr(error_message, 1, ${FAILURE_REASON_CHAR_CAP}) AS failure_reason,
+    length(error_message) > ${FAILURE_REASON_CHAR_CAP} AS failure_truncated
+    FROM tasks WHERE id = ?`).get(req.params.id) as
+    { repo: string; commit_sha: string | null; status: string | null;
+      failure_reason: string | null; failure_truncated: number | null } | undefined
   if (!task) {
     res.status(404).type('html').send(errorPage(req.params.id, false))
     return
@@ -127,6 +133,8 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     return `<span${anchor ? ` id="${anchor}" tabindex="-1"` : ''} class="${kind}">${escapeHtml(line)}</span>`
   }).join('\n')
   const id = escapeHtml(req.params.id)
+  const refreshHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes/view`)
+  const active = task.status === 'queued' || task.status === 'running'
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
   res.setHeader('X-Patch-Truncated', String(result.truncated))
   res.type('html').send(`<!doctype html>
@@ -150,6 +158,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     pre span:target { outline: 2px solid #34d399; }
     .hunk { color: #c4b5fd; }
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .failure-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
   </style>
 </head>
@@ -159,6 +168,16 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     <a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
   </header>
   <main>
+    <section aria-label="Task outcome">
+      <h2>Task outcome</h2>
+      <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>
+      ${task.status === 'failed'
+        ? task.failure_reason
+          ? `<p class="failure-reason">Saved failure reason: ${escapeHtml(task.failure_reason)}</p>${task.failure_truncated ? `<p class="warning">Failure reason truncated: showing the first ${FAILURE_REASON_CHAR_CAP} characters.</p>` : ''}`
+          : '<p>No saved failure reason is available.</p>'
+        : ''}
+      ${active ? `<p>Task is active. ${task.commit_sha == null ? 'The displayed checkout diff is a snapshot and may change.' : 'The displayed diff is from the recorded commit; task metadata may change.'} <a href="${refreshHref}">Refresh this task review</a></p>` : ''}
+    </section>
     ${task.commit_sha != null
       ? `<p>Recorded commit changes: <code>${escapeHtml(task.commit_sha)}</code></p>`
       : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
