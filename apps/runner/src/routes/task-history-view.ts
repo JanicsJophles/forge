@@ -7,15 +7,34 @@ taskHistoryViewRouter.get('/history', (_req, res) => {
   res.type('html').send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Forge task history</title>
-<style>body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:.6rem;border-bottom:1px solid #aaa;overflow-wrap:anywhere}input,select,button{font:inherit;margin:.3rem}td:nth-child(4){white-space:pre-wrap}.failure-reason{white-space:pre-wrap}button:disabled{opacity:.5}</style>
+<style>
+*{box-sizing:border-box}
+body{font:16px system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem;overflow-wrap:anywhere}
+form,.paging{display:flex;flex-wrap:wrap;align-items:end;gap:.6rem;max-width:100%;min-width:0}
+label{display:flex;flex-direction:column;min-width:0;max-width:100%}
+input,select,button{font:inherit;max-width:100%;min-width:0}
+input,select{width:100%}
+button{white-space:normal}
+.table-region{max-width:100%;overflow-x:auto;margin:1rem 0}
+.table-region:focus-visible{outline:2px solid currentColor;outline-offset:2px}
+table{width:100%;min-width:70rem;table-layout:fixed;border-collapse:collapse}
+td,th{text-align:left;padding:.6rem;border-bottom:1px solid #aaa;overflow-wrap:anywhere}
+td:nth-child(4){white-space:pre-wrap}
+.failure-reason{white-space:pre-wrap}
+button:disabled{opacity:.5}
+</style>
 </head><body><nav><a href="/dashboard">Dashboard</a> · <a href="/">Home</a></nav>
 <h1>Task history</h1>
 <form id="filters"><label>Repository (exact path) <input id="repo" type="text"></label>
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
+<div class="table-region" role="region" aria-label="Task history table" tabindex="0">
 <table><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th></tr></thead><tbody id="rows"></tbody></table>
+</div>
+<div class="paging" role="group" aria-label="History pages">
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
+</div>
 <script>
 // SQLite stores UTC without a zone; require a zone for ISO timestamps.
 function parseTimestamp(value) {
