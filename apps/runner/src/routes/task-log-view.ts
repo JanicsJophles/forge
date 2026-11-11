@@ -142,6 +142,10 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         font-size: 12px;
         line-height: 1.5;
       }
+      #failure { flex: 0 0 auto; padding: 8px 20px; border-top: 1px solid var(--fail); }
+      #failure h2 { margin: 0; font-size: 13px; color: var(--fail); }
+      #failure pre { max-height: 25vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+      #failure a { color: var(--accent); }
       #empty { color: var(--text-dim); }
       #omitted { margin: 0; padding: 8px 20px; color: var(--warn); }
       footer {
@@ -175,6 +179,11 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log"><span id="empty">waiting for output…</span></pre>
+    <section id="failure" aria-labelledby="failureLabel" hidden>
+      <h2 id="failureLabel">Task failure diagnostic</h2>
+      <pre id="failureReason"></pre>
+      <a href="${escapeHtml(`/tasks/${encodedId}?view=detail`)}">Full task detail JSON — complete saved failure reason</a>
+    </section>
     <footer>
       <span id="followStatus" role="status" aria-live="polite">Following latest output</span>
       <button type="button" id="jumpLatest" aria-controls="log">Jump to latest</button>
@@ -418,7 +427,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             // is a terminal task failure — the latter lets EventSource retry.
             if (e && typeof e.data === 'string') {
               done = true;
-              appendLog(parse(e.data));
+              document.getElementById('failureReason').textContent = parse(e.data);
+              document.getElementById('failure').hidden = false;
               taskStatus('failed');
               reconnectEl.hidden = true;
               current.close();
