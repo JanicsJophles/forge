@@ -177,7 +177,16 @@ ${rows}
               var repo = typeof task.repo === 'string'
                 ? task.repo.split('/').filter(Boolean).pop() || 'unknown' : 'unknown'
               var status = typeof task.status === 'string' ? task.status : 'unknown'
-              row.textContent = id + ' — ' + repo + ' — ' + status
+              var prompt = typeof task.prompt === 'string' ? task.prompt.replace(/\\s+/gu, ' ').trim() : ''
+              var characters = Array.from(prompt)
+              var truncated = characters.length > 160 || task.promptTruncated === true
+              var preview = prompt ? characters.slice(0, truncated ? 159 : 160).join('') +
+                (truncated ? '…' : '') : 'Saved prompt unavailable' + (truncated ? '…' : '')
+              row.textContent = id + ' — ' + repo + ' — ' + status +
+                ' — ' + preview + ' — Task ID: ' +
+                (typeof task.id === 'string' && task.id.trim() ? task.id : 'unavailable') +
+                ' — Repository: ' +
+                (typeof task.repo === 'string' && task.repo.trim() ? task.repo : 'unavailable')
               return row
             })
             list.textContent = ''

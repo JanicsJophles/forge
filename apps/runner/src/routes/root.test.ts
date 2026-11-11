@@ -177,7 +177,7 @@ test('landing script renders five compact task rows as literal text', async () =
   const task = { id: '12345678-abcd', repo: '/opt/repos/<img src=x onerror=alert(1)>/', status: '<b>running</b>' }
   const list = await renderRecentTasks(Array.from({ length: 6 }, () => task))
   assert.equal(list.children.length, 5)
-  assert.equal(list.children[0].textContent, '12345678 — <img src=x onerror=alert(1)> — <b>running</b>')
+  assert.ok(list.children[0].textContent.startsWith('12345678 — <img src=x onerror=alert(1)> — <b>running</b> — Saved prompt unavailable'))
 })
 
 test('landing script handles an empty task list', async () => {
