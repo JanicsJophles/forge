@@ -6,6 +6,9 @@ export const taskChangesViewRouter = Router()
 
 const FAILURE_REASON_CHAR_CAP = 2000
 
+// Keep footprints of up to 20 files open; larger lists yield space to the diff.
+const FILE_LIST_OPEN_LIMIT = 20
+
 function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
@@ -160,6 +163,8 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
     .failure-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
+    summary { cursor: pointer; overflow-wrap: anywhere; }
+    summary:focus-visible { outline: 2px solid #34d399; outline-offset: 4px; }
   </style>
 </head>
 <body>
@@ -183,8 +188,10 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
       : '<p>Current tracked changes in the task checkout. Untracked file contents are not included.</p>'}
     <section aria-label="Changed files">
       <h2>Changed files</h2>
-      <p>${summary.total} changed files: ${summary.added} added, ${summary.modified} modified, ${summary.deleted} deleted, ${summary.renamed} renamed, ${summary.copied} copied, ${summary.untracked} untracked.</p>
-      ${summary.total ? `<ul>${fileList}</ul>` : '<p>No changed files.</p>'}
+      ${summary.total ? `<details aria-label="Changed file list"${summary.total <= FILE_LIST_OPEN_LIMIT ? ' open' : ''}>
+        <summary>${summary.total} changed files: ${summary.added} added, ${summary.modified} modified, ${summary.deleted} deleted, ${summary.renamed} renamed, ${summary.copied} copied, ${summary.untracked} untracked.</summary>
+        <ul>${fileList}</ul>
+      </details>` : '<p>No changed files.</p>'}
       ${bounded.truncated ? `<p class="warning" role="status">File list truncated: showing ${bounded.changedFiles.length} of ${summary.total} changed files. Counts include all changed files.</p>` : ''}
     </section>
     ${result.truncated ? '<p class="warning" role="status">Patch truncated: only the first part is shown.</p>' : ''}
