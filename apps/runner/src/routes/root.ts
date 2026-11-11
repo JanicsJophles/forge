@@ -1,10 +1,12 @@
 import { Router } from 'express'
 import { version } from '../version.js'
+import { config } from '../config.js'
+import { RETENTION_INTERVAL_MS } from '../db/retention.js'
 
 export const rootRouter = Router()
 
 // Escape the handful of characters that could break out of HTML text/attribute
-// context. The only interpolated value is the build version, but it can carry a
+// context. The build version can carry a
 // git SHA from operator config, so never trust it raw.
 function escapeHtml(value: string): string {
   return value
@@ -51,6 +53,9 @@ const ENDPOINTS: Array<{ path: string; desc: string }> = [
 
 function landingHtml(): string {
   const safeVersion = escapeHtml(version)
+  const retentionPolicy = config.retentionDays === 0
+    ? 'History retention pruning is disabled (0 days).'
+    : `History retention: terminal runs (completed or failed) older than ${config.retentionDays} days are eligible for pruning at startup and every ${RETENTION_INTERVAL_MS / 3_600_000} hours.`
   // The reason labels are fixed ASCII constants, so this never contains a
   // </script> sequence; written into the inline script as the single source of
   // truth for the "Accepting work" suffix mapping.
@@ -91,6 +96,9 @@ function landingHtml(): string {
     </ul>
     <p>The provider runtime limit is a termination deadline, not a guaranteed completion or free-slot time. Queued work has not necessarily started.</p>
     <h2>Recent tasks</h2>
+    <p id="history-retention">${escapeHtml(retentionPolicy)} Queued and running tasks are retained.
+      Pruning makes SQLite pages reusable; it does not shrink the database file.
+      <a href="/history">Browse task history</a>.</p>
     <p id="tasks-freshness" role="status">Recent tasks unavailable — waiting for first update.</p>
     <p>Refreshes five seconds after each completed update.</p>
     <ul id="recent-tasks" aria-live="polite"><li>recent tasks unavailable</li></ul>
