@@ -1,8 +1,11 @@
+import { dirname } from 'node:path'
+import { realpathSync } from 'node:fs'
 import { Router } from 'express'
 import { countActiveProcs } from '../agent/runner.js'
 import { countActiveTasks, oldestRunningTaskAgeSeconds } from '../db/queries.js'
 import { freeDiskBytes } from '../agent/disk.js'
 import { config } from '../config.js'
+import { db } from '../db/schema.js'
 
 export const metricsRouter = Router()
 
@@ -18,9 +21,9 @@ function gauge(name: string, help: string, value: number): string {
 
 // Read free disk without ever throwing: a stat failure must still let the other
 // metrics through. Returns null on error so the gauge is omitted.
-function readFreeDiskMb(): number | null {
+function readFreeDiskMb(path: string): number | null {
   try {
-    return Math.floor(freeDiskBytes(config.allowedRepoPaths[0]) / 1048576)
+    return Math.floor(freeDiskBytes(path) / 1048576)
   } catch {
     return null
   }
@@ -30,7 +33,14 @@ function readFreeDiskMb(): number | null {
 // bearer-auth gate (which only challenges state-changing methods) leaves it open
 // for Prometheus to scrape without a credential.
 metricsRouter.get('/metrics', (_req, res) => {
-  const freeDiskMb = readFreeDiskMb()
+  const freeDiskMb = readFreeDiskMb(config.allowedRepoPaths[0])
+  // Match health/admission: a symlinked SQLite file may live on another volume.
+  let dataFreeDiskMb: number | null = null
+  try {
+    dataFreeDiskMb = readFreeDiskMb(dirname(realpathSync(db.name)))
+  } catch {
+    // An unresolved database path omits only its disk gauge.
+  }
   const oldestRunningAge = oldestRunningTaskAgeSeconds()
 
   let body = ''
@@ -50,6 +60,13 @@ metricsRouter.get('/metrics', (_req, res) => {
       'forge_free_disk_mb',
       'Free disk space in megabytes on the allowed repo volume.',
       freeDiskMb
+    )
+  }
+  if (dataFreeDiskMb !== null) {
+    body += gauge(
+      'forge_data_free_disk_mb',
+      'Free disk space in megabytes on the SQLite data volume.',
+      dataFreeDiskMb
     )
   }
   body += gauge('forge_uptime_seconds', 'Runner process uptime in seconds.', Math.floor(process.uptime()))
