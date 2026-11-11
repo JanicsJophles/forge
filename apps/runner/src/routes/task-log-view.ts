@@ -146,6 +146,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       #failure h2 { margin: 0; font-size: 13px; color: var(--fail); }
       #failure pre { max-height: 25vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
       #failure a { color: var(--accent); }
+      #log:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
       #empty { color: var(--text-dim); }
       #omitted { margin: 0; padding: 8px 20px; color: var(--warn); }
       footer {
@@ -178,7 +179,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
     </header>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
-    <pre id="log"><span id="empty">waiting for output…</span></pre>
+    <pre id="log" role="region" aria-label="Task transcript" tabindex="0"><span id="empty">waiting for output…</span></pre>
     <section id="failure" aria-labelledby="failureLabel" hidden>
       <h2 id="failureLabel">Task failure diagnostic</h2>
       <pre id="failureReason"></pre>
