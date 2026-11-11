@@ -266,8 +266,9 @@ measurement failures and continues its other checks.
 `build.gitShaPinned` indicates whether that setting is present. Provider discovery
 does not probe CLI authentication. Retention is not exposed in this response.
 
-The same body is also reachable at `GET /tasks/capabilities` (a legacy alias of the
-canonical `GET /capabilities`).
+The legacy `GET /tasks/capabilities` alias has been removed. Use `GET /capabilities`
+for discovery. The old path now follows `GET /tasks/:id`: when no task with ID
+`capabilities` exists, it returns HTTP 404 with `{"error":"task not found"}`.
 
 ### GET /tasks/:id/changes
 

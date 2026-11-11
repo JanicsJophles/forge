@@ -21,7 +21,6 @@ import { getChangedFiles, summarizeChangedFiles, boundChangedFiles, getChangesPa
 import { freeDiskBytes } from '../agent/disk.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
-import { capabilitiesRouter } from './capabilities.js'
 
 import { streamTask } from './task-stream.js'
 import { readTaskStreamSnapshot } from '../db/task-stream-snapshot.js'
@@ -189,7 +188,6 @@ function dispatchTask(fields: {
 }
 
 export const tasksRouter = Router()
-tasksRouter.use(capabilitiesRouter)
 
 // POST /tasks — create and kick off a task
 tasksRouter.post('/', (req: Request, res: Response) => {
