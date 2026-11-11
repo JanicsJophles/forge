@@ -13,7 +13,7 @@ test('history keeps its semantic table in a named keyboard scroll region and wra
   const { port } = server.address() as { port: number }
   const html = await (await fetch(`http://127.0.0.1:${port}/history`)).text()
   assert.match(html, /name="viewport" content="width=device-width, initial-scale=1"/)
-  assert.match(html, /<div class="table-region" role="region" aria-label="Task history table" tabindex="0">\s*<table><thead>/)
+  assert.match(html, /<div class="table-region" role="region" aria-label="Task history table" tabindex="0">\s*<table><caption id="displayed">No task history loaded\.<\/caption><thead>/)
   assert.match(html, /<tbody id="rows"><\/tbody><\/table>\s*<\/div>\s*<div class="paging" role="group" aria-label="History pages">/)
   assert.ok((html.match(/<th>/g) || []).length >= 9)
   for (const heading of ['Outcome', 'Repository', 'Prompt preview', 'Logs', 'Recorded commit', 'Changes', 'Run duration', 'Completed (UTC)']) {
