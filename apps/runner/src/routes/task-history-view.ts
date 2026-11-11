@@ -33,6 +33,7 @@ button:disabled{opacity:.5}
 <table><caption id="displayed">No task history loaded.</caption><thead><tr><th>Outcome</th><th>Created</th><th>Repository</th><th>Prompt preview</th><th>Logs</th><th>Recorded commit</th><th>Changes</th><th>Run duration</th><th>Completed (UTC)</th><th>Launch settings</th><th>Task ID</th></tr></thead><tbody id="rows"></tbody></table>
 </div>
 <div class="paging" role="group" aria-label="History pages">
+<p id="expired" role="status" hidden></p><button id="recover" hidden>Return to latest</button>
 <button id="refresh">Refresh</button><button id="newer" disabled>Newer</button><button id="latest" disabled>Latest</button><button id="older" disabled>Older</button><button id="retry" hidden>Retry request</button>
 </div>
 <script>
@@ -78,10 +79,14 @@ const retry = document.getElementById('retry');
 const newer = document.getElementById('newer');
 const latest = document.getElementById('latest');
 const refresh = document.getElementById('refresh');
+const expired = document.getElementById('expired');
+const recover = document.getElementById('recover');
+let expiredSelection = null;
 let generation = 0;
 let next = null;
 let selection = { repo: '', status: '' };
-let cursors = [null];
+const initialBefore = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('before');
+let cursors = initialBefore ? [null, initialBefore] : [null];
 let failedCursors = cursors;
 let loading = false;
 let successfulPage = null;
@@ -94,8 +99,9 @@ function describe(pageCursors, pageSelection) {
 }
 function updateControls() {
   refresh.disabled = loading;
-  older.disabled = loading || !next;
-  newer.disabled = latest.disabled = loading || cursors.length === 1;
+  recover.disabled = loading;
+  older.disabled = loading || !!expiredSelection || !next;
+  newer.disabled = latest.disabled = loading || !!expiredSelection || cursors.length === 1;
 }
 async function load(targetCursors, targetSelection = selection) {
   if (cancelRequest) cancelRequest();
@@ -127,7 +133,11 @@ async function load(targetCursors, targetSelection = selection) {
     const { response, tasks } = await Promise.race([
       (async () => {
         const response = await fetch('/tasks?' + query, { signal: controller.signal });
-        if (!response.ok) throw new Error('HTTP ' + response.status);
+        if (!response.ok) {
+          const error = new Error('HTTP ' + response.status);
+          error.expiredCursor = response.status === 404 && !!before;
+          throw error;
+        }
         return { response, tasks: await response.json() };
       })(),
       deadline,
@@ -204,6 +214,8 @@ async function load(targetCursors, targetSelection = selection) {
       pageRows.push(row);
     }
     rows.replaceChildren(...pageRows);
+    expiredSelection = null;
+    expired.hidden = recover.hidden = true;
     next = response.headers.get('X-Next-Before');
     cursors = targetCursors;
     selection = targetSelection;
@@ -219,7 +231,15 @@ async function load(targetCursors, targetSelection = selection) {
     displayed.textContent = successfulPage
       ? 'Stale — showing last successful selection. ' + describe(successfulPage.cursors, successfulPage.selection)
       : 'No task history loaded.';
-    retry.hidden = false;
+    if (error.expiredCursor) expiredSelection = successfulPage ? successfulPage.selection : targetSelection;
+    if (expiredSelection) {
+      expired.hidden = recover.hidden = false;
+      expired.textContent = 'This history page has expired because its pagination anchor is no longer retained.' +
+        (successfulPage ? ' Stale rows: showing the last successful page until replacement succeeds.' : ' No task history loaded.') +
+        ' Return to latest keeps repository ' + (expiredSelection.repo || 'All repositories') +
+        ' and status ' + (expiredSelection.status || 'All statuses') + '.';
+    }
+    retry.hidden = !!expiredSelection;
   } finally {
     clearTimeout(timer);
     if (current === generation) {
@@ -238,9 +258,11 @@ status.onchange = reset;
 older.onclick = () => { if (!older.disabled) return load([...cursors, next]); };
 newer.onclick = () => { if (!newer.disabled) return load(cursors.slice(0, -1)); };
 latest.onclick = () => { if (!latest.disabled) return load([null]); };
-retry.onclick = () => load(failedCursors, failedSelection);
+recover.onclick = () => { if (!recover.disabled && expiredSelection) return load([null], expiredSelection); };
+retry.onclick = () => expiredSelection ? recover.onclick() : load(failedCursors, failedSelection);
 refresh.onclick = () => {
   if (refresh.disabled) return;
+  if (expiredSelection) return recover.onclick();
   return successfulPage ? load(successfulPage.cursors, successfulPage.selection) : load(cursors);
 };
 load(cursors);
