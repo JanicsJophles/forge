@@ -16,7 +16,8 @@
 //                                   max concurrency, available slots).
 //                                   ?repo=<name> narrows every collection and
 //                                   its counts to that repo — but NOT capacity,
-//                                   since concurrency is global.
+//                                   since concurrency is global. Disk headroom
+//                                   (`disk`) also remains global under filtering.
 // ---------------------------------------------------------------------------
 
 import { Router, type Request, type Response } from 'express'
@@ -35,6 +36,13 @@ import {
 import { db } from '../db/schema.js'
 import { listActiveTasks, countActiveTasks } from '../db/queries.js'
 import { config } from '../config.js'
+import { freeDiskBytes } from '../agent/disk.js'
+
+interface ContextDiskOptions {
+  allowedRepoPaths: readonly string[]
+  minFreeDiskMb: number
+  freeDiskBytes: (path: string) => number
+}
 
 export const agentStateRouter = Router()
 
@@ -172,72 +180,101 @@ agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
 
 // ---- combined dashboard ----------------------------------------------------
 
-agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
-  if (!validSince(req.query.since)) {
-    return badRequest(res, 'since must be a single parseable SQLite UTC or ISO timestamp')
-  }
-  // Mirror the /tasks repo-filter validation: present-but-blank is rejected.
-  const rawRepo = req.query.repo
-  if (rawRepo !== undefined && (typeof rawRepo !== 'string' || !rawRepo.trim())) {
-    return badRequest(res, 'repo must be a non-empty string')
-  }
-  const repo = typeof rawRepo === 'string' ? rawRepo : undefined
-  const since = typeof req.query.since === 'string'
-    ? req.query.since
-    : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
+export function createAgentContextRouter(options: ContextDiskOptions = {
+  allowedRepoPaths: config.allowedRepoPaths,
+  minFreeDiskMb: config.minFreeDiskMb,
+  freeDiskBytes,
+}) {
+  const router = Router()
+  router.get('/agent-context', (req: Request, res: Response) => {
+    if (!validSince(req.query.since)) {
+      return badRequest(res, 'since must be a single parseable SQLite UTC or ISO timestamp')
+    }
+    // Mirror the /tasks repo-filter validation: present-but-blank is rejected.
+    const rawRepo = req.query.repo
+    if (rawRepo !== undefined && (typeof rawRepo !== 'string' || !rawRepo.trim())) {
+      return badRequest(res, 'repo must be a non-empty string')
+    }
+    const repo = typeof rawRepo === 'string' ? rawRepo : undefined
+    const since = typeof req.query.since === 'string'
+      ? req.query.since
+      : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
-  const live = listAgentState({ repo })
-  const eventWindow = listEvents({ since, repo, limit: 201 })
-  const events = eventWindow.slice(0, 200)
-  const liveTasks = repo === undefined
-    ? listActiveTasks()
-    : listActiveTasks().filter(t => t.repo === repo)
+    const live = listAgentState({ repo })
+    const eventWindow = listEvents({ since, repo, limit: 201 })
+    const events = eventWindow.slice(0, 200)
+    const liveTasks = repo === undefined
+      ? listActiveTasks()
+      : listActiveTasks().filter(t => t.repo === repo)
 
-  // Sweep dust on every call. Cheap on small tables.
-  gcAgentState()
-  gcAgentEvents()
+    // Sweep dust on every call. Cheap on small tables.
+    gcAgentState()
+    gcAgentEvents()
 
-  // Helpful denormalised summary so consumers don't reduce themselves.
-  const liveByRepo: Record<string, number> = Object.create(null)
-  const liveByTicket: Record<string, number> = Object.create(null)
-  for (const a of live) {
-    if (a.repo) liveByRepo[a.repo] = (liveByRepo[a.repo] ?? 0) + 1
-    if (a.ticket) liveByTicket[a.ticket] = (liveByTicket[a.ticket] ?? 0) + 1
-  }
+    // Helpful denormalised summary so consumers don't reduce themselves.
+    const liveByRepo: Record<string, number> = Object.create(null)
+    const liveByTicket: Record<string, number> = Object.create(null)
+    for (const a of live) {
+      if (a.repo) liveByRepo[a.repo] = (liveByRepo[a.repo] ?? 0) + 1
+      if (a.ticket) liveByTicket[a.ticket] = (liveByTicket[a.ticket] ?? 0) + 1
+    }
 
-  // Runner's own queued/running tasks, so agents can see a forge task is
-  // already active in a repo (not just the checkpointed agent_state rows).
-  const liveTasksByRepo: Record<string, number> = Object.create(null)
-  for (const t of liveTasks) {
-    liveTasksByRepo[t.repo] = (liveTasksByRepo[t.repo] ?? 0) + 1
-  }
+    // Runner's own queued/running tasks, so agents can see a forge task is
+    // already active in a repo (not just the checkpointed agent_state rows).
+    const liveTasksByRepo: Record<string, number> = Object.create(null)
+    for (const t of liveTasks) {
+      liveTasksByRepo[t.repo] = (liveTasksByRepo[t.repo] ?? 0) + 1
+    }
 
-  // Runner-wide concurrency budget, deliberately NOT narrowed by ?repo= —
-  // MAX_CONCURRENT_TASKS is global, so a dispatcher can answer "can I launch
-  // another task now?" from this one call.
-  const activeTasks = countActiveTasks()
-  const maxConcurrentTasks = config.maxConcurrentTasks
-  const capacity = {
-    activeTasks,
-    maxConcurrentTasks,
-    availableSlots: Math.max(0, maxConcurrentTasks - activeTasks),
-  }
+    // Runner-wide concurrency budget, deliberately NOT narrowed by ?repo= —
+    // MAX_CONCURRENT_TASKS is global, so a dispatcher can answer "can I launch
+    // another task now?" from this one call.
+    const activeTasks = countActiveTasks()
+    const maxConcurrentTasks = config.maxConcurrentTasks
+    const capacity = {
+      activeTasks,
+      maxConcurrentTasks,
+      availableSlots: Math.max(0, maxConcurrentTasks - activeTasks),
+    }
 
-  res.json({
-    generatedAt: new Date().toISOString(),
-    liveAgents: live,
-    liveAgentsCount: live.length,
-    liveByRepo,
-    liveByTicket,
-    liveTasks,
-    liveTasksCount: liveTasks.length,
-    liveTasksByRepo,
-    capacity,
-    recentEvents: events,
-    recentEventsCount: events.length,
-    recentEventsTruncated: eventWindow.length > 200,
-    // Snapshot boundary only: timestamp ordering means this is not a paging cursor.
-    recentEventsOldestId: events.at(-1)?.id ?? null,
-    since,
+    // Disk headroom is global, just like capacity. Keep every configured-path
+    // probe inside the guard: missing or unreadable roots mean unknown headroom.
+    let freeDiskMb: number | null = null
+    try {
+      const root = options.allowedRepoPaths[0]
+      if (root !== undefined) {
+        const bytes = options.freeDiskBytes(root)
+        if (Number.isFinite(bytes) && bytes >= 0) freeDiskMb = Math.floor(bytes / 1048576)
+      }
+    } catch {
+      freeDiskMb = null
+    }
+    const disk = {
+      freeDiskMb,
+      diskOk: freeDiskMb === null ? null : freeDiskMb >= options.minFreeDiskMb,
+    }
+
+    res.json({
+      generatedAt: new Date().toISOString(),
+      liveAgents: live,
+      liveAgentsCount: live.length,
+      liveByRepo,
+      liveByTicket,
+      liveTasks,
+      liveTasksCount: liveTasks.length,
+      liveTasksByRepo,
+      capacity,
+      disk,
+      recentEvents: events,
+      recentEventsCount: events.length,
+      recentEventsTruncated: eventWindow.length > 200,
+      // Snapshot boundary only: timestamp ordering means this is not a paging cursor.
+      recentEventsOldestId: events.at(-1)?.id ?? null,
+      since,
+    })
   })
-})
+
+  return router
+}
+
+agentStateRouter.use(createAgentContextRouter())
