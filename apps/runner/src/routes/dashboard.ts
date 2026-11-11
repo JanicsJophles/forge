@@ -663,7 +663,7 @@ const HTML = `<!DOCTYPE html>
             e.repo ? '<span class="repo">' + escape(e.repo) + '</span>' : '',
             e.ticket ? '<span class="ticket">' + escape(e.ticket) + '</span>' : '',
             prHtml,
-            e.agentId ? '<span class="agent">by ' + escape(e.agentId.slice(0, 24)) + '</span>' : '',
+            e.agentId ? '<span class="agent">by ' + escape(e.agentId) + '</span>' : '',
             e.details && typeof e.details === 'object' && Object.keys(e.details).length
               ? '<details class="event-details"' +
                 (Number.isSafeInteger(e.id) ? ' data-event-id="' + e.id + '" ontoggle="rememberEventDetails(this)"' : '') +
