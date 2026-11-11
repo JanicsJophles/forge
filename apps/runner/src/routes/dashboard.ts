@@ -433,6 +433,7 @@ const HTML = `<!DOCTYPE html>
         <div class="launch-row">
           <label for="launchRepo">Repository</label>
           <select id="launchRepo" aria-describedby="launchRepoState"><option value="">loading repositories…</option></select>
+          <button type="button" id="reloadRepos">Refresh repositories</button>
           <span id="launchRepoState" role="status" aria-live="polite" style="overflow-wrap:anywhere"></span>
           <label for="launchProvider">Provider</label>
           <select id="launchProvider">
@@ -755,6 +756,7 @@ const HTML = `<!DOCTYPE html>
     }
     let launchRepos = [];
     let launchReposStale = false;
+    let reposLoading = false;
     function renderLaunchRepoState() {
       const path = document.getElementById('launchRepo').value;
       const repo = launchRepos.find(repo => repo.path === path);
@@ -773,7 +775,9 @@ const HTML = `<!DOCTYPE html>
         + repo.path + ' · ' + branch + ' · ' + dirty;
     }
     async function loadRepos() {
-      // Populate the launcher's repo <select> from GET /repos, once on load.
+      if (reposLoading) return;
+      reposLoading = true;
+      // Refresh only on load or explicit operator request.
       // A read endpoint, so it is never auth-gated. Option values are repo paths
       // (what POST /tasks expects); labels fall back to the path if name is blank.
       const select = document.getElementById('launchRepo');
@@ -800,6 +804,8 @@ const HTML = `<!DOCTYPE html>
         launchReposStale = true;
         if (!launchRepos.length) select.innerHTML = '<option value="">could not load repositories</option>';
         renderLaunchRepoState();
+      } finally {
+        reposLoading = false;
       }
     }
     async function submitNewTask(event) {
@@ -824,6 +830,13 @@ const HTML = `<!DOCTYPE html>
       errEl.textContent = '';
       if (!repo) { errEl.textContent = 'select a repository'; return; }
       if (!prompt.trim()) { errEl.textContent = 'prompt is required'; return; }
+      const snapshot = launchRepos.find(item => item.path === repo);
+      if (reposLoading || launchReposStale || !snapshot || snapshot.branchError ||
+          typeof snapshot.currentBranch !== 'string' || !snapshot.currentBranch.trim()) {
+        errEl.textContent = 'Refresh repositories successfully before launching: checkout branch is unavailable or stale.';
+        return;
+      }
+      const branch = snapshot.currentBranch;
       button.disabled = true;
       const original = button.textContent;
       button.textContent = 'launching…';
@@ -834,7 +847,7 @@ const HTML = `<!DOCTYPE html>
         // Only send model when the operator typed one; a blank field POSTs no
         // model so the server applies the provider default. An invalid value
         // comes back 400 and surfaces inline via the throw below.
-        const body = { repo, prompt, provider, autoCommit };
+        const body = { repo, branch, prompt, provider, autoCommit };
         if (model) body.model = model;
         // Transport work must not mutate the UI after the deadline wins.
         const received = await Promise.race([
@@ -889,6 +902,7 @@ const HTML = `<!DOCTYPE html>
       const form = document.getElementById('newTaskForm');
       if (form) form.onsubmit = submitNewTask;
       document.getElementById('launchRepo').onchange = renderLaunchRepoState;
+      document.getElementById('reloadRepos').onclick = loadRepos;
       loadRepos();
     }
     function renderTasks(tasks) {

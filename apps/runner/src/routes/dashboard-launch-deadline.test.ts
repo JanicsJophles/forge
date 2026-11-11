@@ -123,6 +123,7 @@ async function harness(script: string) {
 
 async function ready() {
   const h = await harness(await servedScript())
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'keep prompt'
   h.el('launchModel').value = 'model'

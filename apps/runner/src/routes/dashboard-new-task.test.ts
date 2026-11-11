@@ -121,7 +121,7 @@ test('launcher populates the repo select from GET /repos with escaped labels', a
   await h.resolveWith('/repos', {
     ok: true,
     json: async () => [
-      { name: 'forge', path: '/opt/repos/fleet-forge' },
+      { name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' },
       // Hostile name + path must be neutralized before reaching the DOM.
       { name: '"><img src=x onerror=alert(1)>', path: '/opt/repos/<evil>' },
       // A blank name falls back to the path as the label.
@@ -149,7 +149,7 @@ test('a failed /repos load degrades to a static message, never throwing', async 
 
 test('submitting POSTs JSON to /tasks and clears the prompt on 201', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
 
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
@@ -163,6 +163,7 @@ test('submitting POSTs JSON to /tasks and clears the prompt on 201', async () =>
   assert.equal(post.options!.headers!['Content-Type'], 'application/json')
   assert.deepEqual(JSON.parse(post.options!.body!), {
     repo: '/opt/repos/fleet-forge',
+    branch: 'fleet/next',
     prompt: 'do a thing',
     provider: 'codex',
     autoCommit: true,
@@ -179,7 +180,7 @@ test('submitting POSTs JSON to /tasks and clears the prompt on 201', async () =>
 
 test('a non-empty model is trimmed and included in the POST body', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
 
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
@@ -190,6 +191,7 @@ test('a non-empty model is trimmed and included in the POST body', async () => {
   const post = h.take('/tasks')
   assert.deepEqual(JSON.parse(post.options!.body!), {
     repo: '/opt/repos/fleet-forge',
+    branch: 'fleet/next',
     prompt: 'do a thing',
     provider: 'claude',
     autoCommit: false,
@@ -201,7 +203,7 @@ test('a non-empty model is trimmed and included in the POST body', async () => {
 
 test('a blank / whitespace-only model omits the model field entirely', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
 
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'do a thing'
@@ -215,6 +217,7 @@ test('a blank / whitespace-only model omits the model field entirely', async () 
   assert.ok(!('model' in body), 'blank model must not add a model field')
   assert.deepEqual(body, {
     repo: '/opt/repos/fleet-forge',
+    branch: 'fleet/next',
     prompt: 'do a thing',
     provider: 'claude',
     autoCommit: false,
@@ -225,7 +228,7 @@ test('a blank / whitespace-only model omits the model field entirely', async () 
 
 test('a server 400 for an invalid model surfaces inline, never silently', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
 
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'keep me'
@@ -244,7 +247,7 @@ test('a server 400 for an invalid model surfaces inline, never silently', async 
 
 test('a non-2xx response surfaces inline and leaves the typed prompt intact', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'keep me'
   h.el('launchSubmit').textContent = 'Launch task'
@@ -261,7 +264,7 @@ test('a non-2xx response surfaces inline and leaves the typed prompt intact', as
 
 test('a network error surfaces inline and leaves the typed prompt intact', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
   h.el('launchRepo').value = '/opt/repos/fleet-forge'
   h.el('launchPrompt').value = 'keep me'
 
@@ -274,7 +277,7 @@ test('a network error surfaces inline and leaves the typed prompt intact', async
 
 test('submitting with no repo or blank prompt validates without a /tasks POST', async () => {
   const h = await harness(await servedScript())
-  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge' }] })
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ name: 'forge', path: '/opt/repos/fleet-forge', currentBranch: 'fleet/next' }] })
 
   // No repo selected.
   h.el('launchRepo').value = ''
