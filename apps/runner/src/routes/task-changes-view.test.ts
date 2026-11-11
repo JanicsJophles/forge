@@ -53,10 +53,10 @@ test('HTML changes viewer escapes patches, bounds output and handles missing tas
       createdAt: new Date().toISOString(),
     })
 
-    // Unknown id -> 404, same shape as the default path.
+    // Unknown id keeps browser navigation available.
     const missing = await fetch(`${base}/tasks/does-not-exist/changes/view`)
     assert.equal(missing.status, 404)
-    assert.equal(((await missing.json()) as { error: string }).error, 'task not found')
+    assert.match(await missing.text(), /Task not found/)
 
     // Known task returns an escaped, color-coded HTML diff.
     const patch = await fetch(`${base}/tasks/task-under-test/changes/view`)
@@ -98,7 +98,7 @@ test('HTML changes viewer escapes patches, bounds output and handles missing tas
     fs.rmSync(repo, { recursive: true, force: true })
     const failed = await fetch(`${base}/tasks/task-under-test/changes/view`)
     assert.equal(failed.status, 503)
-    assert.equal(((await failed.json()) as { error: string }).error, 'could not inspect repository changes')
+    assert.match(await failed.text(), /Changes temporarily unavailable/)
   } finally {
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))

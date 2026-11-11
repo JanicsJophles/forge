@@ -60,12 +60,44 @@ export function patchNavigation(patch: string): { targets: Map<string, string>; 
   return { targets, anchors }
 }
 
+// Keep error output independent of Git diagnostics and partially captured patches.
+function errorPage(taskId: string, unavailable: boolean): string {
+  const id = escapeHtml(taskId)
+  const retryHref = escapeHtml(`/tasks/${encodeURIComponent(taskId)}/changes/view`)
+  const title = unavailable ? 'Changes temporarily unavailable' : 'Task not found'
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>forge · ${title}</title>
+  <style>
+    body { margin: 20px; background: #030712; color: #e4e4e7; font: 14px system-ui, sans-serif; overflow-wrap: anywhere; }
+    a { color: #34d399; margin-right: 16px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>${title}</h1>
+    <p>Task: <code>${id}</code></p>
+    <p>${unavailable
+      ? 'Could not inspect repository changes. Try again when the checkout is available.'
+      : 'This task could not be found. It may have been pruned from retained history.'}</p>
+    <nav aria-label="Review navigation">
+      ${unavailable ? `<a href="${retryHref}">Retry changes</a>` : ''}
+      <a href="/history">task history</a><a href="/dashboard">dashboard</a>
+    </nav>
+  </main>
+</body>
+</html>`
+}
+
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Avoid loading the task's potentially large log just to locate its checkout.
   const task = db.prepare('SELECT repo, commit_sha FROM tasks WHERE id = ?').get(req.params.id) as
     { repo: string; commit_sha: string | null } | undefined
   if (!task) {
-    res.status(404).json({ error: 'task not found' })
+    res.status(404).type('html').send(errorPage(req.params.id, false))
     return
   }
   let result
@@ -74,7 +106,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     result = getChangesPatch(task.repo, task.commit_sha)
     files = getChangedFiles(task.repo, task.commit_sha)
   } catch {
-    res.status(503).json({ error: 'could not inspect repository changes' })
+    res.status(503).type('html').send(errorPage(req.params.id, true))
     return
   }
   const summary = summarizeChangedFiles(files)

@@ -89,11 +89,13 @@ test('HTML and raw patches review the recorded commit independently of the check
       setSha(hostile)
       const failed = await fetch(`${base}/changes/view`)
       assert.equal(failed.status, 503)
-      assert.deepEqual(await failed.json(), { error: 'could not inspect repository changes' })
+      const errorHtml = await failed.text()
+      assert.match(errorHtml, /Changes temporarily unavailable/)
+      if (hostile) assert.ok(!errorHtml.includes(hostile))
     }
     const missing = await fetch(`${base}-missing/changes/view`)
     assert.equal(missing.status, 404)
-    assert.deepEqual(await missing.json(), { error: 'task not found' })
+    assert.match(await missing.text(), /Task not found/)
   } finally {
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
