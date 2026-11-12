@@ -13,6 +13,7 @@ class Element {
   checked: boolean | undefined
   disabled = false
   className = ''
+  onclick: () => void = () => {}
   onsubmit: (e: unknown) => void = () => {}
   querySelectorAll() {
     return []
@@ -110,7 +111,7 @@ async function harness(script: string) {
     el('newTaskForm').onsubmit({ preventDefault() {} })
     await settle()
   }
-  return { elements, requests, el, take, resolveWith, submit, settle }
+  return { elements, requests, el, take, resolveWith, submit, settle, timers }
 }
 
 test('launcher populates the repo select from GET /repos with escaped labels', async () => {
@@ -292,4 +293,76 @@ test('submitting with no repo or blank prompt validates without a /tasks POST', 
   await h.submit()
   assert.match(h.el('launchErr').textContent, /prompt is required/)
   assert.equal(h.requests.filter((r) => r.url.includes('/tasks')).length, 0)
+})
+
+for (const failure of ['HTTP', 'headers deadline', 'body deadline', 'malformed']) {
+  test(`repository retry preserves drafts and blocks submission after ${failure}`, async () => {
+    const h = await harness(await servedScript())
+    const repos = [{ path: '/repo', currentBranch: 'fleet/next' }]
+    await h.resolveWith('/repos', { ok: true, json: async () => repos })
+    h.el('launchRepo').value = '/repo'
+    h.el('launchPrompt').value = 'keep draft'
+    h.el('launchProvider').value = 'codex'
+    h.el('launchModel').value = 'custom-model'
+    h.el('launchAutoCommit').checked = true
+    h.el('authToken').value = 'draft-token'
+    h.el('launchSuccess').textContent = 'previous launch'
+    h.el('reloadRepos').onclick()
+    h.el('reloadRepos').onclick()
+    assert.equal(h.requests.filter(r => r.url === '/repos').length, 1)
+    assert.equal(h.el('reloadRepos').disabled, true)
+    const pending = h.take('/repos')
+    assert.equal(h.el('launchSuccess').textContent, 'previous launch')
+    await h.submit()
+    assert.equal(h.requests.filter(r => r.options?.method === 'POST').length, 0)
+    if (failure === 'HTTP') pending.resolve({ ok: false, status: 503 })
+    if (failure === 'malformed') pending.resolve({ ok: true, json: async () => ({}) })
+    let finishBody!: (value: unknown) => void
+    if (failure === 'body deadline') {
+      pending.resolve({ ok: true, json: () => new Promise(resolve => { finishBody = resolve }) })
+      await h.settle()
+    }
+    if (failure.includes('deadline')) {
+      for (const timer of [...h.timers.values()]) if (timer.ms === 10000) timer.fn()
+    }
+    await h.settle()
+    assert.match(h.el('repoDiscoveryStatus').textContent, /failed/)
+    assert.equal(h.el('reloadRepos').disabled, false)
+    await h.submit()
+    assert.equal(h.requests.filter(r => r.options?.method === 'POST').length, 0)
+    const feedback = h.el('launchErr').textContent
+    h.el('reloadRepos').onclick()
+    await h.resolveWith('/repos', { ok: true, json: async () => repos })
+    assert.equal(h.el('launchErr').textContent, feedback)
+    if (failure === 'headers deadline') pending.resolve({ ok: true, json: async () => [] })
+    if (failure === 'body deadline') finishBody([])
+    await h.settle()
+    assert.equal(h.el('launchRepo').value, '/repo')
+    assert.equal(h.el('launchPrompt').value, 'keep draft')
+    assert.equal(h.el('launchProvider').value, 'codex')
+    assert.equal(h.el('launchModel').value, 'custom-model')
+    assert.equal(h.el('launchAutoCommit').checked, true)
+    assert.equal(h.el('authToken').value, 'draft-token')
+    await h.submit()
+    const post = h.take('/tasks')
+    assert.equal(JSON.parse(post.options!.body!).branch, 'fleet/next')
+    post.resolve({ ok: true, status: 201, json: async () => ({ taskId: 'retry-task' }) })
+    await h.settle()
+  })
+}
+
+test('repository refresh requires a new choice when the selected checkout disappears', async () => {
+  const h = await harness(await servedScript())
+  await h.resolveWith('/repos', { ok: true, json: async () => [{ path: '/old', currentBranch: 'old' }] })
+  h.el('launchRepo').value = '/old'
+  h.el('launchPrompt').value = 'keep draft'
+  for (const repos of [[{ path: '/new', currentBranch: 'new' }], []]) {
+    h.el('reloadRepos').onclick()
+    await h.resolveWith('/repos', { ok: true, json: async () => repos })
+    assert.equal(h.el('launchRepo').value, '')
+    assert.equal(h.el('launchPrompt').value, 'keep draft')
+    await h.submit()
+    assert.equal(h.requests.filter(r => r.options?.method === 'POST').length, 0)
+  }
+  assert.match(h.el('repoDiscoveryStatus').textContent, /No repositories/)
 })

@@ -434,6 +434,7 @@ const HTML = `<!DOCTYPE html>
           <label for="launchRepo">Repository</label>
           <select id="launchRepo" aria-describedby="launchRepoState"><option value="">loading repositories…</option></select>
           <button type="button" id="reloadRepos">Refresh repositories</button>
+          <span id="repoDiscoveryStatus" role="status" aria-live="polite"></span>
           <span id="launchRepoState" role="status" aria-live="polite" style="overflow-wrap:anywhere"></span>
           <label for="launchProvider">Provider</label>
           <select id="launchProvider">
@@ -788,10 +789,27 @@ const HTML = `<!DOCTYPE html>
       // A read endpoint, so it is never auth-gated. Option values are repo paths
       // (what POST /tasks expects); labels fall back to the path if name is blank.
       const select = document.getElementById('launchRepo');
+      const reload = document.getElementById('reloadRepos');
+      const status = document.getElementById('repoDiscoveryStatus');
+      reload.disabled = true;
+      status.textContent = 'Loading repositories… Launch is blocked until discovery succeeds.';
+      const controller = new AbortController();
+      let timer;
       try {
-        const r = await fetch('/repos');
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const repos = await r.json();
+        // Race headers AND body; late transport completion cannot update the form.
+        const repos = await Promise.race([
+          (async () => {
+            const r = await fetch('/repos', { signal: controller.signal });
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return await r.json();
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('repository discovery deadline'));
+              controller.abort();
+            }, 10000);
+          }),
+        ]);
         if (!Array.isArray(repos)) throw new Error('invalid repos');
         const options = repos
           .filter(repo => repo && typeof repo.path === 'string' && repo.path)
@@ -802,16 +820,22 @@ const HTML = `<!DOCTYPE html>
           })
           .join('');
         const previous = select.value;
-        select.innerHTML = options || '<option value="">no repositories available</option>';
+        select.innerHTML = options
+          ? '<option value="">select a repository</option>' + options
+          : '<option value="">no repositories available</option>';
         launchRepos = repos.filter(repo => repo && typeof repo.path === 'string' && repo.path);
-        if (launchRepos.some(repo => repo.path === previous)) select.value = previous;
+        select.value = launchRepos.some(repo => repo.path === previous) ? previous : '';
+        status.textContent = launchRepos.length ? 'Repositories refreshed.' : 'No repositories available. Refresh to try again.';
         launchReposStale = false;
         renderLaunchRepoState();
       } catch (e) {
         launchReposStale = true;
+        status.textContent = 'Repository discovery failed. Refresh repositories to retry; launch is blocked.';
         if (!launchRepos.length) select.innerHTML = '<option value="">could not load repositories</option>';
         renderLaunchRepoState();
       } finally {
+        clearTimeout(timer);
+        reload.disabled = false;
         reposLoading = false;
       }
     }
