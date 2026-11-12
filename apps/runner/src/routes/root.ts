@@ -199,6 +199,16 @@ ${rows}
                 (typeof task.id === 'string' && task.id.trim() ? task.id : 'unavailable') +
                 ' — Repository: ' +
                 (typeof task.repo === 'string' && task.repo.trim() ? task.repo : 'unavailable')
+              if (typeof task.id === 'string' && task.id.trim() && !/^\\.+$/.test(task.id)) {
+                try {
+                  var link = document.createElement('a')
+                  link.href = '/tasks/' + encodeURIComponent(task.id) + '/log/view'
+                  link.textContent = ' View logs'
+                  row.appendChild(link)
+                } catch (_) {
+                  // Malformed Unicode cannot form an encoded path segment.
+                }
+              }
               return row
             })
             list.textContent = ''
