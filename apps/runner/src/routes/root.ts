@@ -53,6 +53,9 @@ const ENDPOINTS: Array<{ path: string; desc: string }> = [
 
 function landingHtml(): string {
   const safeVersion = escapeHtml(version)
+  const authMode = config.authToken
+    ? 'Mutations (launches, retries and cancellations) require a bearer token.'
+    : 'Mutation authentication is disabled.'
   const retentionPolicy = config.retentionDays === 0
     ? 'History retention pruning is disabled (0 days).'
     : `History retention: terminal runs (completed or failed) older than ${config.retentionDays} days are eligible for pruning at startup and every ${RETENTION_INTERVAL_MS / 3_600_000} hours.`
@@ -75,6 +78,7 @@ function landingHtml(): string {
     <h1>Forge</h1>
     <p>Self-hosted Claude Code agent runner — version <code>${safeVersion}</code></p>
     <p><a href="/dashboard">Open the dashboard →</a></p>
+    <p id="mutation-auth-mode">${authMode} Use the <a href="/dashboard">dashboard</a> for task actions. Read views remain accessible.</p>
     <!--
       Live status, refreshed from GET /health five seconds after each completed
       refresh cycle (static render shows "…" so the page is never blank if JS is off or
