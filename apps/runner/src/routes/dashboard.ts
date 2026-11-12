@@ -959,21 +959,48 @@ const HTML = `<!DOCTYPE html>
       const row = button.closest ? button.closest('.task-row') : null;
       const prev = row ? row.querySelector('.retry-msg') : null;
       if (prev) prev.remove();
-      const feedback = (cls, text) => {
+      const authorization = authHeaders().Authorization || '';
+      const token = authorization.replace(/^Bearer /, '');
+      function safeMessage(value) {
+        const text = String(value);
+        return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
+      }
+      const feedback = (cls, text, href, label) => {
         const span = document.createElement('span');
         span.className = 'retry-msg ' + cls;
         span.textContent = text;
+        if (href) {
+          span.innerHTML += ' <a href="' + escape(href).replace(/"/g, '&quot;') + '">' + label + '</a>';
+        }
         button.insertAdjacentElement('afterend', span);
       };
       try {
         const r = await fetch('/tasks/' + encodedId + '/retry', { method: 'POST', headers: authHeaders() });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        // 201: a fresh task was queued; the next history poll surfaces it on top.
-        feedback('ok', 're-dispatched');
+        let result;
+        try { result = await r.json(); } catch (_) { /* Fixed fallback below. */ }
+        if (!r.ok) {
+          const detail = result && typeof result.error === 'string' && result.error.trim()
+            ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
+            : 'server returned no usable JSON error; check runner logs';
+          throw new Error('HTTP ' + r.status + ': ' + safeMessage(detail));
+        }
+        const taskId = result && result.taskId;
+        // Dot-only segments can normalize out of the task route. Encoding also
+        // rejects lone UTF-16 surrogates; neither response proves dispatch failed.
+        let newTaskId;
+        if (typeof taskId === 'string' && !Array.from(taskId).every(c => c === '.')) {
+          try { newTaskId = encodeURIComponent(taskId); } catch (_) { /* Ambiguous success below. */ }
+        }
+        if (r.status !== 201 || typeof taskId !== 'string' || !taskId.trim() ||
+            taskId.length > 200 || !newTaskId || (token && taskId.includes(token))) {
+          feedback('err', 'HTTP ' + r.status + ': invalid taskId response; a task may have started. Check task history before retrying.', '/history', 'Task history');
+          return;
+        }
+        feedback('ok', 're-dispatched', '/tasks/' + newTaskId + '/log/view', 'Open retried task');
       } catch (e) {
         // Non-2xx (401 under FORGE_AUTH_TOKEN, 409 if the task is not terminal) or
         // a network error: surface it inline — never a silent no-op.
-        feedback('err', 'retry failed: ' + e.message);
+        feedback('err', 'retry failed: ' + safeMessage(e && e.message ? e.message : 'network request failed'));
       } finally {
         button.disabled = false;
         button.textContent = original;
