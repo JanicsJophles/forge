@@ -84,8 +84,20 @@ const recover = document.getElementById('recover');
 let expiredSelection = null;
 let generation = 0;
 let next = null;
-let selection = { repo: '', status: '' };
-const initialBefore = typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('before');
+const browser = typeof window === 'undefined' ? null : window;
+function readSelection() {
+  const params = new URLSearchParams(browser ? browser.location.search : '');
+  const requestedStatus = params.get('status') || '';
+  const valid = ['', 'queued', 'running', 'completed', 'failed'].includes(requestedStatus);
+  return { repo: params.get('repo') || '', status: valid ? requestedStatus : '', invalidStatus: !valid };
+}
+function populate(value) {
+  repo.value = value.repo;
+  status.value = value.status;
+}
+let selection = readSelection();
+populate(selection);
+const initialBefore = browser ? new URLSearchParams(browser.location.search).get('before') : null;
 let cursors = initialBefore ? [null, initialBefore] : [null];
 let failedCursors = cursors;
 let loading = false;
@@ -222,7 +234,8 @@ async function load(targetCursors, targetSelection = selection) {
     selection = targetSelection;
     successfulPage = { cursors, selection };
     displayed.textContent = describe(cursors, selection);
-    message.textContent = tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.';
+    message.textContent = (tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.') +
+      (targetSelection.invalidStatus ? ' Invalid URL status ignored; showing all statuses.' : '');
   } catch (error) {
     if (current !== generation) return;
     failedCursors = targetCursors;
@@ -251,7 +264,15 @@ async function load(targetCursors, targetSelection = selection) {
   }
 }
 function reset() {
-  return load([null], { repo: repo.value, status: status.value });
+  const target = { repo: repo.value, status: status.value };
+  if (browser) {
+    const params = new URLSearchParams();
+    if (target.repo) params.set('repo', target.repo);
+    if (target.status) params.set('status', target.status);
+    const url = browser.location.pathname + (params.size ? '?' + params : '') + browser.location.hash;
+    if (url !== browser.location.pathname + browser.location.search + browser.location.hash) browser.history.pushState(null, '', url);
+  }
+  return load([null], target);
 }
 document.getElementById('filters').onsubmit = event => { event.preventDefault(); return reset(); };
 repo.onchange = reset;
@@ -266,6 +287,12 @@ refresh.onclick = () => {
   if (expiredSelection) return recover.onclick();
   return successfulPage ? load(successfulPage.cursors, successfulPage.selection) : load(cursors);
 };
+if (browser) browser.addEventListener('popstate', () => {
+  const target = readSelection();
+  populate(target);
+  const before = new URLSearchParams(browser.location.search).get('before');
+  return load(before ? [null, before] : [null], target);
+});
 load(cursors);
 </script></body></html>`)
 })
