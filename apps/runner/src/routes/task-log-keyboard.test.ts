@@ -9,6 +9,7 @@ async function fixture() {
   const source = await readFile(new URL('./task-log-view.ts', import.meta.url), 'utf8')
   const template = source.slice(source.indexOf('function escapeHtml'), source.indexOf('// GET /tasks/:id/log/view — a distinct'))
     .replace(/function escapeHtml\(value: string\): string/, 'function escapeHtml(value)')
+    .replace('function missingViewHtml(id: string): string', 'function missingViewHtml(id)')
     .replace(/interface LaunchMeta \{[\s\S]*?\n\}/, '')
     .replace('function viewHtml(id: string, meta: LaunchMeta): string', 'function viewHtml(id, meta)')
   return runInNewContext(template + '\nviewHtml("offline", { status: "running" })', { TextDecoder }) as string
