@@ -172,6 +172,10 @@ function viewHtml(id: string, meta: LaunchMeta): string {
         font-size: 12px;
         line-height: 1.5;
       }
+      /* Native checkbox state survives SSE appends and replay replacement. */
+      #wrapLongLines { align-self: flex-start; margin: 8px 20px 0; }
+      label[for="wrapLongLines"] { margin: 0 20px 8px; }
+      #wrapLongLines:not(:checked) ~ #log { white-space: pre; overflow-wrap: normal; }
       #failure { flex: 0 0 auto; padding: 8px 20px; border-top: 1px solid var(--fail); }
       #failure h2 { margin: 0; font-size: 13px; color: var(--fail); }
       #failure pre { max-height: 25vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -217,6 +221,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
       <span id="findResult" role="status" aria-live="polite">Enter text to find</span>
       <span id="findScope">Case-sensitive; retained output only. Earlier omitted output is not searched. Enter: next; Shift+Enter: previous. Clear to resume tail-follow.</span>
     </form>
+    <input type="checkbox" id="wrapLongLines" aria-controls="log" checked />
+    <label for="wrapLongLines">Wrap long lines</label>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log" role="region" aria-label="Task transcript" tabindex="0"><span id="empty">waiting for output…</span></pre>
