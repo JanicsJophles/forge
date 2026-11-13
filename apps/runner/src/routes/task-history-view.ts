@@ -251,15 +251,31 @@ async function load(targetCursors, targetSelection = selection) {
       const branch = document.createElement('div');
       branch.textContent = 'Branch: ' + (typeof task.branch === 'string' && task.branch.trim() ? task.branch : 'unspecified');
       row.children[2].appendChild(branch);
-      if (task.status === 'failed' && typeof task.errorMessage === 'string' && task.errorMessage) {
-        const reason = document.createElement('div');
-        reason.className = 'failure-reason';
-        reason.textContent = task.errorMessage;
-        row.children[0].appendChild(reason);
-      }
-      const cell = document.createElement('td');
       const taskId = task.id;
       const taskPath = '/tasks/' + encodeURIComponent(taskId);
+      if (task.status === 'failed') {
+        const reason = document.createElement('div');
+        reason.className = 'failure-reason';
+        let preview = '';
+        let count = 0;
+        // Iterate code points, stopping as soon as truncation is known.
+        for (const point of task.errorMessage || '') {
+          if (++count > 500) break;
+          preview += point;
+        }
+        reason.textContent = preview.trim() ? preview : 'No saved failure reason is available.';
+        row.children[0].appendChild(reason);
+        if (count > 500) {
+          const notice = document.createElement('div');
+          notice.textContent = 'Failure reason truncated: showing the first 500 Unicode code points.';
+          row.children[0].appendChild(notice);
+        }
+        const context = document.createElement('a');
+        context.href = taskPath + '/log/view';
+        context.textContent = 'Full saved failure context';
+        row.children[0].appendChild(context);
+      }
+      const cell = document.createElement('td');
       if (taskId) {
         const link = document.createElement('a');
         link.href = taskPath + '/log/view';
