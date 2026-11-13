@@ -31,7 +31,7 @@ test('native wrap checkbox switches only presentation, including without JavaScr
   // Native :checked state supplies both directions without a handler or request.
   assert.match(html, /<input type="checkbox" id="wrap-lines" aria-controls="unified-diff" \/>/)
   assert.match(html, /<label for="wrap-lines">Wrap lines<\/label>/)
-  assert.match(html, /id="wrap-lines"[^>]*>[\s\S]*<pre id="unified-diff" aria-label="Unified diff">/)
+  assert.match(html, /id="wrap-lines"[^>]*>[\s\S]*<pre id="unified-diff" aria-label="Unified diff"[^>]*>/)
   assert.match(html, /#wrap-lines:checked ~ pre\s*\{\s*white-space: pre-wrap; overflow-wrap: anywhere;\s*\}/)
   assert.match(html, /#wrap-lines:checked ~ pre span\s*\{\s*width: 100%;\s*\}/)
   assert.match(html, /pre\s*\{ overflow: auto;/)
