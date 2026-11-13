@@ -73,6 +73,7 @@ interface LaunchMeta {
   branch: string | null
   provider: string | null
   model: string | null
+  commit_sha: string | null
   auto_commit: number | null
 }
 
@@ -208,6 +209,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <a href="${rawHref}">raw text</a>
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
+      <p>Recorded commit: <code id="recordedCommit">${escapeHtml(meta.commit_sha ?? 'None recorded')}</code> · <a href="${changesHref}">Review task changes</a></p>
       <dl class="configuration" id="timing" aria-live="polite"><div><dt>Created</dt><dd id="createdTime">${escapeHtml(meta.created_at ?? '')}</dd></div><div><dt>Started</dt><dd id="startedTime">${escapeHtml(meta.started_at ?? '')}</dd></div><div><dt>Finished</dt><dd id="finishedTime">${escapeHtml(meta.completed_at ?? '')}</dd></div><div><dt>Duration</dt><dd id="duration">Unavailable</dd></div></dl>
       <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
       <details class="saved-prompt"><summary>Saved prompt</summary><pre>
@@ -386,6 +388,9 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           return Date.parse(normalized);
         }
         function timing(task) {
+          if (Object.prototype.hasOwnProperty.call(task, 'commitSha')) {
+            document.getElementById('recordedCommit').textContent = typeof task.commitSha === 'string' ? task.commitSha : 'None recorded';
+          }
           var values = [task.createdAt, task.startedAt, task.completedAt];
           ['createdTime', 'startedTime', 'finishedTime'].forEach(function (id, index) {
             var time = timestamp(values[index]);
@@ -400,6 +405,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             : String((finish - start) / 1000) + ' s';
         }
         async function refreshTiming() {
+          var version = statusVersion;
           var timer;
           try {
             var controller = new AbortController();
@@ -412,17 +418,34 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
                 timer = setTimeout(function () { controller.abort(); reject(new Error('Timing deadline')); }, 5000);
               })
             ]);
-            timing(task);
+            if (version === statusVersion &&
+                !((INITIAL_STATUS === 'completed' || INITIAL_STATUS === 'failed') &&
+                  (task.status === 'running' || task.status === 'queued'))) timing(task);
           } catch (e) { /* Keep the last recorded timing on failure or deadline. */ }
           finally { if (timer !== undefined) clearTimeout(timer); }
         }
         async function refreshStatus(signal) {
+          // The initial read has no action deadline; cover both headers and JSON.
+          if (!signal) {
+            var controller = new AbortController();
+            var timer;
+            try {
+              return await Promise.race([
+                refreshStatus(controller.signal),
+                new Promise(function (_, reject) {
+                  timer = setTimeout(function () { controller.abort(); reject(new Error('Status deadline')); }, 5000);
+                })
+              ]);
+            } finally { if (timer !== undefined) clearTimeout(timer); }
+          }
           var version = statusVersion;
           var response = await fetch(taskUrl + '?view=status', signal ? { signal: signal } : undefined);
           if (!response.ok) throw new Error('Status refresh failed (HTTP ' + response.status + ')');
           var task = await response.json();
           // A newer stream event takes precedence over an in-flight read.
-          if ((!signal || !signal.aborted) && version === statusVersion) { taskStatus(task.status); timing(task); }
+          if ((!signal || !signal.aborted) && version === statusVersion &&
+              !((INITIAL_STATUS === 'completed' || INITIAL_STATUS === 'failed') &&
+                (task.status === 'running' || task.status === 'queued'))) { taskStatus(task.status); timing(task); }
         }
         var actionVersion = 0;
         async function action(retry) {
@@ -663,6 +686,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
 // Bound the prompt in SQLite before crossing into JS; never materialize the log.
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
   const meta = db.prepare(`SELECT status, repo, branch, provider, model, auto_commit,
+    substr(commit_sha, 1, 256) AS commit_sha,
     substr(created_at, 1, 64) AS created_at, substr(started_at, 1, 64) AS started_at,
     substr(completed_at, 1, 64) AS completed_at,
     substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,

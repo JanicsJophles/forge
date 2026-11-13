@@ -16,7 +16,7 @@ function fixture(fetch: any = async () => ({ ok: true, json: async () => ({}) })
       if (!elements.has(id)) elements.set(id, { textContent: '' })
       return elements.get(id)
     } },
-    fetch, AbortController, taskUrl: '/tasks/test',
+    statusVersion: 0, INITIAL_STATUS: 'running', fetch, AbortController, taskUrl: '/tasks/test',
     setTimeout(fn: () => void, ms: number) { assert.equal(ms, 5000); deadline = fn; return 1 },
     clearTimeout() { cleared = true },
   }
