@@ -107,6 +107,7 @@ function listRowToTask(row: TaskListRow): AgentTask {
 const TASK_NEWEST_FIRST = 'julianday(created_at) DESC, rowid DESC'
 
 export interface TaskHistoryFilters {
+  provider?: 'claude' | 'codex'
   repo?: string
   status?: TaskStatus
   before?: string
@@ -118,6 +119,10 @@ export function listTasks(limit = 20, filters: TaskHistoryFilters = {}): AgentTa
   if (filters.repo !== undefined) {
     conditions.push('repo = ?')
     parameters.push(filters.repo)
+  }
+  if (filters.provider !== undefined) {
+    conditions.push('provider = ?')
+    parameters.push(filters.provider)
   }
   if (filters.status !== undefined) {
     conditions.push('status = ?')

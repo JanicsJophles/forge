@@ -28,6 +28,7 @@ button:disabled{opacity:.5}
 <form id="filters"><label>Repository (exact path) <input id="repo" type="text" list="repo-suggestions" aria-describedby="repo-discovery"></label>
 <datalist id="repo-suggestions"></datalist>
 <span id="repo-discovery" role="status" aria-live="polite">Optional suggestions load when the repository field is focused; any exact path is accepted.</span>
+<label>Provider <select id="provider"><option value="">All</option><option value="claude">Claude</option><option value="codex">Codex</option></select></label>
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
@@ -119,6 +120,7 @@ repo.onfocus = async () => {
   }
 };
 const status = document.getElementById('status');
+const provider = document.getElementById('provider');
 const rows = document.getElementById('rows');
 const displayed = document.getElementById('displayed');
 const message = document.getElementById('message');
@@ -137,11 +139,15 @@ function readSelection() {
   const params = new URLSearchParams(browser ? browser.location.search : '');
   const requestedStatus = params.get('status') || '';
   const valid = ['', 'queued', 'running', 'completed', 'failed'].includes(requestedStatus);
-  return { repo: params.get('repo') || '', status: valid ? requestedStatus : '', invalidStatus: !valid };
+  const requestedProvider = params.get('provider') || '';
+  const validProvider = params.getAll('provider').length <= 1 && ['', 'claude', 'codex'].includes(requestedProvider);
+  return { repo: params.get('repo') || '', status: valid ? requestedStatus : '', invalidStatus: !valid,
+    provider: validProvider ? requestedProvider : '', invalidProvider: !validProvider };
 }
 function populate(value) {
   repo.value = value.repo;
   status.value = value.status;
+  provider.value = value.provider;
 }
 let selection = readSelection();
 populate(selection);
@@ -177,7 +183,8 @@ function validHistoryPage(tasks) {
 function describe(pageCursors, pageSelection) {
   return 'Repository: ' + (pageSelection.repo || 'All repositories') +
     '; Status: ' + (pageSelection.status || 'All statuses') + '; Page ' + pageCursors.length +
-    (pageCursors[pageCursors.length - 1] ? ' (before ' + pageCursors[pageCursors.length - 1] + ')' : ' (latest)');
+    (pageCursors[pageCursors.length - 1] ? ' (before ' + pageCursors[pageCursors.length - 1] + ')' : ' (latest)') +
+    '; Provider: ' + (pageSelection.provider || 'All providers');
 }
 function updateControls() {
   refresh.disabled = loading;
@@ -192,6 +199,7 @@ async function load(targetCursors, targetSelection = selection) {
   const query = new URLSearchParams({ limit: '25' });
   if (targetSelection.repo) query.set('repo', targetSelection.repo);
   if (targetSelection.status) query.set('status', targetSelection.status);
+  if (targetSelection.provider) query.set('provider', targetSelection.provider);
   if (before) query.set('before', before);
   loading = true;
   updateControls();
@@ -307,7 +315,8 @@ async function load(targetCursors, targetSelection = selection) {
     successfulPage = { cursors, selection, next };
     displayed.textContent = describe(cursors, selection);
     message.textContent = (tasks.length ? 'Showing ' + tasks.length + ' tasks' : 'No tasks found.') +
-      (targetSelection.invalidStatus ? ' Invalid URL status ignored; showing all statuses.' : '');
+      (targetSelection.invalidStatus ? ' Invalid URL status ignored; showing all statuses.' : '') +
+      (targetSelection.invalidProvider ? ' Invalid URL provider ignored; showing all providers.' : '');
   } catch (error) {
     if (current !== generation) return;
     failedCursors = targetCursors;
@@ -323,7 +332,8 @@ async function load(targetCursors, targetSelection = selection) {
       expired.textContent = 'This history page has expired because its pagination anchor is no longer retained.' +
         (successfulPage ? ' Stale rows: showing the last successful page until replacement succeeds.' : ' No task history loaded.') +
         ' Return to latest keeps repository ' + (expiredSelection.repo || 'All repositories') +
-        ' and status ' + (expiredSelection.status || 'All statuses') + '.';
+        ' and status ' + (expiredSelection.status || 'All statuses') +
+        ' and provider ' + (expiredSelection.provider || 'All providers') + '.';
     }
     retry.hidden = !!expiredSelection;
   } finally {
@@ -336,11 +346,12 @@ async function load(targetCursors, targetSelection = selection) {
   }
 }
 function reset() {
-  const target = { repo: repo.value, status: status.value };
+  const target = { repo: repo.value, status: status.value, provider: provider.value };
   if (browser) {
     const params = new URLSearchParams();
     if (target.repo) params.set('repo', target.repo);
     if (target.status) params.set('status', target.status);
+    if (target.provider) params.set('provider', target.provider);
     const url = browser.location.pathname + (params.size ? '?' + params : '') + browser.location.hash;
     if (url !== browser.location.pathname + browser.location.search + browser.location.hash) browser.history.pushState(null, '', url);
   }
@@ -349,6 +360,7 @@ function reset() {
 document.getElementById('filters').onsubmit = event => { event.preventDefault(); return reset(); };
 repo.onchange = reset;
 status.onchange = reset;
+provider.onchange = reset;
 older.onclick = () => { if (!older.disabled) return load([...cursors, next]); };
 newer.onclick = () => { if (!newer.disabled) return load(cursors.slice(0, -1)); };
 latest.onclick = () => { if (!latest.disabled) return load([null]); };
