@@ -49,6 +49,10 @@ if (process.argv.includes('--name-status')) {
     assert.match(response.headers.get('content-type') ?? '', /text\/html/)
     assert.equal(response.headers.get('x-patch-truncated'), null)
     const html = await response.text()
+    const logHref = `/tasks/${encodeURIComponent(hostile).replace(/'/g, '&#39;')}/log/view`
+    assert.ok(html.includes(`<a href="${logHref}">task logs</a>`))
+    assert.equal((html.match(/>task logs<\/a>/g) ?? []).length, 1)
+    assert.match(html, /<nav aria-label="Review navigation">/)
     assert.match(html, /href="\/history"/)
     assert.match(html, /href="\/dashboard"/)
     assert.match(html, /&quot;&gt;&lt;svg/)
