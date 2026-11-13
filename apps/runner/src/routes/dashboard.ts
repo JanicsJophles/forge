@@ -322,7 +322,7 @@ const HTML = `<!DOCTYPE html>
       align-items: center;
       gap: 8px;
     }
-    .launch-row label { color: var(--text-dim); font-size: 12px; }
+    .launch-form label { color: var(--text-dim); font-size: 12px; }
     .launch-form select,
     .launch-form input[type="text"],
     .launch-form textarea {
@@ -343,6 +343,8 @@ const HTML = `<!DOCTYPE html>
       font-family: 'SF Mono', Menlo, monospace;
       line-height: 1.4;
     }
+    .launch-help { margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+    .launch-form > label, .launch-help { min-width: 0; max-width: 100%; }
     .launch-check { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
     .launch-actions { display: flex; align-items: center; gap: 10px; }
     .launch-form button {
@@ -442,10 +444,13 @@ const HTML = `<!DOCTYPE html>
             <option value="codex">codex</option>
           </select>
           <label for="launchModel">Model (optional)</label>
-          <input type="text" id="launchModel" placeholder="provider default" autocomplete="off" />
+          <input type="text" id="launchModel" aria-describedby="launchModelHelp" placeholder="provider default" autocomplete="off" />
           <label class="launch-check"><input type="checkbox" id="launchAutoCommit" /> autoCommit</label>
         </div>
-        <textarea id="launchPrompt" placeholder="Prompt — what should the agent do?"></textarea>
+        <p id="launchModelHelp" class="launch-help">Model is optional. Leave it blank to use the selected provider’s default model.</p>
+        <label for="launchPrompt">Prompt (required)</label>
+        <p id="launchPromptHelp" class="launch-help">Describe what the agent should do. A prompt containing more than whitespace is required.</p>
+        <textarea id="launchPrompt" aria-describedby="launchPromptHelp" placeholder="Prompt — what should the agent do?"></textarea>
         <div class="launch-actions">
           <button type="submit" id="launchSubmit">Launch task</button>
           <span class="launch-err" id="launchErr" role="status" aria-live="polite"></span>
