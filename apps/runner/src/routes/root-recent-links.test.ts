@@ -49,7 +49,8 @@ test('recent task anchors retain outcomes, encode IDs, and replace old links on 
     },
     fetch: async (url: string) => {
       requests.push(url)
-      return { ok: true, json: async () => url === '/health' ? {} : payload }
+      return { ok: true, json: async () => url === '/health' ? {} : url === '/tasks/stats'
+        ? { total: 0, completed: 0, failed: 0, queued: 0, running: 0 } : payload }
     },
     AbortController,
     clearTimeout: () => {},
@@ -60,7 +61,7 @@ test('recent task anchors retain outcomes, encode IDs, and replace old links on 
   }
   runInNewContext(script, context)
   await flush()
-  assert.deepEqual(requests, ['/tasks?limit=5', '/health'])
+  assert.deepEqual(requests, ['/tasks?limit=5', '/health', '/tasks/stats'])
   assert.equal(list.children.length, 2)
   for (const [index, task] of (payload as { id: string }[]).entries()) {
     const link = list.children[index].children[0]
@@ -78,7 +79,7 @@ test('recent task anchors retain outcomes, encode IDs, and replace old links on 
   assert.equal(list.children.length, 5)
   assert.ok(list.children.every(row => row.children.length === 0))
   assert.ok(!list.children.some(row => row.children.includes(oldLink)))
-  assert.deepEqual(requests, ['/tasks?limit=5', '/health', '/tasks?limit=5', '/health'])
+  assert.deepEqual(requests, ['/tasks?limit=5', '/health', '/tasks/stats', '/tasks?limit=5', '/health', '/tasks/stats'])
   payload = ['.', '..'].map(id => ({ id }))
   assert.equal(timers.length, 1)
   timers.shift()!()

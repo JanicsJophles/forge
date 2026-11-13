@@ -43,6 +43,8 @@ test('landing shows measured run age and provider limit through the existing hea
     },
     fetch: async (url: string) => {
       requests.push(url)
+      if (url === '/tasks/stats') return { ok: true, json: async () =>
+        ({ total: 0, completed: 0, failed: 0, queued: 0, running: 0 }) }
       if (url !== '/health') {
         assert.equal(url, '/tasks?limit=5')
         return { ok: true, json: async () => [] }
@@ -65,7 +67,7 @@ test('landing shows measured run age and provider limit through the existing hea
     timers.shift()!()
     await flush()
     assert.equal(timers.length, 1)
-    assert.deepEqual(requests.splice(0).slice(-2), ['/tasks?limit=5', '/health'])
+    assert.deepEqual(requests.splice(0).slice(-3), ['/tasks?limit=5', '/health', '/tasks/stats'])
   }
   async function readings(age: unknown, timeout: unknown, expectedAge: string, expectedLimit: string) {
     await cycle({ oldestRunningTaskAgeSeconds: age, taskTimeoutMs: timeout, queuedOrRunning: 2 })

@@ -38,7 +38,8 @@ test('landing disk headroom uses health refresh, validates values and retains st
     fetch: async (url: string) => {
       urls.push(url)
       if (url === '/health' && fail) throw new Error('offline')
-      return { ok: true, json: async () => url === '/health' ? health : [] }
+      return { ok: true, json: async () => url === '/health' ? health : url === '/tasks/stats'
+        ? { total: 0, completed: 0, failed: 0, queued: 0, running: 0 } : [] }
     },
     setTimeout: (callback: () => void, ms: number) => {
       if (ms === 5000) timers.push(callback)
@@ -51,12 +52,12 @@ test('landing disk headroom uses health refresh, validates values and retains st
     assert.equal(timers.length, 1)
     timers.shift()!()
     await flush()
-    assert.deepEqual(urls.splice(0), ['/tasks?limit=5', '/health'])
+    assert.deepEqual(urls.splice(0), ['/tasks?limit=5', '/health', '/tasks/stats'])
   }
   await flush()
   assert.deepEqual(values(), ['unknown', 'unknown', 'unknown'])
   assert.match(el('health-freshness').textContent, /unavailable/)
-  assert.deepEqual(urls.splice(0), ['/tasks?limit=5', '/health'])
+  assert.deepEqual(urls.splice(0), ['/tasks?limit=5', '/health', '/tasks/stats'])
   fail = false
   health = { freeDiskMb: 1234.5, dataFreeDiskMb: 9876, minFreeDiskMb: 0 }
   await cycle()
