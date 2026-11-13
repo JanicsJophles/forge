@@ -152,13 +152,17 @@ let loading = false;
 let successfulPage = null;
 let failedSelection = selection;
 let cancelRequest = null;
+// Keep the original identity: encode once, without trimming or decoding percent escapes.
+function safeTaskId(id) {
+  if (typeof id !== 'string' || !id.trim() || id.length > 200 || /^\\.+$/.test(id)) return false;
+  try { encodeURIComponent(id); return true; } catch { return false; }
+}
 // Validate the whole requested page before rendering or committing navigation.
 function validHistoryPage(tasks) {
   if (!Array.isArray(tasks) || tasks.length > 25) return false;
   return tasks.every(task => {
     if (!task || typeof task !== 'object' || Array.isArray(task)) return false;
-    if (typeof task.id !== 'string' || !task.id.trim()) return false;
-    try { encodeURIComponent(task.id); } catch { return false; }
+    if (!safeTaskId(task.id)) return false;
     if (!['queued', 'running', 'completed', 'failed'].includes(task.status)) return false;
     for (const key of ['createdAt', 'startedAt', 'completedAt', 'repo', 'branch', 'prompt',
       'errorMessage', 'commitSha', 'provider', 'model']) {
@@ -246,10 +250,11 @@ async function load(targetCursors, targetSelection = selection) {
         row.children[0].appendChild(reason);
       }
       const cell = document.createElement('td');
-      const taskId = typeof task.id === 'string' ? task.id : '';
+      const taskId = task.id;
+      const taskPath = '/tasks/' + encodeURIComponent(taskId);
       if (taskId) {
         const link = document.createElement('a');
-        link.href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
+        link.href = taskPath + '/log/view';
         link.textContent = 'View logs';
         cell.appendChild(link);
       }
@@ -258,9 +263,9 @@ async function load(targetCursors, targetSelection = selection) {
       commit.textContent = typeof task.commitSha === 'string' ? task.commitSha.slice(0, 7) : '';
       row.appendChild(commit);
       const changes = document.createElement('td');
-      if (typeof task.id === 'string' && /^[a-zA-Z0-9_-]+$/.test(task.id)) {
+      if (taskId) {
         const link = document.createElement('a');
-        link.href = '/tasks/' + encodeURIComponent(task.id) + '/changes/view';
+        link.href = taskPath + '/changes/view';
         link.textContent = 'Changes';
         changes.appendChild(link);
       }
@@ -283,7 +288,7 @@ async function load(targetCursors, targetSelection = selection) {
       identity.appendChild(idText);
       if (taskId) {
         const detail = document.createElement('a');
-        detail.href = '/tasks/' + encodeURIComponent(taskId);
+        detail.href = taskPath;
         detail.textContent = 'Task JSON';
         const space = document.createElement('span');
         space.textContent = ' ';
