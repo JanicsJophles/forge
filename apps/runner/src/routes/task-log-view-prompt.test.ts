@@ -63,7 +63,8 @@ test('saved prompt disclosure escapes whitespace and bounds SQLite UTF-8 project
     assert.doesNotMatch(html, /�|TAIL|PRIVATE_TRANSCRIPT/)
     assert.match(html, /Additional prompt content omitted/)
     assert.ok(html.includes(`href="/tasks/unicode-${remaining}?view=detail">Full task detail JSON`))
-    assert.ok(Buffer.byteLength(html) < 40000)
+    // Includes the fixed viewer shell and retained-log find controls.
+    assert.ok(Buffer.byteLength(html) < 48 * 1024)
   }
   const exact = await page('exact')
   assert.ok(exact.includes('é'.repeat(limit / 2)))

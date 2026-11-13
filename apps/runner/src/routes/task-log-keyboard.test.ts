@@ -31,7 +31,8 @@ test('served transcript is a named keyboard region with a visible focus outline'
   assert.doesNotMatch(region, /aria-live|role="log"|contenteditable/)
   assert.match(html, /#log:focus-visible\s*\{[^}]*outline: 2px solid var\(--accent\);[^}]*outline-offset: -2px/)
   assert.match(html, /#log\s*\{[^}]*overflow: auto/)
-  assert.doesNotMatch(html, /user-select:\s*none|onkeydown|onkeyup|preventDefault\(/)
+  assert.doesNotMatch(html, /user-select:\s*none|logEl\.onkeydown|logEl\.onkeyup/)
+  assert.doesNotMatch(region, /onkeydown|onkeyup/)
 })
 
 test('streaming, trimming, replay and completion preserve keyboard focus and paused position', async () => {
