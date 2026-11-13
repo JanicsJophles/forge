@@ -16,6 +16,11 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+function reviewNavigation(taskId: string): string {
+  const logHref = escapeHtml(`/tasks/${encodeURIComponent(taskId)}/log/view`)
+  return `<a href="${logHref}">task logs</a><a href="/history">task history</a>`
+}
+
 // Decode Git's C-quoted byte strings without treating filenames as markup or IDs.
 function gitPath(value: string): string | null {
   if (!value.startsWith('"')) return value.includes('"') ? null : value
@@ -92,7 +97,7 @@ function errorPage(taskId: string, unavailable: boolean): string {
       : 'This task could not be found. It may have been pruned from retained history.'}</p>
     <nav aria-label="Review navigation">
       ${unavailable ? `<a href="${retryHref}">Retry changes</a>` : ''}
-      <a href="/history">task history</a><a href="/dashboard">dashboard</a>
+      ${reviewNavigation(taskId)}<a href="/dashboard">dashboard</a>
     </nav>
   </main>
 </body>
@@ -164,7 +169,6 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   const refreshHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes/view`)
   const active = task.status === 'queued' || task.status === 'running'
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
-  const logHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/log/view`)
   res.setHeader('X-Patch-Truncated', String(result.truncated))
   res.type('html').send(`<!doctype html>
 <html lang="en">
@@ -197,7 +201,9 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
 <body>
   <header><h1>forge changes · ${id}</h1>
     <p>Repository: ${escapeHtml(task.repo)}</p>
-    <a href="${logHref}">task log</a><a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
+    <nav aria-label="Review navigation">
+      <a href="${rawHref}">raw patch</a>${reviewNavigation(req.params.id)}<a href="/dashboard">dashboard</a>
+    </nav>
   </header>
   <main>
     <details>
