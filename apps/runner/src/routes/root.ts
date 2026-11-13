@@ -70,6 +70,7 @@ function landingHtml(): string {
   return `<!doctype html>
 <html lang="en">
   <head>
+  <style>#recent-tasks li { white-space: pre-wrap; overflow-wrap: anywhere; }</style>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Forge runner</title>
@@ -196,7 +197,7 @@ ${rows}
           if (['queued', 'running', 'completed', 'failed'].indexOf(task.status) === -1) return false
           // Optional displayed metadata may be absent, but must never be objects
           // or coerced proxy garbage. Validate prompt metadata for intent previews.
-          if (!['repo', 'branch', 'prompt', 'createdAt', 'startedAt', 'completedAt', 'provider']
+          if (!['repo', 'branch', 'prompt', 'createdAt', 'startedAt', 'completedAt', 'provider', 'errorMessage']
             .every(function (key) { return task[key] == null || typeof task[key] === 'string' })) return false
           if (task.promptTruncated != null && typeof task.promptTruncated !== 'boolean') return false
           if (task.promptBytes != null && (typeof task.promptBytes !== 'number' ||
@@ -226,12 +227,24 @@ ${rows}
                 (typeof task.id === 'string' && task.id.trim() ? task.id : 'unavailable') +
                 ' — Repository: ' +
                 (typeof task.repo === 'string' && task.repo.trim() ? task.repo : 'unavailable')
+              if (task.status === 'failed') {
+                var diagnostic = task.errorMessage || ''
+                var diagnosticPoints = Array.from(diagnostic)
+                row.textContent += '\\nFailure reason: ' + (diagnostic.trim()
+                  ? diagnosticPoints.slice(0, 500).join('') +
+                    (diagnosticPoints.length > 500 ? '\\n[Further failure details omitted]' : '')
+                  : 'Unavailable')
+              }
               if (typeof task.id === 'string' && task.id.trim() && !/^\\.+$/.test(task.id)) {
                 try {
                   var link = document.createElement('a')
                   link.href = '/tasks/' + encodeURIComponent(task.id) + '/log/view'
                   link.textContent = ' View logs'
                   row.appendChild(link)
+                  var changes = document.createElement('a')
+                  changes.href = '/tasks/' + encodeURIComponent(task.id) + '/changes/view'
+                  changes.textContent = ' Changes'
+                  row.appendChild(changes)
                 } catch (_) {
                   // Malformed Unicode cannot form an encoded path segment.
                 }

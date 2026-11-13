@@ -69,7 +69,7 @@ test('landing refresh serializes cycles, updates independently, and recovers wit
   await flush()
   assert.equal(el('recent-tasks').children.length, 5)
   assert.match(el('recent-tasks').children[0].textContent, /^12345678 — <img> — running — Saved prompt unavailable/)
-  assert.match(el('recent-tasks').children[0].textContent, / View logs$/)
+  assert.match(el('recent-tasks').children[0].textContent, / View logs Changes$/)
   assert.equal(el('tasks-freshness').textContent, '')
   // Health is slow: there is no timer or new request until it settles.
   assert.equal(timers.length, 0)
