@@ -57,7 +57,7 @@ if (process.argv.includes('--name-status')) {
     assert.match(html, /href="\/dashboard"/)
     assert.match(html, /&quot;&gt;&lt;svg/)
     assert.doesNotMatch(html, /<svg|secret-credential|password|exception-detail|private-patch-text|http-equiv|<script/)
-    assert.ok(html.length < 2500)
+    assert.ok(html.length < (status === 404 ? 2500 : 6000))
     return html
   }
   try {

@@ -109,7 +109,7 @@ export function patchNavigation(patch: string): { targets: Map<string, string>; 
 }
 
 // Keep error output independent of Git diagnostics and partially captured patches.
-function errorPage(taskId: string, unavailable: boolean): string {
+function errorPage(taskId: string, unavailable: boolean, context = ''): string {
   const id = escapeHtml(taskId)
   const retryHref = escapeHtml(`/tasks/${encodeURIComponent(taskId)}/changes/view`)
   const title = unavailable ? 'Changes temporarily unavailable' : 'Task not found'
@@ -122,6 +122,7 @@ function errorPage(taskId: string, unavailable: boolean): string {
   <style>
     body { margin: 20px; background: #030712; color: #e4e4e7; font: 14px system-ui, sans-serif; overflow-wrap: anywhere; }
     a { color: #34d399; margin-right: 16px; }
+    .saved-prompt, .failure-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
   </style>
 </head>
 <body>
@@ -131,6 +132,7 @@ function errorPage(taskId: string, unavailable: boolean): string {
     <p>${unavailable
       ? 'Could not inspect repository changes. Try again when the checkout is available.'
       : 'This task could not be found. It may have been pruned from retained history.'}</p>
+    ${context}
     <nav aria-label="Review navigation">
       ${unavailable ? `<a href="${retryHref}">Retry changes</a>` : ''}
       ${reviewNavigation(taskId)}<a href="/dashboard">dashboard</a>
@@ -158,13 +160,48 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     res.status(404).type('html').send(errorPage(req.params.id, false))
     return
   }
+  // Streaming decode omits a partial final UTF-8 codepoint at the byte cap.
+  const prompt = new TextDecoder().decode(task.prompt_prefix ?? new Uint8Array(), { stream: true })
+  const promptTruncated = (task.prompt_bytes ?? 0) > MAX_PROMPT_BYTES
+  const detailHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}`)
+  const id = escapeHtml(req.params.id)
+  const refreshHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes/view`)
+  const active = task.status === 'queued' || task.status === 'running'
+  // Render only the bounded metadata already loaded above, including on inspection failure.
+  const savedContext = (unavailable: boolean) => `    <details>
+      <summary>Saved prompt</summary>
+      ${prompt ? `<pre class="saved-prompt">${escapeHtml(prompt)}</pre>` : '<p>No saved prompt is available.</p>'}
+      ${promptTruncated ? `<p class="warning">Prompt truncated: showing at most ${MAX_PROMPT_BYTES} UTF-8 bytes. See the saved prompt in <a href="${detailHref}">detail JSON</a>.</p>` : ''}
+    </details>
+    <section aria-label="Saved launch settings" class="launch-settings">
+      <h2>Saved launch settings</h2>
+      <p>Provider: <strong>${escapeHtml(task.provider ?? 'unspecified')}</strong> ·
+        Model: <strong>${escapeHtml(task.model ?? 'provider default')}</strong> ·
+        Auto-commit requested: <strong>${task.auto_commit == null ? 'unspecified' : task.auto_commit === 1 ? 'yes' : 'no'}</strong></p>
+    </section>
+    <section aria-label="Task outcome">
+      <h2>Task outcome</h2>
+      <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>
+      ${taskTiming(task)}
+      ${task.status === 'failed'
+        ? task.failure_reason
+          ? `<p class="failure-reason">Saved failure reason: ${escapeHtml(task.failure_reason)}</p>${task.failure_truncated ? `<p class="warning">Failure reason truncated: showing the first ${FAILURE_REASON_CHAR_CAP} characters.</p>` : ''}`
+          : '<p>No saved failure reason is available.</p>'
+        : ''}
+      ${active && !unavailable ? `<p>Task is active. ${task.commit_sha == null ? 'The displayed checkout diff is a snapshot and may change.' : 'The displayed diff is from the recorded commit; task metadata may change.'} <a href="${refreshHref}">Refresh this task review</a></p>` : ''}
+    </section>
+`
   let result
   let files
   try {
     result = getChangesPatch(task.repo, task.commit_sha)
     files = getChangedFiles(task.repo, task.commit_sha)
   } catch {
-    res.status(503).type('html').send(errorPage(req.params.id, true))
+    res.status(503).type('html').send(errorPage(req.params.id, true,
+      `<p>Repository: ${escapeHtml(task.repo)}<br>Recorded task branch: <code>${escapeHtml(task.branch)}</code><br>
+      Recorded commit: <code>${escapeHtml(task.commit_sha ?? 'not recorded')}</code></p>
+      <p>Patch and changed-file footprint are unavailable. No changes can be inferred from this failed inspection.</p>
+      ${savedContext(true)}`))
     return
   }
   // Branch provenance applies only to the live fallback, never a recorded diff.
@@ -200,13 +237,6 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     const anchor = navigation.anchors.get(index)
     return `<span${anchor ? ` id="${anchor}" tabindex="-1"` : ''} class="${kind}">${escapeHtml(line)}</span>`
   }).join('\n')
-  // Streaming decode omits a partial final UTF-8 codepoint at the byte cap.
-  const prompt = new TextDecoder().decode(task.prompt_prefix ?? new Uint8Array(), { stream: true })
-  const promptTruncated = (task.prompt_bytes ?? 0) > MAX_PROMPT_BYTES
-  const detailHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}`)
-  const id = escapeHtml(req.params.id)
-  const refreshHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes/view`)
-  const active = task.status === 'queued' || task.status === 'running'
   const rawHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes?format=patch`)
   res.setHeader('X-Patch-Truncated', String(result.truncated))
   res.type('html').send(`<!doctype html>
@@ -247,28 +277,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     </nav>
   </header>
   <main>
-    <details>
-      <summary>Saved prompt</summary>
-      ${prompt ? `<pre class="saved-prompt">${escapeHtml(prompt)}</pre>` : '<p>No saved prompt is available.</p>'}
-      ${promptTruncated ? `<p class="warning">Prompt truncated: showing at most ${MAX_PROMPT_BYTES} UTF-8 bytes. See the saved prompt in <a href="${detailHref}">detail JSON</a>.</p>` : ''}
-    </details>
-    <section aria-label="Saved launch settings" class="launch-settings">
-      <h2>Saved launch settings</h2>
-      <p>Provider: <strong>${escapeHtml(task.provider ?? 'unspecified')}</strong> ·
-        Model: <strong>${escapeHtml(task.model ?? 'provider default')}</strong> ·
-        Auto-commit requested: <strong>${task.auto_commit == null ? 'unspecified' : task.auto_commit === 1 ? 'yes' : 'no'}</strong></p>
-    </section>
-    <section aria-label="Task outcome">
-      <h2>Task outcome</h2>
-      <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>
-      ${taskTiming(task)}
-      ${task.status === 'failed'
-        ? task.failure_reason
-          ? `<p class="failure-reason">Saved failure reason: ${escapeHtml(task.failure_reason)}</p>${task.failure_truncated ? `<p class="warning">Failure reason truncated: showing the first ${FAILURE_REASON_CHAR_CAP} characters.</p>` : ''}`
-          : '<p>No saved failure reason is available.</p>'
-        : ''}
-      ${active ? `<p>Task is active. ${task.commit_sha == null ? 'The displayed checkout diff is a snapshot and may change.' : 'The displayed diff is from the recorded commit; task metadata may change.'} <a href="${refreshHref}">Refresh this task review</a></p>` : ''}
-    </section>
+    ${savedContext(false)}
     ${provenance}
     <section aria-label="Changed files">
       <h2>Changed files</h2>
