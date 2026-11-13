@@ -9,6 +9,8 @@ interface RunOpts {
 // launched from a Git hook or another checkout. Never alter the parent env.
 export function gitEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env }
+  // Repository hooks and helpers must never receive the runner mutation credential.
+  delete env.FORGE_AUTH_TOKEN
   for (const key of [
     "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CEILING_DIRECTORIES",
@@ -119,6 +121,7 @@ function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
     // argv array, no shell: repoPath is a single argument and is never parsed,
     // so paths with spaces or metacharacters cannot break out.
     execFileSync("chown", ["-R", `${opts.uid}:${opts.gid}`, repoPath], {
+      env: gitEnvironment(),
       stdio: "ignore",
       timeout: GIT_WRITE_TIMEOUT_MS,
       killSignal: "SIGKILL",
