@@ -32,6 +32,36 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
+// Missing tasks have no stream; recovery navigation works without JavaScript.
+function missingViewHtml(id: string): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>forge · task not found</title>
+    <style>
+      body { margin: 2rem auto; padding: 0 1rem; max-width: 48rem;
+        background: #030712; color: #e4e4e7; font-family: system-ui, sans-serif; }
+      a { color: #10b981; }
+      code { overflow-wrap: anywhere; }
+      nav { display: flex; gap: 1rem; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Task not found</h1>
+      <p>No saved task was found for <code>${escapeHtml(id)}</code>.</p>
+      <p>The task may have been pruned, or the bookmarked ID may be incorrect.</p>
+      <nav aria-label="Recovery navigation">
+        <a href="/history">History</a>
+        <a href="/dashboard">Dashboard</a>
+      </nav>
+    </main>
+  </body>
+</html>`
+}
+
 interface LaunchMeta {
   created_at: string | null
   started_at: string | null
@@ -513,8 +543,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
 }
 
 // GET /tasks/:id/log/view — a distinct path segment from /:id/log, so it never
-// shadows (nor is shadowed by) the byte-slice log route. A missing task id gets
-// the same { error: 'task not found' } JSON 404 the sibling routes return;
+// shadows (nor is shadowed by) the byte-slice log route. Only this human-facing
+// route returns an HTML recovery page for a missing task.
 // Bound the prompt in SQLite before crossing into JS; never materialize the log.
 taskLogViewRouter.get('/:id/log/view', (req, res) => {
   const meta = db.prepare(`SELECT status, repo, branch, provider, model, auto_commit,
@@ -524,7 +554,7 @@ taskLogViewRouter.get('/:id/log/view', (req, res) => {
     length(CAST(prompt AS BLOB)) AS prompt_bytes FROM tasks WHERE id = ?`)
     .get(req.params.id) as LaunchMeta | undefined
   if (!meta) {
-    res.status(404).json({ error: 'task not found' })
+    res.status(404).type('html').send(missingViewHtml(req.params.id))
     return
   }
   res.type('html').send(viewHtml(req.params.id, meta))

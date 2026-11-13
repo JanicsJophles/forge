@@ -56,7 +56,8 @@ test('log viewer projects and escapes launch context without reading the log', a
   assert.match(off, /<dt>Model<\/dt><dd>saved-model<\/dd>/)
   const missing = await fetch(`${base}/missing/log/view`)
   assert.equal(missing.status, 404)
-  assert.deepEqual(await missing.json(), { error: 'task not found' })
+  assert.match(missing.headers.get('content-type') ?? '', /text\/html/)
+  assert.match(await missing.text(), /Task not found/)
   assert.equal(queries.length, 4)
   for (const query of queries) {
     assert.match(query, /substr\(CAST\(prompt AS BLOB\), 1, 16384\)/)
