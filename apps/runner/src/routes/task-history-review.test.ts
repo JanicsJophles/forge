@@ -55,7 +55,7 @@ test('history reviews saved reasons, commits and changes using only list respons
   assert.equal(rows[0].children[5].textContent, 'abcdef1')
   assert.equal(rows[0].children[6].children[0].href, '/tasks/failed-with-reason/changes/view')
   assert.equal(rows[0].children[6].children[0].textContent, 'Changes')
-  assert.equal(rows[1].children[0].children.length, 0)
+  assert.equal(rows[1].children[0].children[0].textContent, 'No saved failure reason is available.')
   assert.equal(rows[1].children[5].textContent, '')
   assert.equal(rows[1].children[6].children.length, 1)
   assert.equal(rows[2].children[0].children.length, 0)
