@@ -54,7 +54,7 @@ test('truncation and untracked warnings remain outside the collapsed list', () =
   assert.equal((html.match(/<li>/g) ?? []).length, 2000)
   assert.ok(html.indexOf('File list truncated: showing 2000 of 2001') > disclosureEnd)
   assert.ok(html.indexOf('Patch truncated:') > disclosureEnd)
-  assert.ok(html.indexOf('Untracked file contents are not included.') < html.indexOf('<details'))
+  assert.ok(html.indexOf('Untracked file contents are not included.') < html.indexOf('<details aria-label="Changed file list"'))
 })
 
 test('hostile names remain text and expanded list links resolve outside the disclosure', () => {

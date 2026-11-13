@@ -5,6 +5,7 @@ import { getChangesPatch, getChangedFiles, summarizeChangedFiles, boundChangedFi
 
 export const taskChangesViewRouter = Router()
 
+const MAX_PROMPT_BYTES = 16 * 1024
 const FAILURE_REASON_CHAR_CAP = 2000
 
 // Keep footprints of up to 20 files open; larger lists yield space to the diff.
@@ -99,13 +100,16 @@ function errorPage(taskId: string, unavailable: boolean): string {
 }
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
-  // Bound diagnostics in SQLite; never load the stored log or prompt for review.
+  // Bound prompt and diagnostics in SQLite; never load the stored log for review.
   const task = db.prepare(`SELECT repo, branch, commit_sha, status,
+    substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
+    length(CAST(prompt AS BLOB)) AS prompt_bytes,
     substr(error_message, 1, ${FAILURE_REASON_CHAR_CAP}) AS failure_reason,
     length(error_message) > ${FAILURE_REASON_CHAR_CAP} AS failure_truncated
     FROM tasks WHERE id = ?`).get(req.params.id) as
     { repo: string; branch: string; commit_sha: string | null; status: string | null;
-      failure_reason: string | null; failure_truncated: number | null } | undefined
+      failure_reason: string | null; failure_truncated: number | null;
+      prompt_prefix: Buffer | null; prompt_bytes: number | null } | undefined
   if (!task) {
     res.status(404).type('html').send(errorPage(req.params.id, false))
     return
@@ -152,6 +156,10 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     const anchor = navigation.anchors.get(index)
     return `<span${anchor ? ` id="${anchor}" tabindex="-1"` : ''} class="${kind}">${escapeHtml(line)}</span>`
   }).join('\n')
+  // Streaming decode omits a partial final UTF-8 codepoint at the byte cap.
+  const prompt = new TextDecoder().decode(task.prompt_prefix ?? new Uint8Array(), { stream: true })
+  const promptTruncated = (task.prompt_bytes ?? 0) > MAX_PROMPT_BYTES
+  const detailHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}`)
   const id = escapeHtml(req.params.id)
   const refreshHref = escapeHtml(`/tasks/${encodeURIComponent(req.params.id)}/changes/view`)
   const active = task.status === 'queued' || task.status === 'running'
@@ -179,6 +187,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     pre span:target { outline: 2px solid #34d399; }
     .hunk { color: #c4b5fd; }
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .saved-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .failure-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
     summary { cursor: pointer; overflow-wrap: anywhere; }
@@ -191,6 +200,11 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     <a href="${logHref}">task log</a><a href="${rawHref}">raw patch</a><a href="/dashboard">dashboard</a>
   </header>
   <main>
+    <details>
+      <summary>Saved prompt</summary>
+      ${prompt ? `<pre class="saved-prompt">${escapeHtml(prompt)}</pre>` : '<p>No saved prompt is available.</p>'}
+      ${promptTruncated ? `<p class="warning">Prompt truncated: showing at most ${MAX_PROMPT_BYTES} UTF-8 bytes. See the saved prompt in <a href="${detailHref}">detail JSON</a>.</p>` : ''}
+    </details>
     <section aria-label="Task outcome">
       <h2>Task outcome</h2>
       <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>
