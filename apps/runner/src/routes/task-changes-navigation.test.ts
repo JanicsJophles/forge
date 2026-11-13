@@ -21,10 +21,10 @@ test('review navigation preserves hostile identity for checkout and recorded rev
         } }) },
         '../db/schema.js': { db: { prepare: (sql: string) => {
           assert.equal(sql.replace(/\s+/g, ' ').trim(),
-            'SELECT repo, branch, commit_sha, status, substr(error_message, 1, 2000) AS failure_reason, length(error_message) > 2000 AS failure_truncated FROM tasks WHERE id = ?')
+            'SELECT repo, branch, commit_sha, status, substr(CAST(prompt AS BLOB), 1, 16384) AS prompt_prefix, length(CAST(prompt AS BLOB)) AS prompt_bytes, substr(error_message, 1, 2000) AS failure_reason, length(error_message) > 2000 AS failure_truncated FROM tasks WHERE id = ?')
           return { get: (taskId: string) => {
             assert.equal(taskId, id)
-            return { repo: '/fake/repo', branch: 'test', status: 'failed', failure_reason: 'saved reason', failure_truncated: 0, commit_sha: commitSha }
+            return { repo: '/fake/repo', branch: 'test', status: 'failed', prompt_prefix: Buffer.from('Review navigation'), prompt_bytes: 17, failure_reason: 'saved reason', failure_truncated: 0, commit_sha: commitSha }
           } }
         } } },
         '../agent/git.js': { getCurrentBranch: (...args: unknown[]) => { probes.push(args); return 'test' } },
@@ -36,7 +36,7 @@ test('review navigation preserves hostile identity for checkout and recorded rev
         },
       }
       const js = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
-      vm.runInNewContext(js, { exports: {}, require: (name: string) => {
+      vm.runInNewContext(js, { exports: {}, TextDecoder, require: (name: string) => {
         assert.ok(name in modules, `unexpected dependency: ${name}`)
         return modules[name]
       } })
@@ -55,6 +55,7 @@ test('review navigation preserves hostile identity for checkout and recorded rev
       assert.match(html, patch ? /aria-label="Unified diff"/ : /No tracked changes/)
       assert.doesNotMatch(html, /<svg/)
       assert.equal((html.match(/>task logs<\/a>/g) ?? []).length, 1)
+      assert.match(html, /Review navigation<\/pre>/)
       assert.match(html, /Saved failure reason: saved reason/)
       assert.deepEqual(probes, [['/fake/repo', commitSha], ['/fake/repo', commitSha], ...(commitSha ? [] : [['/fake/repo']])])
     }
