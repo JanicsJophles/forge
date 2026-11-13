@@ -43,7 +43,7 @@ test('live and recent rows expose safe HTML changes links and preserve controls 
       vm.runInContext(`${renderer}(rows)`, context)
       const output = el(root).innerHTML
       const links = [...output.matchAll(/<a\b[^>]*>/g)].map(match => match[0])
-      assert.equal(links.length, 2)
+      assert.equal(links.length, renderer === 'renderRecentTasks' && status === 'failed' ? 3 : 2)
       for (const [index, suffix] of ['log/view', 'changes/view'].entries()) {
         assert.ok(links[index].includes(`href="/tasks/${encodeURIComponent(hostile)}/${suffix}"`))
         assert.match(links[index], /target="_blank"/)

@@ -244,6 +244,7 @@ const HTML = `<!DOCTYPE html>
       font-variant-numeric: tabular-nums;
     }
     .task-row .error-message {
+      white-space: pre-wrap;
       display: block;
       margin-top: 4px;
       color: var(--fail);
@@ -1090,6 +1091,22 @@ const HTML = `<!DOCTYPE html>
       return '<div class="intent recent-prompt">' + escape(points.slice(0, 160).join('') || 'No saved prompt') +
         (omitted ? '<span class="muted"> · prompt truncated</span>' : '') + '</div>';
     }
+    function recentFailure(task, logUrl, hasId) {
+      if (task.status !== 'failed') return '';
+      const diagnostic = typeof task.errorMessage === 'string' ? task.errorMessage : '';
+      let preview = '';
+      let count = 0;
+      let truncated = false;
+      for (const point of diagnostic) {
+        if (count === 500) { truncated = true; break; }
+        preview += point;
+        count++;
+      }
+      return '<div class="error-message">' +
+        escape(diagnostic.trim() ? preview : 'Failure diagnostic unavailable: no saved reason.') + '</div>' +
+        (truncated ? '<div class="muted">Diagnostic truncated to 500 characters.</div>' : '') +
+        (hasId ? '<a class="diagnostic-link" href="' + escape(logUrl) + '">Full saved failure context</a>' : '');
+    }
     function renderRecentTasks(tasks) {
       const root = document.getElementById('recentTasks');
       const rows = Array.isArray(tasks) ? tasks.filter(t => !selectedRepo || t.repo === selectedRepo) : [];
@@ -1121,7 +1138,7 @@ const HTML = `<!DOCTYPE html>
               hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)"' + (retry && retry.pending ? ' disabled>retrying…' : '>retry') + '</button>' + retryFeedback(retry) : '',
             '</div>',
             recentPrompt(t),
-            t.status === 'failed' && t.errorMessage ? '<div class="error-message">' + escape(t.errorMessage) + '</div>' : '',
+            recentFailure(t, logUrl, hasId),
             '<div class="age">created ' + relTime(t.createdAt) + '</div>',
           '</div>'
         ].join('');
