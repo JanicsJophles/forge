@@ -130,26 +130,19 @@ function admitCheckout(repo: string, requestedBranch: string | undefined): Admis
     return { ok: false, status: 429, body: { error: 'max concurrent tasks reached' } }
   }
 
-  // Validate the branch claim against the checkout so two callers cannot race the
-  // same working tree under mismatched branch assumptions. A provable mismatch is
-  // rejected with a static message — never raw Git output, which can carry paths
-  // or remote URLs. When the branch is omitted we record the checkout's current
-  // branch. An unborn checkout (no commits) has no resolvable branch to compare
-  // against, so a claim is accepted rather than invented: real work always runs on
-  // a checkout with commits.
-  if (requestedBranch !== undefined) {
-    let checkoutBranch: string | null
-    try { checkoutBranch = getCurrentBranch(repo) } catch { checkoutBranch = null }
-    if (checkoutBranch !== null && checkoutBranch !== requestedBranch) {
-      return { ok: false, status: 409, body: { error: 'requested branch does not match the repository checkout' } }
-    }
-    return { ok: true, branch: requestedBranch }
-  }
+  // Resolve checkout state before accepting any caller claim. Symbolic unborn
+  // branches are resolvable, and valid detached checkouts resolve to HEAD.
+  // Probe failures must never turn an unverified claim into admission.
+  let checkoutBranch: string
   try {
-    return { ok: true, branch: getCurrentBranch(repo) }
-  } catch (err: any) {
-    return { ok: false, status: 400, body: { error: `could not determine branch: ${err.message}` } }
+    checkoutBranch = getCurrentBranch(repo)
+  } catch {
+    return { ok: false, status: 400, body: { error: 'could not determine repository checkout branch' } }
   }
+  if (requestedBranch !== undefined && checkoutBranch !== requestedBranch) {
+    return { ok: false, status: 409, body: { error: 'requested branch does not match the repository checkout' } }
+  }
+  return { ok: true, branch: checkoutBranch }
 }
 
 // Build, persist and kick off a queued task from already-admitted inputs. Used by
