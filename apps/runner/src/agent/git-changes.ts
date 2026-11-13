@@ -70,6 +70,8 @@ const GIT_READ_TIMEOUT_MS = 2_000
 // mirroring git.ts readGit so a hook or parent checkout cannot redirect the probe.
 function gitEnvironment(): NodeJS.ProcessEnv {
   const env = { ...process.env }
+  // Runner mutation credentials must never reach Git or its configured helpers.
+  delete env.FORGE_AUTH_TOKEN
   for (const key of [
     'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
     'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CEILING_DIRECTORIES',
