@@ -20,6 +20,8 @@
 //                                   (`disk`) also remains global under filtering.
 // ---------------------------------------------------------------------------
 
+import { dirname } from 'node:path'
+import { realpathSync } from 'node:fs'
 import { Router, type Request, type Response } from 'express'
 import {
   checkpoint,
@@ -39,6 +41,7 @@ import { config } from '../config.js'
 import { freeDiskBytes } from '../agent/disk.js'
 
 interface ContextDiskOptions {
+  databasePath?: string
   allowedRepoPaths: readonly string[]
   minFreeDiskMb: number
   freeDiskBytes: (path: string) => number
@@ -249,7 +252,19 @@ export function createAgentContextRouter(options: ContextDiskOptions = {
     } catch {
       freeDiskMb = null
     }
+    // Resolve the database itself before taking its directory: a symlink may
+    // place SQLite and its WAL on a different volume from the configured path.
+    // These are snapshots, not a promise of admission for every repository.
+    let dataFreeDiskMb: number | null = null
+    try {
+      const bytes = options.freeDiskBytes(dirname(realpathSync(options.databasePath ?? db.name)))
+      if (Number.isFinite(bytes) && bytes >= 0) dataFreeDiskMb = Math.floor(bytes / 1048576)
+    } catch {
+      dataFreeDiskMb = null
+    }
     const disk = {
+      dataFreeDiskMb,
+      dataDiskOk: dataFreeDiskMb === null ? null : dataFreeDiskMb >= options.minFreeDiskMb,
       freeDiskMb,
       diskOk: freeDiskMb === null ? null : freeDiskMb >= options.minFreeDiskMb,
     }
