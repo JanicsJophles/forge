@@ -265,6 +265,13 @@ async function load(targetCursors, targetSelection = selection) {
         link.href = taskPath + '/log/view';
         link.textContent = 'View logs';
         cell.appendChild(link);
+        const space = document.createElement('span');
+        space.textContent = ' ';
+        cell.appendChild(space);
+        const download = document.createElement('a');
+        download.href = taskPath + '/log?format=text&download=1';
+        download.textContent = 'Download transcript';
+        cell.appendChild(download);
       }
       row.appendChild(cell);
       const commit = document.createElement('td');
