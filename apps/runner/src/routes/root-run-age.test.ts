@@ -70,7 +70,7 @@ test('landing shows measured run age and provider limit through the existing hea
     assert.deepEqual(requests.splice(0).slice(-3), ['/tasks?limit=5', '/health', '/tasks/stats'])
   }
   async function readings(age: unknown, timeout: unknown, expectedAge: string, expectedLimit: string) {
-    await cycle({ oldestRunningTaskAgeSeconds: age, taskTimeoutMs: timeout, queuedOrRunning: 2 })
+    await cycle({ oldestRunningTaskAgeSeconds: age, taskTimeoutMs: timeout, acceptingTasks: false, queuedOrRunning: 2, maxConcurrentTasks: 2 })
     assert.equal(el('oldest-running-age').textContent, expectedAge)
     assert.equal(el('task-timeout').textContent, expectedLimit)
     assert.equal(el('health-freshness').textContent, '')
