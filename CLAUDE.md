@@ -58,14 +58,18 @@ POST   /tasks               → create + start task, returns 201 { taskId }
                               rejects: 400 bad input, 409 branch/active-checkout conflict,
                                        429 at capacity, 507 low disk
 GET    /tasks               → task history, newest first
-                              filters: ?repo= ?status= ?limit=(1..100,def 20) ?before=<id cursor>
+                              filters: ?repo= ?status= ?provider=claude|codex ?limit=(1..100,def 20) ?before=<id cursor>
+                              provider matches exactly; omitted includes all providers; invalid → 400
+                              filters apply before ordering/limiting; combine repo/status/provider
                               sets X-Next-Before header when another page exists
 GET    /tasks/stats         → { queued, running, completed, failed, total }
 GET    /tasks/:id           → single task; ?view=status|detail returns a projection
 GET    /tasks/:id/stream    → SSE stream (catch-up + live; ?replay=0 skips catch-up)
 GET    /tasks/:id/changes   → { taskId, repo, branch, summary, changedFiles, truncated }
 GET    /tasks/:id/log       → byte slice (?offset= ?limit=), line tail (?tailLines=),
-                              or raw text (?format=text, ?download=1); X-Task-Status header
+                              or raw text (?format=text); X-Task-Status header
+                              ?format=text&download=1 downloads a complete finite snapshot;
+                              explicit offset/limit/tailLines keeps the selected bounded output
 POST   /tasks/:id/retry     → re-dispatch a terminal task's inputs, returns 201 { taskId }
 DELETE /tasks/:id           → cancel queued / SIGTERM running task
 ```
@@ -78,8 +82,9 @@ GET    /health              → { status, version, activeTasks, queuedOrRunning,
                                 maxConcurrentTasks, freeDiskMb, diskOk, dataFreeDiskMb,
                                 dataDiskOk, uptimeSeconds, oldestRunningTaskAgeSeconds }
 GET    /capabilities        → { providerSelectionVersion, providers, version,
-                                authRequired, limits, logging }
-                              also reachable at GET /tasks/capabilities (legacy alias)
+                                authRequired, build, retention, limits, logging }
+                              retention: { enabled, days, intervalSeconds }
+                              /tasks/capabilities is a task-ID lookup, not a discovery alias
 ```
 
 ### Authentication
