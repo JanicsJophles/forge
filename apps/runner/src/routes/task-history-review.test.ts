@@ -45,7 +45,7 @@ test('history reviews saved reasons, commits and changes using only list respons
     task('failed-without-reason'),
     task('completed', { status: 'completed', errorMessage: 'ignore', commitSha: '1234567890abcdef' }),
     task(hostile, { errorMessage: hostile, commitSha: hostile, repo: hostile, prompt: hostile }),
-    ...['../other', '.', 'a/b', 'a?x=1'].map(id => task(id)),
+    ...['../other', '%2e', 'a/b', 'a?x=1'].map(id => task(id)),
   ], 'older-cursor')
   let rows = el('rows').children
   assert.equal(rows[0].children[0].textContent, 'failed')
@@ -63,7 +63,10 @@ test('history reviews saved reasons, commits and changes using only list respons
   assert.equal(rows[3].children[5].textContent, hostile.slice(0, 7))
   assert.equal(rows[3].children[2].textContent, hostile)
   assert.equal(rows[3].children[3].textContent, hostile)
-  for (const row of rows.slice(3)) assert.equal(row.children[6].children.length, 0)
+  for (const [index, id] of [hostile, '../other', '%2e', 'a/b', 'a?x=1'].entries()) {
+    assert.equal(rows[index + 3].children[6].children[0].href,
+      '/tasks/' + encodeURIComponent(id) + '/changes/view')
+  }
   assert.equal(requests.length, 1, 'no task detail or transcript requests')
 
   el('older').onclick()
