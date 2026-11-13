@@ -16,6 +16,42 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
+// SQLite datetime() is UTC; ISO input must carry an explicit zone.
+function recordedTime(value: string | null): { text: string; ms: number | null } {
+  if (value == null) return { text: 'not recorded', ms: null }
+  const match = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})?$/.exec(value)
+  if (!match || (value.includes('T') && !match[8])) return { text: 'invalid timestamp', ms: null }
+  const [, year, month, day, hour, minute, second, fraction = '', zone = 'Z'] = match
+  const local = `${year}-${month}-${day}T${hour}:${minute}:${second}${fraction}Z`
+  const calendar = new Date(local)
+  const ms = Date.parse(`${local.slice(0, -1)}${zone}`)
+  // Date.parse normalizes impossible calendar dates (for example February 30).
+  if (!Number.isFinite(ms) || !Number.isFinite(calendar.getTime()) ||
+      calendar.toISOString().slice(0, 19) !== local.slice(0, 19)) {
+    return { text: 'invalid timestamp', ms: null }
+  }
+  return { text: new Date(ms).toISOString().replace('T', ' ').replace('Z', ' UTC'), ms }
+}
+
+function taskTiming(task: { status: string | null; created_at: string | null; started_at: string | null; completed_at: string | null }): string {
+  const created = recordedTime(task.created_at)
+  const start = recordedTime(task.started_at)
+  const finish = recordedTime(task.completed_at)
+  const active = task.status === 'queued' || task.status === 'running'
+  const terminal = task.status === 'completed' || task.status === 'failed'
+  let duration = active ? 'not finished' : 'unavailable (missing recorded start or finish)'
+  if (terminal) {
+    if (start.text === 'invalid timestamp' || finish.text === 'invalid timestamp') duration = 'unavailable (invalid timestamp)'
+    else if (start.ms != null && finish.ms != null) duration = finish.ms < start.ms
+      ? 'unavailable (finish precedes start; clock skew)'
+      : `${(finish.ms - start.ms) / 1000} seconds`
+  } else if (!active) duration = 'unavailable (task status is not terminal)'
+  return `<p>Created (UTC): ${created.text}<br>
+        Started (UTC): ${task.started_at == null && task.status === 'queued' ? 'not started' : start.text}<br>
+        Finished (UTC): ${task.completed_at == null && active ? 'not finished' : finish.text}<br>
+        Terminal duration: ${duration}</p>`
+}
+
 function reviewNavigation(taskId: string): string {
   const logHref = escapeHtml(`/tasks/${encodeURIComponent(taskId)}/log/view`)
   return `<a href="${logHref}">task logs</a><a href="/history">task history</a>`
@@ -107,12 +143,14 @@ function errorPage(taskId: string, unavailable: boolean): string {
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Bound prompt and diagnostics in SQLite; never load the stored log for review.
   const task = db.prepare(`SELECT repo, branch, commit_sha, status, provider, model, auto_commit,
+    created_at, started_at, completed_at,
     substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
     length(CAST(prompt AS BLOB)) AS prompt_bytes,
     substr(error_message, 1, ${FAILURE_REASON_CHAR_CAP}) AS failure_reason,
     length(error_message) > ${FAILURE_REASON_CHAR_CAP} AS failure_truncated
     FROM tasks WHERE id = ?`).get(req.params.id) as
     { repo: string; branch: string; commit_sha: string | null; status: string | null;
+      created_at: string | null; started_at: string | null; completed_at: string | null;
       provider: string | null; model: string | null; auto_commit: number | null;
       failure_reason: string | null; failure_truncated: number | null;
       prompt_prefix: Buffer | null; prompt_bytes: number | null } | undefined
@@ -223,6 +261,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     <section aria-label="Task outcome">
       <h2>Task outcome</h2>
       <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>
+      ${taskTiming(task)}
       ${task.status === 'failed'
         ? task.failure_reason
           ? `<p class="failure-reason">Saved failure reason: ${escapeHtml(task.failure_reason)}</p>${task.failure_truncated ? `<p class="warning">Failure reason truncated: showing the first ${FAILURE_REASON_CHAR_CAP} characters.</p>` : ''}`
