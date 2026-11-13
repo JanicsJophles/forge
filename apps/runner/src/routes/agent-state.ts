@@ -150,6 +150,12 @@ agentStateRouter.post('/agent-events', (req: Request, res: Response) => {
 })
 
 agentStateRouter.get('/agent-events', (req: Request, res: Response) => {
+  for (const field of ['repo', 'ticket', 'type'] as const) {
+    const value = req.query[field]
+    if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+      return badRequest(res, `${field} must be a single nonempty string`)
+    }
+  }
   const agentId = req.query.agentId
   if (agentId !== undefined && (typeof agentId !== 'string' || !agentId.trim())) {
     return badRequest(res, 'agentId must be a single nonempty string')
