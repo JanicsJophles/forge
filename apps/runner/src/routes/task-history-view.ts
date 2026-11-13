@@ -25,7 +25,9 @@ button:disabled{opacity:.5}
 </style>
 </head><body><nav><a href="/dashboard">Dashboard</a> · <a href="/">Home</a></nav>
 <h1>Task history</h1>
-<form id="filters"><label>Repository (exact path) <input id="repo" type="text"></label>
+<form id="filters"><label>Repository (exact path) <input id="repo" type="text" list="repo-suggestions" aria-describedby="repo-discovery"></label>
+<datalist id="repo-suggestions"></datalist>
+<span id="repo-discovery" role="status" aria-live="polite">Optional suggestions load when the repository field is focused; any exact path is accepted.</span>
 <label>Status <select id="status"><option value="">All</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label>
 <button type="submit">Apply filters</button></form>
 <p id="message" role="status" aria-live="polite"></p>
@@ -70,6 +72,52 @@ function completionText(task) {
   return time === null ? 'Unknown' : new Date(time).toISOString().replace('T', ' ').replace('.000Z', ' UTC').replace('Z', ' UTC');
 }
 const repo = document.getElementById('repo');
+// Discovery is optional and attempted only once, when the field is used.
+let discoveryStarted = false;
+repo.onfocus = async () => {
+  if (discoveryStarted) return;
+  discoveryStarted = true;
+  const feedback = document.getElementById('repo-discovery');
+  feedback.textContent = 'Loading repository suggestions…';
+  const controller = new AbortController();
+  let timer;
+  try {
+    const entries = await Promise.race([
+      (async () => {
+        const response = await fetch('/repos', { signal: controller.signal });
+        if (!response.ok) throw new Error('Unavailable');
+        return response.json();
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => { reject(new Error('Timeout')); controller.abort(); }, 5000);
+      }),
+    ]);
+    if (!Array.isArray(entries) || entries.length > 1000 || !entries.every(entry =>
+      entry && typeof entry === 'object' && typeof entry.path === 'string' &&
+      entry.path.startsWith('/') && entry.path.length <= 4096 && !/[\\x00-\\x1f\\x7f]/.test(entry.path) &&
+      typeof entry.name === 'string' && entry.name.trim() && entry.name.length <= 4096)) {
+      throw new Error('Invalid repositories');
+    }
+    const options = [];
+    const seen = new Set();
+    for (const entry of entries) {
+      if (seen.has(entry.path)) continue;
+      seen.add(entry.path);
+      const option = document.createElement('option');
+      option.value = entry.path;
+      // Include the path even when names are duplicated; never interpret labels as HTML.
+      option.label = entry.name + ' — ' + entry.path;
+      options.push(option);
+    }
+    document.getElementById('repo-suggestions').replaceChildren(...options);
+    feedback.textContent = options.length ? 'Choose a suggestion or enter any exact repository path.'
+      : 'No repositories discovered; enter any exact repository path.';
+  } catch {
+    feedback.textContent = 'Repository suggestions unavailable; enter any exact repository path.';
+  } finally {
+    clearTimeout(timer);
+  }
+};
 const status = document.getElementById('status');
 const rows = document.getElementById('rows');
 const displayed = document.getElementById('displayed');
