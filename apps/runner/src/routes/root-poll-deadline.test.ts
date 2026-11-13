@@ -48,6 +48,7 @@ for (const endpoint of ['/health', '/tasks?limit=5']) {
         document: { getElementById: el, createElement: () => new Element() },
         AbortController,
         fetch: (url: string, options: { signal: AbortSignal }) =>
+          url === '/tasks/stats' ? Promise.resolve({ ok: true, json: async () => ({ total: 0, completed: 0, failed: 0, queued: 0, running: 0 }) }) :
           new Promise<Reply>(resolve => requests.push({ url, signal: options.signal, resolve })),
         setTimeout: (callback: () => void, ms: number) => {
           timers.set(++timerId, { at: now + ms, callback }); return timerId

@@ -169,7 +169,7 @@ async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network')
     },
   })
   await new Promise<void>(resolve => setImmediate(resolve))
-  assert.deepEqual(requests, ['/tasks?limit=5', '/health'])
+  assert.deepEqual(requests, ['/tasks?limit=5', '/health', '/tasks/stats'])
   return list
 }
 
