@@ -9,6 +9,7 @@ class Element {
   textContent = ''
   appendChild() {}
 }
+const admission = { acceptingTasks: true, queuedOrRunning: 0, maxConcurrentTasks: 2 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
 
 test('landing disk headroom uses health refresh, validates values and retains stale measurements', async () => {
@@ -59,7 +60,7 @@ test('landing disk headroom uses health refresh, validates values and retains st
   assert.match(el('health-freshness').textContent, /unavailable/)
   assert.deepEqual(urls.splice(0), ['/tasks?limit=5', '/health', '/tasks/stats'])
   fail = false
-  health = { freeDiskMb: 1234.5, dataFreeDiskMb: 9876, minFreeDiskMb: 0 }
+  health = { ...admission, freeDiskMb: 1234.5, dataFreeDiskMb: 9876, minFreeDiskMb: 0 }
   await cycle()
   assert.deepEqual(values(), ['1234.5 MiB', '9876 MiB', '0 MiB'])
   assert.equal(el('health-freshness').textContent, '')
@@ -69,12 +70,12 @@ test('landing disk headroom uses health refresh, validates values and retains st
   assert.match(el('health-freshness').textContent, /stale/)
   fail = false
   for (const invalid of [null, undefined, -1, NaN, Infinity, -Infinity, '42', {}]) {
-    health = { freeDiskMb: invalid, dataFreeDiskMb: invalid, minFreeDiskMb: invalid }
+    health = { ...admission, freeDiskMb: invalid, dataFreeDiskMb: invalid, minFreeDiskMb: invalid }
     await cycle()
     assert.deepEqual(values(), ['unknown', 'unknown', 'unknown'])
     assert.equal(el('health-freshness').textContent, '')
   }
-  health = { freeDiskMb: 0, dataFreeDiskMb: null, minFreeDiskMb: 512 }
+  health = { ...admission, freeDiskMb: 0, dataFreeDiskMb: null, minFreeDiskMb: 512 }
   await cycle()
   assert.deepEqual(values(), ['0 MiB', 'unknown', '512 MiB'])
 })

@@ -13,7 +13,7 @@ class Element {
   appendChild(child: Element) { this.children.push(child) }
 }
 const flush = () => new Promise<void>(resolve => setImmediate(resolve))
-const health = (version: string) => ({ version, acceptingTasks: true })
+const health = (version: string) => ({ version, acceptingTasks: true, queuedOrRunning: 0, maxConcurrentTasks: 2 })
 const tasks = (marker: string) => [{ id: 'abcdefgh', repo: '/repo/' + marker, status: 'running' }]
 type Reply = { ok: boolean; json: () => Promise<unknown> }
 

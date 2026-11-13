@@ -275,7 +275,13 @@ ${rows}
           return readJson('/health')
           .then(function (h) {
             if (!h || typeof h !== 'object' || Array.isArray(h)) throw new Error('invalid health')
-            var accepting = h.acceptingTasks === true
+            // Validate required admission data before publishing any part of the panel.
+            if (typeof h.acceptingTasks !== 'boolean' ||
+                !Number.isSafeInteger(h.queuedOrRunning) || h.queuedOrRunning < 0 ||
+                !Number.isSafeInteger(h.maxConcurrentTasks) || h.maxConcurrentTasks <= 0) {
+              throw new Error('invalid health admission data')
+            }
+            var accepting = h.acceptingTasks
             var reasonLabels = ${reasonLabelsJson}
             var reason =
               typeof h.notAcceptingReason === 'string' ? h.notAcceptingReason : null
