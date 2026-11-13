@@ -210,7 +210,7 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <a href="${downloadHref}">download</a>
       <a href="/dashboard">dashboard</a>
       <p>Recorded commit: <code id="recordedCommit">${escapeHtml(meta.commit_sha ?? 'None recorded')}</code> · <a href="${changesHref}">Review task changes</a></p>
-      <dl class="configuration" id="timing" aria-live="polite"><div><dt>Created</dt><dd id="createdTime">${escapeHtml(meta.created_at ?? '')}</dd></div><div><dt>Started</dt><dd id="startedTime">${escapeHtml(meta.started_at ?? '')}</dd></div><div><dt>Finished</dt><dd id="finishedTime">${escapeHtml(meta.completed_at ?? '')}</dd></div><div><dt>Duration</dt><dd id="duration">Unavailable</dd></div></dl>
+      <dl class="configuration" id="timing" aria-live="polite"><div><dt>Created</dt><dd id="createdTime">${escapeHtml(meta.created_at ?? '')}</dd></div><div><dt>Started</dt><dd id="startedTime">${escapeHtml(meta.started_at ?? '')}</dd></div><div><dt>Finished</dt><dd id="finishedTime">${escapeHtml(meta.completed_at ?? '')}</dd></div><div><dt id="durationLabel">Duration</dt><dd id="duration">Unavailable</dd></div></dl>
       <details class="configuration"><summary>Launch configuration</summary><dl>${configuration}</dl></details>
       <details class="saved-prompt"><summary>Saved prompt</summary><pre>
 ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `<p>Additional prompt content omitted (preview limited to ${MAX_PROMPT_BYTES} UTF-8 bytes). <a href="${escapeHtml(`/tasks/${encodedId}?view=detail`)}">Full task detail JSON</a></p>` : ''}</details>
@@ -373,10 +373,27 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
         function taskStatus(status) {
           INITIAL_STATUS = status;
           statusVersion++;
+          if (status !== 'running') {
+            stopElapsed();
+            if (document.getElementById('durationLabel').textContent === 'Elapsed')
+              document.getElementById('durationLabel').textContent = 'Elapsed (stopped)';
+          }
           cancelEl.hidden = status !== 'running' && status !== 'queued';
           retryEl.hidden = status !== 'completed' && status !== 'failed';
           setStatus(status, status === 'completed' ? 'done' : status === 'failed' ? 'fail' : '');
         }
+        var elapsedTimer;
+        var timingDisposed = false;
+        function stopElapsed() {
+          if (elapsedTimer !== undefined) clearTimeout(elapsedTimer);
+          elapsedTimer = undefined;
+        }
+        function disposeTiming() {
+          timingDisposed = true;
+          statusVersion++;
+          stopElapsed();
+        }
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('pagehide', disposeTiming);
         function timestamp(value) {
           if (typeof value !== 'string' || !value.trim()) return null;
           // SQLite stores timezone-less UTC; require a full timestamp, never a local date.
@@ -398,7 +415,26 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
               ? (index === 1 && task.status === 'queued' ? 'Not started' : index === 2 && (task.status === 'queued' || task.status === 'running') ? 'Not finished' : 'Not recorded')
               : !Number.isFinite(time) ? 'Invalid timestamp' : new Date(time).toISOString();
           });
+          stopElapsed();
           var start = timestamp(task.startedAt), finish = timestamp(task.completedAt);
+          document.getElementById('durationLabel').textContent = task.status === 'running' ? 'Elapsed' : 'Duration';
+          if (task.status === 'running') {
+            function tick() {
+              if (timingDisposed) return;
+              var age = Date.now() - start;
+              document.getElementById('duration').textContent = start === null ? 'Unavailable (start not recorded)'
+                : !Number.isFinite(start) ? 'Unavailable (invalid timestamp)'
+                : age < 0 ? 'Unavailable (start is in the future; clock skew)'
+                : String(Math.floor(age / 1000)) + ' s';
+              if (start !== null && Number.isFinite(start) && age >= 0) elapsedTimer = setTimeout(tick, 1000);
+            }
+            tick();
+            return;
+          }
+          if (task.status === 'queued' && start === null) {
+            document.getElementById('duration').textContent = 'Not started';
+            return;
+          }
           document.getElementById('duration').textContent = start === null || finish === null ? 'Unavailable (start or finish not recorded)'
             : !Number.isFinite(start) || !Number.isFinite(finish) ? 'Unavailable (invalid timestamp)'
             : finish < start ? 'Unavailable (finish precedes start; clock skew)'
@@ -418,7 +454,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
                 timer = setTimeout(function () { controller.abort(); reject(new Error('Timing deadline')); }, 5000);
               })
             ]);
-            if (version === statusVersion &&
+            if (!timingDisposed && version === statusVersion &&
                 !((INITIAL_STATUS === 'completed' || INITIAL_STATUS === 'failed') &&
                   (task.status === 'running' || task.status === 'queued'))) timing(task);
           } catch (e) { /* Keep the last recorded timing on failure or deadline. */ }
@@ -443,7 +479,7 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           if (!response.ok) throw new Error('Status refresh failed (HTTP ' + response.status + ')');
           var task = await response.json();
           // A newer stream event takes precedence over an in-flight read.
-          if ((!signal || !signal.aborted) && version === statusVersion &&
+          if (!timingDisposed && (!signal || !signal.aborted) && version === statusVersion &&
               !((INITIAL_STATUS === 'completed' || INITIAL_STATUS === 'failed') &&
                 (task.status === 'running' || task.status === 'queued'))) { taskStatus(task.status); timing(task); }
         }
@@ -642,7 +678,12 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             appendLog(parse(e.data));
           });
           current.addEventListener('status', function (e) {
-            if (!done && source === current) taskStatus(parse(e.data) || 'streaming');
+            if (!done && source === current) {
+              var previous = INITIAL_STATUS;
+              taskStatus(parse(e.data) || 'streaming');
+              // A queued snapshot has no start yet; read it once on the transition.
+              if (previous === 'queued' && INITIAL_STATUS === 'running') refreshStatus().catch(function () {});
+            }
           });
           current.addEventListener('complete', function () {
             if (done || source !== current) return;
