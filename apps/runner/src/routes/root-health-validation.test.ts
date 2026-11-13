@@ -49,7 +49,7 @@ test('malformed health stays unavailable or stale, preserves the panel and recov
     AbortController,
     fetch: async (url: string) => ({ ok: true, json: async () => url === '/health'
       ? payload : url === '/tasks/stats'
-        ? { total: cycle, completed: cycle, failed: 0, queued: 0, running: 0 } : [{ id: 'abcdefgh', repo: '/repo', status: `cycle-${cycle}` }] }),
+        ? { total: cycle, completed: cycle, failed: 0, queued: 0, running: 0 } : [{ id: 'abcdefgh', repo: `/repo/cycle-${cycle}`, status: 'running' }] }),
     setTimeout: (callback: () => void, delay: number) => {
       if (delay === 5000) timers.push(callback)
       else assert.equal(delay, 10000)
