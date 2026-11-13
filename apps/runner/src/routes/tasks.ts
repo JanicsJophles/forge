@@ -254,9 +254,14 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 tasksRouter.get('/', (req: Request, res: Response) => {
   const repo = req.query.repo
   const status = req.query.status
+  const provider = req.query.provider
   const before = req.query.before
   if (repo !== undefined && (typeof repo !== 'string' || !repo.trim())) {
     res.status(400).json({ error: 'repo must be a non-empty string' })
+    return
+  }
+  if (provider !== undefined && provider !== 'claude' && provider !== 'codex') {
+    res.status(400).json({ error: 'provider must be claude or codex' })
     return
   }
   const statuses: readonly TaskStatus[] = ['queued', 'running', 'completed', 'failed']
@@ -279,7 +284,7 @@ tasksRouter.get('/', (req: Request, res: Response) => {
   const limit = Number.isFinite(parsedLimit)
     ? Math.min(100, Math.max(1, Math.floor(parsedLimit)))
     : 20
-  const rows = listTasks(limit + 1, { repo, status: status as TaskStatus | undefined, before })
+  const rows = listTasks(limit + 1, { repo, status: status as TaskStatus | undefined, provider, before })
   if (rows.length > limit) {
     rows.pop()
     res.setHeader('X-Next-Before', rows[rows.length - 1].id)
