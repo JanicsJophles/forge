@@ -33,6 +33,13 @@ export function executionIdentity(username: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USER: username, LOGNAME: username }
   // Never pass runner mutation credentials or borrow service/root provider credentials.
   for (const key of ['FORGE_AUTH_TOKEN', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) delete env[key]
+  // Agent tools must discover the admitted checkout from cwd, even when the
+  // runner inherited selectors from a Git hook or another repository. Preserve
+  // ordinary Git authentication and tool interactivity settings.
+  for (const key of [
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE',
+    'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_CEILING_DIRECTORIES',
+  ]) delete env[key]
   return { uid, gid, env }
 }
 
