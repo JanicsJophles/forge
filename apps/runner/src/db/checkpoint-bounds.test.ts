@@ -20,9 +20,7 @@ test('checkpoint caps oversized fields while round-tripping small values', async
   const CAP = 500
   const MAX_FILES = 200
 
-  // Over-long strings in every bounded field + an over-count, over-long
-  // filesTouched array. A valid checkpoint must still succeed (surplus dropped,
-  // not rejected).
+  // Internal scalar callers retain the established caps.
   const oversized = checkpoint({
     agentId: 'runaway',
     agentType: 'a'.repeat(1000),
@@ -31,7 +29,7 @@ test('checkpoint caps oversized fields while round-tripping small values', async
     intent: 'i'.repeat(1000),
     ticket: 't'.repeat(1000),
     status: 's'.repeat(1000),
-    filesTouched: Array.from({ length: 1000 }, (_, n) => `file-${n}-` + 'x'.repeat(1000)),
+    filesTouched: ['unchanged.ts'],
   })
 
   assert.equal(oversized.agentType.length, CAP)
@@ -41,16 +39,17 @@ test('checkpoint caps oversized fields while round-tripping small values', async
   assert.equal(oversized.ticket!.length, CAP)
   assert.equal(oversized.status!.length, CAP)
   assert.equal(oversized.intent, 'i'.repeat(CAP))
-  assert.equal(oversized.filesTouched!.length, MAX_FILES)
-  assert.ok(oversized.filesTouched!.every(f => f.length <= CAP))
-  // Surplus entries are dropped (truncation keeps the head of the array).
-  assert.ok(oversized.filesTouched![0].startsWith('file-0-'))
-  assert.ok(oversized.filesTouched![MAX_FILES - 1].startsWith(`file-${MAX_FILES - 1}-`))
-
-  // The capped row persists and re-reads identically through listAgentState.
+  assert.deepEqual(oversized.filesTouched, ['unchanged.ts'])
   const stored = listAgentState().find(row => row.agentId === 'runaway')!
-  assert.equal(stored.intent!.length, CAP)
-  assert.equal(stored.filesTouched!.length, MAX_FILES)
+  assert.deepEqual(stored, oversized)
+
+  const before = listAgentState()
+  for (const agentId of ['runaway', 'new-agent']) {
+    assert.throws(() => checkpoint({
+      agentId, intent: 'must not persist', filesTouched: ['x'.repeat(16381)],
+    }), RangeError)
+    assert.deepEqual(listAgentState(), before)
+  }
 
   // A normal small checkpoint round-trips unchanged.
   const small = {
