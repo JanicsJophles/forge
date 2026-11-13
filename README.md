@@ -130,7 +130,7 @@ viewers), SSE streams, raw text logs, and patches. Unknown paths return `404 {"e
 |---|---|---|
 | `GET` | `/repos` | List allowed git checkout roots and their immediate children |
 | `GET` | `/health` | Health + capacity + disk snapshot |
-| `GET` | `/capabilities` | Provider list, limits, and logging bounds |
+| `GET` | `/capabilities` | Provider list, build, retention, limits, and logging bounds |
 
 ### Agent coordination
 
@@ -189,9 +189,16 @@ concurrent tasks reached), or `507` (free disk below `MIN_FREE_DISK_MB`).
 ### GET /tasks query parameters
 
 `repo` (exact stored value), `status` (`queued`/`running`/`completed`/`failed`),
-`limit` (`1`–`100`, default `20`), and `before` (an exclusive task-ID cursor). When
+`provider` (exactly `claude` or `codex`), `limit` (`1`–`100`, default `20`), and
+`before` (an exclusive task-ID cursor). When
 another page exists the response sets an `X-Next-Before` header — reuse that ID as
 `before` with the same filters. The body is always a JSON array.
+
+Omitting `provider` includes all providers. Provider filtering matches stored values
+exactly, combines with `repo` and `status`, and applies before ordering and limiting.
+Empty, unknown, case-mismatched, whitespace-padded, repeated, or structured provider
+values return JSON 400. Cursor anchors need not match the filters; a missing anchor
+returns JSON 404.
 
 ### GET /tasks/stats
 
@@ -252,6 +259,7 @@ measurement failures and continues its other checks.
     "gitShaPinned": false,
     "commitMessagePrefix": "[forge]"
   },
+  "retention": { "enabled": false, "days": 0, "intervalSeconds": 86400 },
   "limits": {
     "maxConcurrentTasks": 2,
     "taskTimeoutMs": 1800000,
@@ -264,7 +272,11 @@ measurement failures and continues its other checks.
 
 `version` (also `build.version`) includes `+<FORGE_GIT_SHA>` when configured;
 `build.gitShaPinned` indicates whether that setting is present. Provider discovery
-does not probe CLI authentication. Retention is not exposed in this response.
+does not probe CLI authentication. `retention` reports the policy evaluated at
+startup: `enabled` is true when `days` is positive, and `intervalSeconds` is `86400`
+(the pruning interval). Unset, zero, or invalid retention settings report disabled
+with `days: 0`. Discovery reads this policy without pruning tasks, scheduling timers,
+or probing providers; see [Retention](#retention) for deletion semantics.
 
 The legacy `GET /tasks/capabilities` alias has been removed. Use `GET /capabilities`
 for discovery. The old path now follows `GET /tasks/:id`: when no task with ID
@@ -369,8 +381,11 @@ MIT
 
 ### Retrieve a task log
 
-`GET /tasks/:id/log` serves the log three ways. Every response carries an
+`GET /tasks/:id/log` serves the log three ways. Successful responses carry an
 `X-Task-Status` header (the task's current status) so a tail loop knows when to stop.
+Failed tasks with a stored error also carry `X-Task-Error`: non-printable/non-ASCII
+runs become spaces and the result is capped at 200 ASCII bytes. Task detail retains
+the original diagnostic.
 
 **Byte slice (default).** `GET /tasks/:id/log?offset=0&limit=262144` returns
 `{"data":"<base64>","offset":0,"nextOffset":262144,"totalBytes":500000}`.
@@ -379,18 +394,31 @@ count (default and maximum `262144`, 256 KiB). Both accept only decimal digits
 representing safe integers. Repeated, structured, malformed or out-of-range
 values return JSON 400; a missing task returns JSON 404.
 
-**Line tail.** `?tailLines=N` (a positive integer) returns the last `N` lines of the
-whole log instead of a byte window. It cannot be combined with `offset` or `limit`
-(returns 400). The response shares the same slice shape (or raw text, below).
+**Line tail.** `?tailLines=N` (decimal digits representing a positive safe integer)
+returns the last `N` lines, capped at `262144` bytes; the cap may omit the beginning
+of a line, reflected in `offset`. A terminating newline belongs to the final line.
+It cannot be combined with `offset` or `limit` (returns 400). Repeated, structured,
+or invalid values return 400. The response shares the slice shape (or raw text, below).
 
-**Raw text & download.** `?format=text` returns the decoded bytes as
-`text/plain` (with `X-Total-Bytes` and `X-Next-Offset` headers) instead of the
-base64 JSON envelope. `?download=1` additionally serves the text as a file
-attachment (`Content-Disposition`); it requires `format=text`. The attachment
-contains only the selected byte slice (default at most 262144 bytes) or line tail,
-not an automatic complete transcript. Use pagination for a complete log.
+**Raw text & download.** `?format=text` returns raw bytes as
+`text/plain; charset=utf-8` (with `X-Total-Bytes` and `X-Next-Offset` headers) instead
+of the base64 JSON envelope. `?format=text&download=1` with no `offset`, `limit`, or
+`tailLines` streams the complete transcript from one consistent SQLite snapshot,
+including logs larger than 256 KiB. The snapshot is spooled to a temporary file
+before network streaming, using bounded chunks; it is removed on completion or
+disconnect. This is a finite attachment, not live follow: later output is excluded.
+`Content-Length`, `X-Total-Bytes`, and `X-Next-Offset` all equal the snapshot byte length.
 
-`data` contains at most `limit` bytes encoded as base64. `nextOffset` equals
+Supplying `offset` or `limit` explicitly (even `offset=0` or `limit=262144`) selects
+a byte slice with the defaults/bounds above; supplying `tailLines` selects the
+bounded line tail. Such downloads contain only that selection. Both text paths
+report the whole snapshot length in `X-Total-Bytes` and the selection end in
+`X-Next-Offset`. Every download sets `Content-Disposition: attachment;
+filename="forge-task-<id>.log"`, replacing ID characters outside `[A-Za-z0-9._-]`
+with `_`. `download=1` requires `format=text`; repeated, structured, or other
+`format`/`download` values return JSON 400.
+
+For byte slices, `data` contains at most `limit` bytes encoded as base64. `nextOffset` equals
 `offset` plus the decoded byte count; `totalBytes` is the log's byte length in
 the same SQLite snapshot. Empty/NULL logs and offsets at or past EOF return
 empty `data`, retaining the requested offset as `nextOffset`. Logs can grow:
