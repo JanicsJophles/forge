@@ -83,13 +83,19 @@ agentStateRouter.post('/agent-state/checkpoint', (req: Request, res: Response) =
   if (exceedsBounds(b, ['agentId', 'agentType', 'repo', 'branch', 'intent', 'ticket', 'status'], 'metadata')) {
     return badRequest(res, 'checkpoint payload exceeds field size limits')
   }
+  const filesTouched = b.filesTouched === null ? null : Array.isArray(b.filesTouched)
+    ? b.filesTouched.filter((x: unknown): x is string => typeof x === 'string') : undefined
+  if (Array.isArray(filesTouched) &&
+      Buffer.byteLength(JSON.stringify(filesTouched), 'utf8') > MAX_STRUCTURED_BYTES) {
+    return badRequest(res, 'checkpoint payload exceeds field size limits')
+  }
   const input: CheckpointInput = {
     agentId: b.agentId.trim(),
     agentType: typeof b.agentType === 'string' ? b.agentType : undefined,
     repo: b.repo === null || typeof b.repo === 'string' ? b.repo : undefined,
     branch: b.branch === null || typeof b.branch === 'string' ? b.branch : undefined,
     intent: b.intent === null || typeof b.intent === 'string' ? b.intent : undefined,
-    filesTouched: b.filesTouched === null ? null : Array.isArray(b.filesTouched) ? b.filesTouched.filter((x: unknown) => typeof x === 'string') as string[] : undefined,
+    filesTouched,
     ticket: b.ticket === null || typeof b.ticket === 'string' ? b.ticket : undefined,
     status: b.status === null || typeof b.status === 'string' ? b.status : undefined,
     ttlSeconds: typeof b.ttlSeconds === 'number' ? b.ttlSeconds : undefined,
