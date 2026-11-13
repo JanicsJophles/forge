@@ -4,7 +4,7 @@ import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
 
 const source = await readFile(new URL('./task-log-view.ts', import.meta.url), 'utf8')
-const functions = source.slice(source.indexOf('        function timestamp('), source.indexOf('        async function refreshTiming()'))
+const functions = source.slice(source.indexOf('        var elapsedTimer;'), source.indexOf('        async function refreshTiming()'))
   .replace(/\\\\/g, '\\')
 const refresh = source.slice(source.indexOf('        async function refreshTiming()'), source.indexOf('        async function refreshStatus('))
 function fixture(fetch: any = async () => ({ ok: true, json: async () => ({}) })) {
@@ -16,6 +16,7 @@ function fixture(fetch: any = async () => ({ ok: true, json: async () => ({}) })
       if (!elements.has(id)) elements.set(id, { textContent: '' })
       return elements.get(id)
     } },
+    Date: class extends Date { static now() { return Date.parse('2026-11-10T09:00:00Z') } },
     statusVersion: 0, INITIAL_STATUS: 'running', fetch, AbortController, taskUrl: '/tasks/test',
     setTimeout(fn: () => void, ms: number) { assert.equal(ms, 5000); deadline = fn; return 1 },
     clearTimeout() { cleared = true },
