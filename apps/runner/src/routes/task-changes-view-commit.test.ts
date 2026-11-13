@@ -84,14 +84,16 @@ test('HTML and raw patches review the recorded commit independently of the check
     assert.equal(capped.headers.get('x-patch-truncated'), 'true')
     assert.match(await capped.text(), /Patch truncated/)
 
-    // Malformed stored revisions must fail closed without reflecting their content.
+    // Malformed stored revisions fail closed while retaining escaped recorded identity.
     for (const hostile of ['<img src=x onerror=alert(1)>', '--output=/tmp/forge-hostile', '', 'f'.repeat(40)]) {
       setSha(hostile)
       const failed = await fetch(`${base}/changes/view`)
       assert.equal(failed.status, 503)
       const errorHtml = await failed.text()
       assert.match(errorHtml, /Changes temporarily unavailable/)
-      if (hostile) assert.ok(!errorHtml.includes(hostile))
+      assert.doesNotMatch(errorHtml, /<img|Unified diff|fallback-only/)
+      const escaped = hostile.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      assert.ok(errorHtml.includes(`Recorded commit: <code>${escaped}</code>`))
     }
     const missing = await fetch(`${base}-missing/changes/view`)
     assert.equal(missing.status, 404)

@@ -80,12 +80,17 @@ test('stored launch text is escaped, never interpreted or replaced with runtime 
   assert.doesNotMatch(html, /<svg|provider default/)
 })
 
-test('missing tasks and unavailable Git retain recovery without exposing launch metadata', () => {
+test('missing tasks omit metadata while unavailable Git retains saved settings and recovery', () => {
   for (const mode of ['missing', 'unavailable']) {
     const { html, status, probes } = review({ provider: 'PRIVATE_PROVIDER', model: 'PRIVATE_MODEL' }, mode)
     assert.equal(status, mode === 'missing' ? 404 : 503)
     assert.deepEqual(probes, mode === 'missing' ? [] : ['patch'])
-    assert.doesNotMatch(html, /Saved launch settings|PRIVATE_/)
+    if (mode === 'missing') assert.doesNotMatch(html, /Saved launch settings|PRIVATE_/)
+    else {
+      assert.match(html, /Saved launch settings/)
+      assert.match(html, /PRIVATE_PROVIDER/)
+      assert.match(html, /PRIVATE_MODEL/)
+    }
     assert.match(html, /task logs/)
     assert.match(html, /task history/)
     if (mode === 'missing') assert.doesNotMatch(html, /Retry changes/)
