@@ -977,11 +977,19 @@ const HTML = `<!DOCTYPE html>
         ].join('');
       }).join('');
     }
+    const retries = new Map();
+    function retryFeedback(state) {
+      if (!state || !state.message) return '';
+      return '<span class="retry-msg ' + state.cls + '">' + escape(state.message) +
+        (state.href ? ' <a href="' + escape(state.href).replace(/"/g, '&quot;') + '">' + state.label + '</a>' : '') + '</span>';
+    }
     async function retryTask(button) {
       // data-task-id is already encodeURIComponent'd, so it is a safe URL path
       // segment and a safe HTML attribute value.
       const encodedId = button.dataset.taskId;
-      if (!encodedId) return;
+      if (!encodedId || retries.get(encodedId)?.pending) return;
+      const state = { pending: true };
+      retries.set(encodedId, state);
       button.disabled = true;
       const original = button.textContent;
       button.textContent = 'retrying…';
@@ -989,13 +997,15 @@ const HTML = `<!DOCTYPE html>
       const row = button.closest ? button.closest('.task-row') : null;
       const prev = row ? row.querySelector('.retry-msg') : null;
       if (prev) prev.remove();
-      const authorization = authHeaders().Authorization || '';
+      const headers = authHeaders();
+      const authorization = headers.Authorization || '';
       const token = authorization.replace(/^Bearer /, '');
       function safeMessage(value) {
         const text = String(value);
         return (token ? text.split(token).join('[redacted]') : text).slice(0, 500);
       }
       const feedback = (cls, text, href, label) => {
+        Object.assign(state, { cls, message: text, href, label });
         const span = document.createElement('span');
         span.className = 'retry-msg ' + cls;
         span.textContent = text;
@@ -1004,11 +1014,29 @@ const HTML = `<!DOCTYPE html>
         }
         button.insertAdjacentElement('afterend', span);
       };
+      const controller = new AbortController();
+      let timer;
+      let uncertain = true;
       try {
-        const r = await fetch('/tasks/' + encodedId + '/retry', { method: 'POST', headers: authHeaders() });
-        let result;
-        try { result = await r.json(); } catch (_) { /* Fixed fallback below. */ }
+        // Keep transport work free of UI mutations: late completion loses the race.
+        const { r, result } = await Promise.race([
+          (async () => {
+            const r = await fetch('/tasks/' + encodedId + '/retry', {
+              method: 'POST', headers, signal: controller.signal,
+            });
+            let result;
+            try { result = await r.json(); } catch (_) { /* Fixed fallback below. */ }
+            return { r, result };
+          })(),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => {
+              reject(new Error('15-second deadline exceeded'));
+              controller.abort();
+            }, 15000);
+          }),
+        ]);
         if (!r.ok) {
+          uncertain = false;
           const detail = result && typeof result.error === 'string' && result.error.trim()
             ? result.error + (typeof result.reason === 'string' ? ': ' + result.reason : '')
             : 'server returned no usable JSON error; check runner logs';
@@ -1028,12 +1056,26 @@ const HTML = `<!DOCTYPE html>
         }
         feedback('ok', 're-dispatched', '/tasks/' + newTaskId + '/log/view', 'Open retried task');
       } catch (e) {
-        // Non-2xx (401 under FORGE_AUTH_TOKEN, 409 if the task is not terminal) or
-        // a network error: surface it inline — never a silent no-op.
-        feedback('err', 'retry failed: ' + safeMessage(e && e.message ? e.message : 'network request failed'));
+        const detail = safeMessage(e && e.message ? e.message : 'network request failed');
+        feedback('err', uncertain
+          ? 'Retry outcome unknown: ' + detail + '. A task may have started. Inspect task history before retrying.'
+          : 'retry failed: ' + detail, uncertain ? '/history' : undefined, 'Task history');
       } finally {
+        clearTimeout(timer);
+        state.pending = false;
         button.disabled = false;
         button.textContent = original;
+        // Polling may have replaced the original row while the POST was pending.
+        document.getElementById('recentTasks').querySelectorAll('button.retry').forEach(current => {
+          if (current.dataset.taskId !== encodedId) return;
+          current.disabled = false;
+          current.textContent = 'retry';
+          if (current === button) return;
+          const row = current.closest('.task-row');
+          const prev = row && row.querySelector('.retry-msg');
+          if (prev) prev.remove();
+          current.insertAdjacentHTML('afterend', retryFeedback(state));
+        });
       }
     }
     function recentPrompt(task) {
@@ -1057,6 +1099,7 @@ const HTML = `<!DOCTYPE html>
         // retry control; queued/running ones are still in flight.
         const terminal = t.status === 'completed' || t.status === 'failed';
         const hasId = t.id != null && t.id !== '';
+        const retry = retries.get(encodeURIComponent(t.id));
         const shortSha = typeof t.commitSha === 'string' ? t.commitSha.slice(0, 7) : '';
         const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes/view';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
@@ -1070,7 +1113,7 @@ const HTML = `<!DOCTYPE html>
               t.status === 'completed' && shortSha ? '<span class="commit">' + escape(shortSha) + '</span>' : '',
               hasId ? '<a class="log" target="_blank" rel="noopener" href="' + escape(logUrl) + '">log</a>' : '',
               hasId ? '<a class="changes" target="_blank" rel="noopener" href="' + escape(changesUrl) + '">changes</a>' : '',
-              hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)">retry</button>' : '',
+              hasId && terminal ? '<button type="button" class="retry" data-task-id="' + encodeURIComponent(t.id) + '" onclick="retryTask(this)"' + (retry && retry.pending ? ' disabled>retrying…' : '>retry') + '</button>' + retryFeedback(retry) : '',
             '</div>',
             recentPrompt(t),
             t.status === 'failed' && t.errorMessage ? '<div class="error-message">' + escape(t.errorMessage) + '</div>' : '',
