@@ -189,12 +189,28 @@ ${rows}
             }
           })
         }
+        function validTask(task) {
+          if (!task || typeof task !== 'object' || Array.isArray(task)) return false
+          if (typeof task.id !== 'string' || !task.id.trim() || /^\\.+$/.test(task.id)) return false
+          try { encodeURIComponent(task.id) } catch (_) { return false }
+          if (['queued', 'running', 'completed', 'failed'].indexOf(task.status) === -1) return false
+          // Optional displayed metadata may be absent, but must never be objects
+          // or coerced proxy garbage. Validate prompt metadata for intent previews.
+          if (!['repo', 'branch', 'prompt', 'createdAt', 'startedAt', 'completedAt', 'provider']
+            .every(function (key) { return task[key] == null || typeof task[key] === 'string' })) return false
+          if (task.promptTruncated != null && typeof task.promptTruncated !== 'boolean') return false
+          if (task.promptBytes != null && (typeof task.promptBytes !== 'number' ||
+            !isFinite(task.promptBytes) || task.promptBytes < 0 || Math.floor(task.promptBytes) !== task.promptBytes)) return false
+          return true
+        }
         function refreshTasks() {
           return readJson('/tasks?limit=5')
           .then(function (tasks) {
             if (!Array.isArray(tasks)) throw new Error('invalid tasks')
+            var boundedTasks = tasks.slice(0, 5)
+            if (!boundedTasks.every(validTask)) throw new Error('invalid task row')
             var list = document.getElementById('recent-tasks')
-            var rows = tasks.slice(0, 5).map(function (task) {
+            var rows = boundedTasks.map(function (task) {
               var row = document.createElement('li')
               var id = typeof task.id === 'string' ? task.id.slice(0, 8) : 'unknown'
               var repo = typeof task.repo === 'string'

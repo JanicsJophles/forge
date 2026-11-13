@@ -34,9 +34,9 @@ test('recent saved intent is bounded Unicode text with full identities and survi
   const payload = [
     { id: 'same-id-one', repo: '/first/forge', status: 'completed', prompt: ' \n Build\t this  page ' },
     { id: 'same-id-two', repo: '/second/forge', status: 'failed', prompt: '🧠'.repeat(161) },
-    { id: 'markup', repo: '/<img>/forge', prompt: '<script>alert(1)</script>', promptTruncated: true },
-    { id: '', repo: '', prompt: ' \t\n' },
-    { prompt: '🧠'.repeat(160) },
+    { id: 'markup', repo: '/<img>/forge', status: 'running', prompt: '<script>alert(1)</script>', promptTruncated: true },
+    { id: 'empty-prompt', status: 'queued', repo: '', prompt: ' \t\n' },
+    { id: 'unicode-boundary', status: 'completed', prompt: '🧠'.repeat(160) },
   ]
   const requests: string[] = []
   const timers: (() => void)[] = []
@@ -70,9 +70,9 @@ test('recent saved intent is bounded Unicode text with full identities and survi
   assert.equal(Array.from(preview(rows[1])).length, 160)
   assert.equal(preview(rows[2]), '<script>alert(1)</script>…')
   assert.ok(rows.every(row => row.children.every(child => child.tag === 'a')))
-  assert.match(rows[3].textContent, /Saved prompt unavailable — Task ID: unavailable — Repository: unavailable/)
+  assert.match(rows[3].textContent, /Saved prompt unavailable — Task ID: empty-prompt — Repository: unavailable/)
   assert.equal(preview(rows[4]), '🧠'.repeat(160))
-  assert.match(rows[4].textContent, /Task ID: unavailable — Repository: unavailable/)
+  assert.match(rows[4].textContent, /Task ID: unicode-boundary — Repository: unavailable/)
   failed = true
   timers.shift()!()
   await flush()
