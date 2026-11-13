@@ -56,7 +56,7 @@ test('active summaries select bounded prompt bytes and preserve full execution r
       assert.deepEqual(head, Buffer.from(prompts.get(row.id as string)!).subarray(0, cap))
       assert.equal(row.prompt_bytes, Buffer.byteLength(prompts.get(row.id as string)!))
       assert.deepEqual(Object.keys(row).sort(), [
-        'id', 'repo', 'branch', 'status', 'provider', 'created_at', 'prompt_head', 'prompt_bytes',
+        'id', 'repo', 'branch', 'status', 'provider', 'created_at', 'started_at', 'prompt_head', 'prompt_bytes',
       ].sort())
     }
     const snippets = Object.fromEntries(summaries.map(row => [row.id, row.promptSnippet]))
@@ -73,7 +73,7 @@ test('active summaries select bounded prompt bytes and preserve full execution r
       assert.equal(row.promptSnippet.includes('\uFFFD'), false)
       assert.equal(getTask(row.id)!.prompt, prompts.get(row.id))
       assert.deepEqual(Object.keys(row).sort(), [
-        'id', 'repo', 'branch', 'status', 'provider', 'createdAt', 'promptSnippet',
+        'id', 'repo', 'branch', 'status', 'provider', 'createdAt', 'startedAt', 'promptSnippet',
       ].sort())
     }
   } finally {

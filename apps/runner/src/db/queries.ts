@@ -207,6 +207,7 @@ export interface LiveTaskSummary {
   status: TaskStatus
   provider: 'claude' | 'codex'
   createdAt: string
+  startedAt: string | null
   promptSnippet: string
 }
 
@@ -215,13 +216,13 @@ export const ACTIVE_PROMPT_MAX_BYTES = 4096
 
 export function listActiveTasks(): LiveTaskSummary[] {
   const rows = db.prepare(
-    `SELECT id, repo, branch, status, provider, created_at,
+    `SELECT id, repo, branch, status, provider, created_at, started_at,
             substr(CAST(prompt AS BLOB), 1, ${ACTIVE_PROMPT_MAX_BYTES}) AS prompt_head,
             length(CAST(prompt AS BLOB)) AS prompt_bytes
        FROM tasks
       WHERE status IN ('queued', 'running')
       ORDER BY ${TASK_NEWEST_FIRST}`
-  ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'created_at'> & { prompt_head: Buffer | null; prompt_bytes: number }>
+  ).all() as Array<Pick<TaskRow, 'id' | 'repo' | 'branch' | 'status' | 'provider' | 'created_at' | 'started_at'> & { prompt_head: Buffer | null; prompt_bytes: number }>
 
   return rows.map(row => {
     const flat = decodeHead(row.prompt_head).replace(/\s+/g, ' ').trim()
@@ -239,6 +240,7 @@ export function listActiveTasks(): LiveTaskSummary[] {
       status: row.status as TaskStatus,
       provider: row.provider,
       createdAt: row.created_at,
+      startedAt: row.started_at ?? null,
       promptSnippet,
     }
   })

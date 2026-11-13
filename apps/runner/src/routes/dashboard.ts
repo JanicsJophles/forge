@@ -575,19 +575,20 @@ const HTML = `<!DOCTYPE html>
       return Math.floor(sec / 86400) + 'd ago';
     }
     function elapsed(iso) {
-      // Compact running duration since createdAt, e.g. '12m 03s' / '1h 04m 09s'.
-      // Returns '' for missing/malformed input so the caller can omit the label.
-      if (typeof iso !== 'string' || !iso.trim()) return '';
+      // Provider runtime starts at the saved start, after setup/login/pull.
+      if (typeof iso !== 'string' || !iso.trim()) return 'runtime unavailable';
       let timestamp = iso.trim().replace(' ', 'T');
       if (!/(Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(timestamp)) timestamp += 'Z';
       const t = Date.parse(timestamp);
-      if (!Number.isFinite(t)) return '';
-      const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      if (!Number.isFinite(t)) return 'runtime unavailable';
+      const delta = Date.now() - t;
+      if (delta < 0) return 'runtime unavailable (clock skew)';
+      const sec = Math.floor(delta / 1000);
       const pad = n => String(n).padStart(2, '0');
       const h = Math.floor(sec / 3600);
       const m = Math.floor((sec % 3600) / 60);
       const s = sec % 60;
-      return h > 0 ? h + 'h ' + pad(m) + 'm ' + pad(s) + 's' : m + 'm ' + pad(s) + 's';
+      return 'running ' + (h > 0 ? h + 'h ' + pad(m) + 'm ' + pad(s) + 's' : m + 'm ' + pad(s) + 's');
     }
     const claimedFilesOpen = new Map();
     function renderAgents(agents) {
@@ -956,9 +957,9 @@ const HTML = `<!DOCTYPE html>
       }
       root.innerHTML = tasks.map(t => {
         const statusClass = t.status ? 'status-' + t.status.replace(/[^a-z]/g, '') : '';
-        // Only in-flight tasks get a live timer; anything else degrades to no label.
+        // Queued tasks remain cancellable but have no provider runtime.
         const running = t.status === 'running' || t.status === 'queued';
-        const elapsedLabel = running ? elapsed(t.createdAt) : '';
+        const elapsedLabel = t.status === 'running' ? elapsed(t.startedAt) : t.status === 'queued' ? 'not started' : '';
         const hasId = t.id != null && t.id !== '';
         const logUrl = '/tasks/' + encodeURIComponent(t.id) + '/log/view';
         const changesUrl = '/tasks/' + encodeURIComponent(t.id) + '/changes/view';
@@ -1360,7 +1361,7 @@ const HTML = `<!DOCTYPE html>
           (a.filesTouched == null || (Array.isArray(a.filesTouched) && a.filesTouched.every(file => typeof file === 'string')))) &&
         Array.isArray(d.recentEvents) && d.recentEvents.every(e => fields(e, ['eventType', 'repo', 'ticket', 'agentId', 'createdAt']) && typeof e.eventType === 'string' && (e.prNumber == null || count(e.prNumber))) &&
         byRepo(d.liveByRepo) &&
-        (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet', 'createdAt'])))) &&
+        (d.liveTasks === undefined || (Array.isArray(d.liveTasks) && d.liveTasks.every(t => fields(t, ['id', 'repo', 'branch', 'status', 'provider', 'promptSnippet', 'createdAt', 'startedAt'])))) &&
         (d.liveTasksCount === undefined || count(d.liveTasksCount)) &&
         (d.liveTasksByRepo === undefined || byRepo(d.liveTasksByRepo));
     }
