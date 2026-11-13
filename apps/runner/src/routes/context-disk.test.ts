@@ -27,6 +27,7 @@ test('/agent-context keeps disk global and tolerates unavailable configured root
       const calls: string[] = []
       const router = createAgentContextRouter({
         allowedRepoPaths: scenario.paths,
+        databasePath: missing,
         minFreeDiskMb: 100,
         freeDiskBytes: root => {
           calls.push(root)
@@ -40,7 +41,7 @@ test('/agent-context keeps disk global and tolerates unavailable configured root
         for (const query of ['', '?repo=alpha']) {
           const response = await fetch(`http://127.0.0.1:${port}/agent-context${query}`)
           assert.equal(response.status, 200)
-          assert.deepEqual((await response.json()).disk, scenario.expected)
+          assert.deepEqual((await response.json()).disk, { ...scenario.expected, dataFreeDiskMb: null, dataDiskOk: null })
         }
         assert.deepEqual(calls, scenario.paths.length ? [scenario.paths[0], scenario.paths[0]] : [])
       } finally {
