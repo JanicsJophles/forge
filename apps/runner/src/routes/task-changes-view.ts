@@ -106,13 +106,14 @@ function errorPage(taskId: string, unavailable: boolean): string {
 
 taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
   // Bound prompt and diagnostics in SQLite; never load the stored log for review.
-  const task = db.prepare(`SELECT repo, branch, commit_sha, status,
+  const task = db.prepare(`SELECT repo, branch, commit_sha, status, provider, model, auto_commit,
     substr(CAST(prompt AS BLOB), 1, ${MAX_PROMPT_BYTES}) AS prompt_prefix,
     length(CAST(prompt AS BLOB)) AS prompt_bytes,
     substr(error_message, 1, ${FAILURE_REASON_CHAR_CAP}) AS failure_reason,
     length(error_message) > ${FAILURE_REASON_CHAR_CAP} AS failure_truncated
     FROM tasks WHERE id = ?`).get(req.params.id) as
     { repo: string; branch: string; commit_sha: string | null; status: string | null;
+      provider: string | null; model: string | null; auto_commit: number | null;
       failure_reason: string | null; failure_truncated: number | null;
       prompt_prefix: Buffer | null; prompt_bytes: number | null } | undefined
   if (!task) {
@@ -192,6 +193,7 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
     pre span:target { outline: 2px solid #34d399; }
     .hunk { color: #c4b5fd; }
     li code { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .launch-settings { overflow-wrap: anywhere; }
     .saved-prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
     .failure-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
     .warning { color: #fbbf24; }
@@ -212,6 +214,12 @@ taskChangesViewRouter.get('/:id/changes/view', (req, res) => {
       ${prompt ? `<pre class="saved-prompt">${escapeHtml(prompt)}</pre>` : '<p>No saved prompt is available.</p>'}
       ${promptTruncated ? `<p class="warning">Prompt truncated: showing at most ${MAX_PROMPT_BYTES} UTF-8 bytes. See the saved prompt in <a href="${detailHref}">detail JSON</a>.</p>` : ''}
     </details>
+    <section aria-label="Saved launch settings" class="launch-settings">
+      <h2>Saved launch settings</h2>
+      <p>Provider: <strong>${escapeHtml(task.provider ?? 'unspecified')}</strong> ·
+        Model: <strong>${escapeHtml(task.model ?? 'provider default')}</strong> ·
+        Auto-commit requested: <strong>${task.auto_commit == null ? 'unspecified' : task.auto_commit === 1 ? 'yes' : 'no'}</strong></p>
+    </section>
     <section aria-label="Task outcome">
       <h2>Task outcome</h2>
       <p>Recorded task status: <strong>${escapeHtml(task.status || 'unavailable')}</strong></p>

@@ -21,7 +21,7 @@ test('review navigation preserves hostile identity for checkout and recorded rev
         } }) },
         '../db/schema.js': { db: { prepare: (sql: string) => {
           assert.equal(sql.replace(/\s+/g, ' ').trim(),
-            'SELECT repo, branch, commit_sha, status, substr(CAST(prompt AS BLOB), 1, 16384) AS prompt_prefix, length(CAST(prompt AS BLOB)) AS prompt_bytes, substr(error_message, 1, 2000) AS failure_reason, length(error_message) > 2000 AS failure_truncated FROM tasks WHERE id = ?')
+            'SELECT repo, branch, commit_sha, status, provider, model, auto_commit, substr(CAST(prompt AS BLOB), 1, 16384) AS prompt_prefix, length(CAST(prompt AS BLOB)) AS prompt_bytes, substr(error_message, 1, 2000) AS failure_reason, length(error_message) > 2000 AS failure_truncated FROM tasks WHERE id = ?')
           return { get: (taskId: string) => {
             assert.equal(taskId, id)
             return { repo: '/fake/repo', branch: 'test', status: 'failed', prompt_prefix: Buffer.from('Review navigation'), prompt_bytes: 17, failure_reason: 'saved reason', failure_truncated: 0, commit_sha: commitSha }
