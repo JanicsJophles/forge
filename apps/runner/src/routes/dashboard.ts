@@ -909,11 +909,17 @@ const HTML = `<!DOCTYPE html>
           throw new Error('HTTP ' + r.status + ': ' + safeMessage(detail));
         }
         const taskId = result && result.taskId;
+        // Match retry identities: dot-only segments escape the task route, and
+        // lone surrogates cannot be encoded. Neither proves dispatch failed.
+        let encodedTaskId;
+        if (typeof taskId === 'string' && !Array.from(taskId).every(c => c === '.')) {
+          try { encodedTaskId = encodeURIComponent(taskId); } catch (_) { /* Unknown outcome below. */ }
+        }
         if (r.status !== 201 || typeof taskId !== 'string' || !taskId.trim() ||
-            taskId.length > 200 || (token && taskId.includes(token))) {
+            taskId.length > 200 || !encodedTaskId || (token && taskId.includes(token))) {
           throw new Error('HTTP ' + r.status + ': invalid taskId response; a task may have started. Check task history before retrying');
         }
-        const href = '/tasks/' + encodeURIComponent(taskId) + '/log/view';
+        const href = '/tasks/' + encodedTaskId + '/log/view';
         successEl.innerHTML = 'Task launched. <a href="' + escape(href).replace(/"/g, '&quot;') + '">View task log</a>';
         document.getElementById('launchPrompt').value = '';
       } catch (e) {
