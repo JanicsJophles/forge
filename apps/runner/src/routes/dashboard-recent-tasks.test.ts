@@ -234,7 +234,7 @@ test('retryTask POSTs /tasks/:id/retry and surfaces 2xx then error feedback', as
   h.take('/tasks/done-1/retry').reject(new Error('offline'))
   await h.settle()
   assert.match(offline.inserted[0].className, /retry-msg err/)
-  assert.match(offline.inserted[0].textContent, /retry failed: offline/)
+  assert.match(offline.inserted[0].textContent, /Retry outcome unknown: offline/)
 })
 
 test('retryTask encodes the id in the POST URL', async () => {
