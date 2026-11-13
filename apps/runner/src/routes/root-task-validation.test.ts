@@ -66,7 +66,7 @@ test('malformed task polls preserve exact rows, independent health, and recover 
   await poll([valid])
   const saved = el('recent-tasks').children.slice()
   assert.equal(saved.length, 1)
-  assert.equal(saved[0].textContent, 'saved-ta — <forge> — completed — <saved> — Task ID: saved-task — Repository: /opt/repos/<forge> View logs Changes')
+  assert.equal(saved[0].textContent, 'saved-ta — <forge> — completed — <saved> — Task ID: saved-task — Repository: /opt/repos/<forge>\nSaved provider: not recorded — Saved model: provider default / not recorded — Auto-commit requested: not recorded View logs Changes')
   assert.equal(el('tasks-freshness').textContent, '')
   for (const row of malformed) {
     const before = healthReads

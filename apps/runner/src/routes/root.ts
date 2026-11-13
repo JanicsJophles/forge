@@ -197,12 +197,19 @@ ${rows}
           if (['queued', 'running', 'completed', 'failed'].indexOf(task.status) === -1) return false
           // Optional displayed metadata may be absent, but must never be objects
           // or coerced proxy garbage. Validate prompt metadata for intent previews.
-          if (!['repo', 'branch', 'prompt', 'createdAt', 'startedAt', 'completedAt', 'provider', 'errorMessage']
+          if (!['repo', 'branch', 'prompt', 'createdAt', 'startedAt', 'completedAt', 'provider', 'model', 'errorMessage']
             .every(function (key) { return task[key] == null || typeof task[key] === 'string' })) return false
+          if (task.autoCommit != null && typeof task.autoCommit !== 'boolean') return false
           if (task.promptTruncated != null && typeof task.promptTruncated !== 'boolean') return false
           if (task.promptBytes != null && (typeof task.promptBytes !== 'number' ||
             !isFinite(task.promptBytes) || task.promptBytes < 0 || Math.floor(task.promptBytes) !== task.promptBytes)) return false
           return true
+        }
+        function savedSetting(value, fallback) {
+          if (value == null) return fallback
+          var points = Array.from(value)
+          return points.slice(0, 100).join('') +
+            (points.length > 100 ? '… [Further setting text omitted]' : '')
         }
         function refreshTasks() {
           return readJson('/tasks?limit=5')
@@ -227,6 +234,9 @@ ${rows}
                 (typeof task.id === 'string' && task.id.trim() ? task.id : 'unavailable') +
                 ' — Repository: ' +
                 (typeof task.repo === 'string' && task.repo.trim() ? task.repo : 'unavailable')
+              row.textContent += '\\nSaved provider: ' + savedSetting(task.provider, 'not recorded') +
+                ' — Saved model: ' + savedSetting(task.model, 'provider default / not recorded') +
+                ' — Auto-commit requested: ' + (task.autoCommit == null ? 'not recorded' : task.autoCommit ? 'yes' : 'no')
               if (task.status === 'failed') {
                 var diagnostic = task.errorMessage || ''
                 var diagnosticPoints = Array.from(diagnostic)
