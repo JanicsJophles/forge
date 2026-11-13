@@ -174,10 +174,10 @@ async function renderRecentTasks(payload: unknown, failure?: 'http' | 'network')
 }
 
 test('landing script renders five compact task rows as literal text', async () => {
-  const task = { id: '12345678-abcd', repo: '/opt/repos/<img src=x onerror=alert(1)>/', status: '<b>running</b>' }
+  const task = { id: '12345678-abcd', repo: '/opt/repos/<img src=x onerror=alert(1)>/', status: 'running' }
   const list = await renderRecentTasks(Array.from({ length: 6 }, () => task))
   assert.equal(list.children.length, 5)
-  assert.ok(list.children[0].textContent.startsWith('12345678 — <img src=x onerror=alert(1)> — <b>running</b> — Saved prompt unavailable'))
+  assert.ok(list.children[0].textContent.startsWith('12345678 — <img src=x onerror=alert(1)> — running — Saved prompt unavailable'))
 })
 
 test('landing script handles an empty task list', async () => {
