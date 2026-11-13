@@ -147,6 +147,8 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       #failure pre { max-height: 25vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
       #failure a { color: var(--accent); }
       #log:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+      #findForm { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 20px; }
+      #findScope { flex-basis: 100%; color: var(--text-dim); }
       #empty { color: var(--text-dim); }
       #omitted { margin: 0; padding: 8px 20px; color: var(--warn); }
       footer {
@@ -177,6 +179,14 @@ function viewHtml(id: string, meta: LaunchMeta): string {
       <details class="saved-prompt"><summary>Saved prompt</summary><pre>
 ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `<p>Additional prompt content omitted (preview limited to ${MAX_PROMPT_BYTES} UTF-8 bytes). <a href="${escapeHtml(`/tasks/${encodedId}?view=detail`)}">Full task detail JSON</a></p>` : ''}</details>
     </header>
+    <form id="findForm" role="search">
+      <label for="findText">Find literal text in currently retained log</label>
+      <input id="findText" type="text" aria-describedby="findScope" autocomplete="off" />
+      <button id="findPrevious" type="button" disabled>Find previous</button>
+      <button id="findNext" type="submit" disabled>Find next</button>
+      <span id="findResult" role="status" aria-live="polite">Enter text to find</span>
+      <span id="findScope">Case-sensitive; retained output only. Earlier omitted output is not searched. Enter: next; Shift+Enter: previous. Clear to resume tail-follow.</span>
+    </form>
     <p id="omitted" role="status" hidden>Earlier displayed output omitted. Use raw text or download for the stored log.</p>
     <p id="replayNotice" role="status" hidden>Reconnected: earlier displayed output was replaced with a fresh server replay. Only the stored tail may be available.</p>
     <pre id="log" role="region" aria-label="Task transcript" tabindex="0"><span id="empty">waiting for output…</span></pre>
@@ -219,6 +229,99 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           logEl.scrollTop = logEl.scrollHeight;
           setFollowing(true);
         };
+        var findEl = document.getElementById('findText');
+        var findResult = document.getElementById('findResult');
+        var findNext = document.getElementById('findNext');
+        var findPrevious = document.getElementById('findPrevious');
+        var selectedStart = -1;
+        var matchCount = 0;
+        var findRange = null;
+        function ownsFindSelection() {
+          if (!findRange || typeof window === 'undefined') return false;
+          var selection = window.getSelection();
+          if (!selection) return false;
+          for (var i = 0; i < selection.rangeCount; i++) {
+            if (selection.getRangeAt(i) === findRange) return true;
+          }
+          return false;
+        }
+        function clearFindRange() {
+          if (!findRange) return;
+          var selection = typeof window === 'undefined' ? null : window.getSelection();
+          if (selection) {
+            for (var i = selection.rangeCount - 1; i >= 0; i--) {
+              if (selection.getRangeAt(i) === findRange) selection.removeRange(findRange);
+            }
+          }
+          findRange = null;
+        }
+        // Scan the bounded text directly: no regex, match arrays, or DOM wrappers.
+        function updateFind(target, reveal, restoreSelection) {
+          var selection = typeof window === 'undefined' ? null : window.getSelection();
+          var ownedSelection = restoreSelection || ownsFindSelection() || (selection && selection.rangeCount === 0);
+          clearFindRange();
+          var text = transcript ? transcript.textContent : '';
+          var query = findEl.value;
+          var chosen = -1;
+          var current = 0;
+          matchCount = 0;
+          if (query) {
+            for (var at = text.indexOf(query); at !== -1; at = text.indexOf(query, at + query.length)) {
+              matchCount++;
+              if (chosen === -1 || (chosen < target && at <= target)) {
+                chosen = at;
+                current = matchCount;
+              }
+            }
+          }
+          selectedStart = chosen;
+          findNext.disabled = findPrevious.disabled = matchCount === 0;
+          findResult.textContent = !query ? 'Enter text to find' : !matchCount ?
+            'No matches in retained log' : current + ' / ' + matchCount + ' in retained log';
+          if (chosen < 0 || (!reveal && !ownedSelection)) return;
+          findRange = document.createRange();
+          findRange.setStart(transcript, chosen);
+          findRange.setEnd(transcript, chosen + query.length);
+          var focused = document.activeElement;
+          if (selection) { selection.removeAllRanges(); selection.addRange(findRange); }
+          if (focused && document.activeElement !== focused) focused.focus({ preventScroll: true });
+          if (reveal) {
+            setFollowing(false);
+            var rect = findRange.getBoundingClientRect();
+            var viewport = logEl.getBoundingClientRect();
+            logEl.scrollTop += rect.top - viewport.top - logEl.clientHeight / 2;
+          }
+        }
+        function navigateFind(backwards) {
+          var text = transcript ? transcript.textContent : '';
+          var query = findEl.value;
+          if (!query) return;
+          // Use the same non-overlapping occurrences as the counter.
+          var target = -1;
+          var last = -1;
+          for (var at = text.indexOf(query); at !== -1; at = text.indexOf(query, at + query.length)) {
+            last = at;
+            if (backwards && at < selectedStart) target = at;
+            if (!backwards && at > selectedStart && target < 0) target = at;
+          }
+          if (target < 0) target = backwards ? last : 0;
+          updateFind(target, true);
+        }
+        findEl.oninput = function () {
+          updateFind(0, true);
+          if (!findEl.value) { logEl.scrollTop = logEl.scrollHeight; setFollowing(true); }
+        };
+        document.getElementById('findForm').onsubmit = function (event) {
+          event.preventDefault();
+          navigateFind(false);
+        };
+        findEl.onkeydown = function (event) {
+          if (event.key === 'Enter' && event.shiftKey) {
+            event.preventDefault();
+            navigateFind(true);
+          }
+        };
+        findPrevious.onclick = function () { navigateFind(true); };
         var done = false;
         var statusVersion = 0;
         try { tokenEl.value = sessionStorage.getItem('forge.authToken') || ''; } catch (e) {}
@@ -395,6 +498,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
           if (typeof text !== 'string' || text.length === 0) return;
           var pinned = following && atBottom();
           setFollowing(pinned);
+          var refreshSelection = ownsFindSelection();
+          clearFindRange();
           var previousTop = logEl.scrollTop;
           if (emptyEl) { emptyEl.remove(); emptyEl = null; }
           if (!transcript) {
@@ -419,6 +524,8 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             removedHeight = oldHeight - logEl.scrollHeight;
           }
           transcript.textContent = combined.slice(cut);
+          // Rebuild only our active selection, without claiming a manual selection.
+          updateFind(Math.max(0, selectedStart - cut), false, refreshSelection);
           if (pinned) logEl.scrollTop = logEl.scrollHeight;
           else logEl.scrollTop = Math.max(0, previousTop - removedHeight);
         }
@@ -456,10 +563,12 @@ ${escapeHtml(prompt || 'No saved prompt available.')}</pre>${promptTruncated ? `
             if (opened) {
               // Each connection starts with a fresh server tail, not a resume.
               // Clear text in place so a retained transcript node (DOM cap) stays valid.
+              clearFindRange();
               Array.from(logEl.childNodes).forEach(function (node, index) {
                 if (index === 0) node.textContent = '';
                 else node.remove();
               });
+              updateFind(0, false);
               logEl.scrollTop = 0;
               setFollowing(true);
               document.getElementById('replayNotice').hidden = false;
