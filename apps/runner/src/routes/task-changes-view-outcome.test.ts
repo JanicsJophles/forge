@@ -32,7 +32,8 @@ test('changes review distinguishes saved outcomes with bounded diagnostics and a
     const response = await fetch(url)
     assert.equal(response.status, 200)
     const html = await response.text()
-    assert.doesNotMatch(html, /PRIVATE_PROMPT|PRIVATE_LOG/)
+    assert.doesNotMatch(html, /PRIVATE_LOG/)
+    assert.match(html, /<pre class="saved-prompt">PRIVATE_PROMPT<\/pre>/)
     return html
   }
   const update = (status: string, reason: string | null = null, commit: string | null = null) =>
