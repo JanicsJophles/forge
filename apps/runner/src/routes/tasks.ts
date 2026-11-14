@@ -13,6 +13,8 @@ import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
 
+import { resolveLimits } from '../verify/caps.js'
+
 export const tasksRouter = Router()
 
 // POST /tasks — create and kick off a task
@@ -21,6 +23,20 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   if (!body.repo || !body.prompt) {
     res.status(400).json({ error: 'repo and prompt are required' })
+    return
+  }
+
+  try {
+    if (typeof body.repo !== 'string' || typeof body.prompt !== 'string' ||
+        (body.verify !== undefined && typeof body.verify !== 'boolean') ||
+        (body.gate !== undefined && typeof body.gate !== 'string') ||
+        (body.base !== undefined && typeof body.base !== 'string') ||
+        (body.allowedDependencies !== undefined && (!Array.isArray(body.allowedDependencies) || !body.allowedDependencies.every(d => typeof d === 'string')))) {
+      throw new Error('invalid verification options')
+    }
+    Object.assign(body, resolveLimits(body, config.limits, config.maximum))
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
     return
   }
 
@@ -47,6 +63,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     repo: body.repo,
     branch,
     prompt: body.prompt,
+    options: body,
     status: 'queued',
     log: '',
     createdAt: new Date().toISOString(),
@@ -104,7 +121,7 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
   }
 
   // If already terminal, send final status and close
-  if (task.status === 'completed' || task.status === 'failed') {
+  if (task.status === 'completed' || task.status === 'failed' || task.status === 'unverified' || task.status === 'capped') {
     send(task.status === 'completed' ? 'complete' : 'error', task.status)
     res.end()
     return

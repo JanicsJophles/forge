@@ -6,7 +6,26 @@ if (!rawPaths.trim()) {
   process.exit(1)
 }
 
+function positiveEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name] ?? fallback)
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be positive`)
+  return value
+}
+const maximum = {
+  maxWallMinutes: positiveEnv('MAX_WALL_MINUTES', 60),
+  maxOutputBytes: positiveEnv('MAX_OUTPUT_BYTES', 10_485_760),
+}
 export const config = {
+  maximum,
+  limits: {
+    maxWallMinutes: Math.min(positiveEnv('DEFAULT_WALL_MINUTES', 30), maximum.maxWallMinutes),
+    maxOutputBytes: Math.min(positiveEnv('DEFAULT_OUTPUT_BYTES', 5_242_880), maximum.maxOutputBytes),
+  },
+  verification: {
+    gateTimeoutMs: positiveEnv('GATE_TIMEOUT_MS', 300_000),
+    allowWorkflows: process.env.ALLOW_WORKFLOW_EDITS === 'true',
+    forbiddenPatterns: JSON.parse(process.env.FORBIDDEN_DIFF_PATTERNS ?? '[]') as string[],
+  },
   port: parseInt(process.env.PORT ?? '5000', 10),
   host: process.env.HOST ?? '0.0.0.0',
   maxConcurrentTasks: parseInt(process.env.MAX_CONCURRENT_TASKS ?? '2', 10),

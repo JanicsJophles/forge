@@ -159,3 +159,40 @@ Express API (port 5000)
 ## License
 
 MIT
+
+### Verified completion
+
+After a successful agent exit and optional auto-commit, the runner checks the final
+repository state before setting `completed`. Prompts containing the word `PR`
+require a claimed GitHub PR URL or `branch: name` in agent output, an open draft PR,
+and matching local, PR and remote branch heads. `verify: false` skips those PR
+checks. It does not disable gates or diff checks.
+
+POST /tasks also accepts `gate`, `base` (otherwise PR base or `main`),
+`allowedDependencies` (package names), `maxWallMinutes` and `maxOutputBytes`.
+The runner executes `gate`, or the command in `.forge/gate`, directly in bash in
+the task repo with a timeout and records its real exit code and last 16 KiB of
+output. It uses the agent's uid, gid and HOME for verification commands.
+
+GET /tasks/:id includes the saved `options` and `verification` report. `unverified`
+means a required check failed; `capped` means the wall time or output budget was
+exceeded. Both are terminal states with an errorMessage and completedAt. SSE uses
+the existing error event for either state. Removed cases and assertions are review
+warnings. Deleted tests and new skip/only markers require `test-change:` followed
+by a justification in the PR body. Env files, likely secrets and unauthorized
+workflow edits block completion; new dependencies outside the allowlist warn.
+These diff checks are heuristics, not a complete security scanner.
+
+Owner defaults and ceilings are in apps/runner/.env.example. Workflow permission
+and additional forbidden diff regexes are owner env settings, never request
+permissions. Agents get SIGTERM on a cap, then SIGKILL after one second, applied
+to their process group. No service restart is needed to run the offline checks:
+
+```sh
+npm run build
+npm test
+npm run canary --workspace=apps/runner
+```
+
+Tests and canary create scratch repos in the system temp directory and use a fake
+`gh` binary. They do not require GitHub access or the live runner database.

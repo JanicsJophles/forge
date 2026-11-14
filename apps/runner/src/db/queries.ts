@@ -1,5 +1,5 @@
 import { db } from './schema.js'
-import type { AgentTask, TaskStatus } from '@forge/shared'
+import type { AgentTask, TaskStatus, Verification } from '@forge/shared'
 
 interface TaskRow {
   id: string
@@ -12,11 +12,15 @@ interface TaskRow {
   started_at: string | null
   completed_at: string | null
   error_message: string | null
+  options: string | null
+  verification: string | null
   commit_sha: string | null
 }
 
 function rowToTask(row: TaskRow): AgentTask {
   return {
+    options: row.options ? JSON.parse(row.options) : undefined,
+    verification: row.verification ? JSON.parse(row.verification) : undefined,
     id: row.id,
     repo: row.repo,
     branch: row.branch,
@@ -33,9 +37,10 @@ function rowToTask(row: TaskRow): AgentTask {
 
 export function insertTask(task: AgentTask): void {
   db.prepare(`
-    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at)
-    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt)
+    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, options)
+    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @options)
   `).run({
+    options: task.options ? JSON.stringify(task.options) : null,
     id: task.id,
     repo: task.repo,
     branch: task.branch,
@@ -59,7 +64,7 @@ export function listTasks(limit = 20): AgentTask[] {
 export function updateTaskStatus(id: string, status: TaskStatus): void {
   if (status === 'running') {
     db.prepare(`UPDATE tasks SET status = ?, started_at = datetime('now') WHERE id = ?`).run(status, id)
-  } else if (status === 'completed' || status === 'failed') {
+  } else if (status === 'completed' || status === 'failed' || status === 'unverified' || status === 'capped') {
     db.prepare(`UPDATE tasks SET status = ?, completed_at = datetime('now') WHERE id = ?`).run(status, id)
   } else {
     db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run(status, id)
@@ -83,4 +88,8 @@ export function countActiveTasks(): number {
     `SELECT COUNT(*) as count FROM tasks WHERE status IN ('queued', 'running')`
   ).get() as { count: number }
   return row.count
+}
+
+export function setVerification(id: string, report: Verification): void {
+  db.prepare('UPDATE tasks SET verification = ? WHERE id = ?').run(JSON.stringify(report), id)
 }

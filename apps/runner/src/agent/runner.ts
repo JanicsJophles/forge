@@ -8,9 +8,13 @@ import {
   appendLog,
   setErrorMessage,
   setCommitSha,
+  setVerification,
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
+
+import { verifyTask } from '../verify/index.js'
+import { enforceCaps, resolveLimits } from '../verify/caps.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -72,6 +76,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     'claude',
     ['--dangerously-skip-permissions', '-p', task.prompt],
     {
+      detached: true,
       cwd: task.repo,
       env: { ...process.env, HOME: claudeHome },
       ...(uid !== undefined ? { uid, gid } : {}),
@@ -79,6 +84,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   )
 
   activeProcs.set(task.id, proc)
+
+  let cappedReason = ''
+  let output = ''
+  let spawnFailed = false
+  const caps = enforceCaps(proc, resolveLimits(task.options ?? { repo: task.repo, prompt: task.prompt }, config.limits, config.maximum), reason => { cappedReason = reason })
 
   // Buffer lines and flush to DB + SSE every 500ms to avoid hammering
   let buffer = ''
@@ -95,22 +105,33 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   flushTimer = setInterval(flush, 500)
 
   proc.stdout.on('data', (data: Buffer) => {
-    buffer += data.toString()
+    const text = caps.consume(data)
+    output += text
+    buffer += text
   })
 
   proc.stderr.on('data', (data: Buffer) => {
-    const text = data.toString().split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
+    const raw = caps.consume(data)
+    output += raw
+    const text = raw.split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
     buffer += text
   })
 
   proc.on('close', async (code) => {
+    caps.dispose()
+    if (spawnFailed) return
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     flush()
 
     activeProcs.delete(task.id)
 
-    if (code === 0) {
+    if (cappedReason) {
+      setErrorMessage(task.id, `capped: ${cappedReason}`)
+      setVerification(task.id, { verified: false, checks: [{ name: 'caps', ok: false, detail: cappedReason }], diffStats: '', gate: null })
+      updateTaskStatus(task.id, 'capped')
+      emitter.emit('event', makeEvent('error', `capped: ${cappedReason}`))
+    } else if (code === 0) {
       // Auto-commit if enabled
       if (config.autoCommit) {
         try {
@@ -136,8 +157,17 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
         }
       }
 
-      updateTaskStatus(task.id, 'completed')
-      emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
+      const report = await verifyTask({ ...task.options, repo: task.repo, prompt: task.prompt, output }, config.verification, { ...runAs, env: { ...process.env, HOME: claudeHome } })
+      setVerification(task.id, report)
+      if (report.verified) {
+        updateTaskStatus(task.id, 'completed')
+        emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
+      } else {
+        const reason = 'unverified: ' + report.checks.filter(c => !c.ok && !c.warning).map(c => c.detail).join('; ')
+        setErrorMessage(task.id, reason)
+        updateTaskStatus(task.id, 'unverified')
+        emitter.emit('event', makeEvent('error', reason))
+      }
     } else {
       const errMsg = `[forge] claude exited with code ${code}\n`
       appendLog(task.id, errMsg)
@@ -151,6 +181,8 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   })
 
   proc.on('error', (err) => {
+    spawnFailed = true
+    caps.dispose()
     if (flushTimer) clearInterval(flushTimer)
     flush()
     activeProcs.delete(task.id)

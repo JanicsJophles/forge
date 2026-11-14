@@ -1,4 +1,4 @@
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'unverified' | 'capped'
 
 export interface AgentTask {
   id: string
@@ -11,6 +11,8 @@ export interface AgentTask {
   startedAt?: string
   completedAt?: string
   errorMessage?: string
+  options?: RunRequest
+  verification?: Verification
   commitSha?: string
 }
 
@@ -24,5 +26,18 @@ export interface RunRequest {
   repo: string          // absolute path on the LXC / local machine
   branch?: string
   prompt: string
+  verify?: boolean
+  gate?: string
+  base?: string
+  maxWallMinutes?: number
+  maxOutputBytes?: number
+  allowedDependencies?: string[]
   autoCommit?: boolean
+}
+
+export interface Verification {
+  verified: boolean
+  checks: { name: string; ok: boolean; detail: string; warning?: boolean }[]
+  diffStats: string
+  gate: { cmd: string; exit: number; tail: string } | null
 }

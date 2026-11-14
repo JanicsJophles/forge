@@ -29,6 +29,12 @@ db.exec(`
   );
 `)
 
+// Additive, repeatable migration for databases created by older runners.
+const columns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]
+for (const column of ['options', 'verification']) {
+  if (!columns.some(c => c.name === column)) db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`)
+}
+
 // Reconcile any tasks that were 'running' at the last shutdown — those
 // are zombies whose agent processes died with the runner (pm2 restart,
 // crash, OS kill). Without this they sit 'running' forever and block
