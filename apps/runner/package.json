@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "tsx --test src/verify/*.test.ts",
+    "canary": "tsx src/verify/canary.ts"
   },
   "dependencies": {
     "@forge/shared": "*",

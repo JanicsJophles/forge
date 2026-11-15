@@ -1,3 +1,4 @@
+import { migrateVerification } from './migrations/001_verification.js'
 import Database from 'better-sqlite3'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -28,6 +29,8 @@ db.exec(`
     commit_sha   TEXT
   );
 `)
+
+migrateVerification(db)
 
 // Reconcile any tasks that were 'running' at the last shutdown — those
 // are zombies whose agent processes died with the runner (pm2 restart,

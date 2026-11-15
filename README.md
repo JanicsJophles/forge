@@ -159,3 +159,58 @@ Express API (port 5000)
 ## License
 
 MIT
+
+### Verified completion
+
+After a successful agent exit and optional auto-commit, the runner checks the final
+repository state before setting `completed`. The owner can set `REQUIRE_DRAFT_PR=true` to require a claimed GitHub PR URL
+or branch, an open draft PR and matching local and remote heads. Prompt wording
+and request `verify` cannot change that policy.
+The final working tree must be clean, including untracked files, so those checks
+cover everything the agent left behind. Gate commands must also leave it clean.
+
+POST /tasks also accepts `gate`, `base` (otherwise PR base or `main`),
+`allowedDependencies` (package names), `maxWallMinutes` and `maxOutputBytes`.
+The runner executes `gate`, or the command in the base branch `.forge/gate`, directly in bash in
+the task repo with a timeout and records its real exit code and last 16 KiB of
+output. It uses the agent's uid, gid and HOME for verification commands.
+
+GET /tasks/:id and GET /tasks keep `status` within `queued`, `running`,
+`completed` and `failed`. Verification failures use `status: "failed"` with
+`failureKind: "unverified"` when a required check failed, or
+`failureKind: "capped"` when the wall time or output budget was exceeded.
+Both include the plain-language reason in `errorMessage`, `completedAt`, and the
+redacted `verification` object (`verified`, `verdict`, `checks`, `diffStats`, `gate`).
+`verification.verdict` is `verified`, `unverified` or `capped`. Ordinary process
+failures omit `failureKind`. New callers can inspect either outcome field;
+existing callers can continue treating `failed` as terminal. SSE uses the
+existing error event with the reason. Saved legacy outcome statuses are also
+returned as `failed` with their outcome preserved.
+Deleted tests, removed cases or assertions and new skip/only markers
+require the owner setting `ALLOW_TEST_CHANGES=true`. Agent justifications grant no authority. Env files, likely secrets and unauthorized
+workflow edits block completion; new dependencies outside the allowlist warn.
+These diff checks are heuristics, not a complete security scanner.
+
+Owner defaults and ceilings are in apps/runner/.env.example. Workflow permission
+and additional forbidden diff regexes are owner env settings, never request
+permissions. Agents get SIGTERM on a cap, then SIGKILL after one second, applied
+to their process group. No service restart is needed to run the offline checks:
+
+```sh
+npm run build
+npm test
+npm run canary --workspace=apps/runner
+```
+
+Tests and canary create scratch repos in the system temp directory and use a fake
+`gh` binary. They do not require GitHub access or the live runner database.
+
+Owner policy is recorded in each verification report. `ALLOW_NO_GATE=true` explicitly
+permits no behavioral gate; otherwise no selected gate means unverified. Repository
+gates come from the fetched base branch, so a PR cannot replace its own gate.
+`ALLOW_ENV_FILES`, `ALLOW_SECRETS` and `ALLOW_WORKFLOW_EDITS` allow the owner to
+override the corresponding checks. These switches default to false and are runner
+environment settings, never task request fields. Task reads redact options and gate
+commands/output while retaining the existing list shape and terminal statuses.
+Migration `001_verification` upgrades old databases atomically and records success
+in `_migrations` after adding the verification columns.

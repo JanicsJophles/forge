@@ -13,6 +13,13 @@ import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
 
+import { resolveLimits } from '../verify/caps.js'
+
+// Public task reads preserve the wire shape while withholding private commands and output.
+function publicTask(task: AgentTask) {
+  return { ...task, options: undefined, verification: task.verification ? { ...task.verification, gate: null } : undefined }
+}
+
 export const tasksRouter = Router()
 
 // POST /tasks — create and kick off a task
@@ -21,6 +28,20 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   if (!body.repo || !body.prompt) {
     res.status(400).json({ error: 'repo and prompt are required' })
+    return
+  }
+
+  try {
+    if (typeof body.repo !== 'string' || typeof body.prompt !== 'string' ||
+        (body.verify !== undefined && typeof body.verify !== 'boolean') ||
+        (body.gate !== undefined && typeof body.gate !== 'string') ||
+        (body.base !== undefined && typeof body.base !== 'string') ||
+        (body.allowedDependencies !== undefined && (!Array.isArray(body.allowedDependencies) || !body.allowedDependencies.every(d => typeof d === 'string')))) {
+      throw new Error('invalid verification options')
+    }
+    Object.assign(body, resolveLimits(body, config.limits, config.maximum))
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message })
     return
   }
 
@@ -47,6 +68,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     repo: body.repo,
     branch,
     prompt: body.prompt,
+    options: body,
     status: 'queued',
     log: '',
     createdAt: new Date().toISOString(),
@@ -66,7 +88,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
 // GET /tasks — last 20
 tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+  res.json(listTasks(20).map(publicTask))
 })
 
 // GET /tasks/:id — single task
@@ -76,7 +98,7 @@ tasksRouter.get('/:id', (req: Request, res: Response) => {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  res.json(task)
+  res.json(publicTask(task))
 })
 
 // GET /tasks/:id/stream — SSE stream
@@ -105,7 +127,7 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
 
   // If already terminal, send final status and close
   if (task.status === 'completed' || task.status === 'failed') {
-    send(task.status === 'completed' ? 'complete' : 'error', task.status)
+    send(task.status === 'completed' ? 'complete' : 'error', task.errorMessage ?? task.status)
     res.end()
     return
   }
