@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { verifyTask, type Policy } from './index.js'
 
-export const policy: Policy = { gateTimeoutMs: 2000, allowWorkflows: false, forbiddenPatterns: [] }
+export const policy: Policy = { gateTimeoutMs: 2000, allowWorkflows: false, forbiddenPatterns: [], requireDraftPR: true }
 export function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'forge-verify-'))
   const repo = join(root, 'repo')
@@ -22,6 +22,7 @@ export function fixture() {
     writeFileSync(join(repo, path), content)
   }
   write('example.test.ts', "test('works', () => { expect(true).toBe(true) })\n")
+  write('.forge/gate', 'true')
   write('package.json', '{"dependencies":{}}')
   git('add', '.')
   git('commit', '-m', 'base')

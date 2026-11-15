@@ -12,7 +12,7 @@ const scenarios: [string, (f: ReturnType<typeof fixture>) => void, boolean][] = 
   ['non draft PR', f => f.pr({ isDraft: false }), false],
   ['missing remote branch', f => { f.git('push', 'origin', '--delete', 'feature') }, false],
   ['deleted test', f => { f.remove('example.test.ts'); f.commit() }, false],
-  ['justified deleted test', f => { f.remove('example.test.ts'); f.commit(); f.pr({ body: 'test-change: obsolete suite' }) }, true],
+  ['justified deleted test', f => { f.remove('example.test.ts'); f.commit(); f.pr({ body: 'test-change: obsolete suite' }) }, false],
   ['new skip', f => { f.write('example.test.ts', "test.skip('works', () => {})\n"); f.commit() }, false],
   ['secret', f => { f.write('key.txt', '-----BEGIN PRIVATE KEY-----\n'); f.commit() }, false],
   ['env file', f => { f.write('.env.production', 'A=B\n'); f.commit() }, false],
@@ -29,8 +29,9 @@ test('gate captures real exit and tail, file fallback, timeout', async () => {
     assert.equal(r.verified, false)
     assert.equal(r.gate?.exit, 7)
     assert.match(r.gate!.tail, /gate-failed/)
-    f.write('.forge/gate', 'echo success')
-    assert.equal((await f.verify()).gate?.exit, 0)
+    f.write('.forge/gate', 'exit 8')
+    f.commit()
+    assert.equal((await f.verify()).gate?.cmd, 'true')
     r = await f.verify({ gate: 'sleep 10' }, { ...policy, gateTimeoutMs: 30 })
     assert.equal(r.gate?.exit, 124)
   } finally { f.cleanup() }
@@ -39,8 +40,9 @@ test('PR opt out and absent claim', async () => {
   const f = fixture()
   try {
     f.missingPR()
-    assert.equal((await f.verify({ verify: false })).verified, true)
-    assert.equal((await f.verify({ prompt: 'Change a file' })).verified, true)
+    assert.equal((await f.verify({ verify: false })).verified, false)
+    assert.equal((await f.verify({ verify: false }, { ...policy, requireDraftPR: false })).verified, true)
+    assert.equal((await f.verify({ prompt: 'Change a file' }, { ...policy, requireDraftPR: false })).verified, true)
     assert.equal((await f.verify({ output: 'done' })).verified, false)
   } finally { f.cleanup() }
 })
@@ -60,8 +62,8 @@ test('removed cases and assertions are reported, dependencies warn, custom rules
     f.write('package.json', '{"dependencies":{"new-package":"1.0.0"}}')
     f.commit()
     const r = await f.verify()
-    assert.equal(r.verified, true)
-    for (const name of ['removed test case', 'removed assertions', 'dependencies']) assert.ok(r.checks.some(c => c.name === name && !c.ok && c.warning))
+    assert.equal(r.verified, false)
+    for (const name of ['removed test case', 'removed assertions', 'dependencies']) assert.ok(r.checks.some(c => c.name === name && !c.ok))
     assert.equal((await f.verify({}, { ...policy, forbiddenPatterns: ['empty'] })).verified, false)
   } finally { f.cleanup() }
 })
@@ -115,16 +117,37 @@ test('cap escalates when agent ignores SIGTERM', async () => {
   assert.match(reason, /output/)
   assert.equal(signal, 'SIGKILL')
 })
-test('justified skips pass and gate output is bounded without losing exit status', async () => {
+test('agent justified skips fail and gate output is bounded without losing exit status', async () => {
   const f = fixture()
   try {
     f.write('example.test.ts', "it.only('works', () => { expect(true).toBe(true) })\n")
     f.commit()
     f.pr({ body: 'test-change: isolate a reproduced failure for review' })
     const r = await f.verify({ gate: `node -e 'process.stdout.write("a".repeat(40000)); process.exitCode = 9'` })
-    assert.ok(r.checks.find(c => c.name === 'test skip')?.ok)
+    assert.equal(r.checks.find(c => c.name === 'test skip')?.ok, false)
     assert.equal(r.gate?.exit, 9)
     assert.equal(r.gate?.tail.length, 16384)
     assert.equal(r.verified, false)
+  } finally { f.cleanup() }
+})
+
+test('no gate fails unless owner explicitly allows it and records policy', async () => {
+  const f = fixture()
+  try {
+    f.git('checkout', 'main'); f.remove('.forge/gate'); f.git('add', '-A'); f.git('commit', '-m', 'remove gate')
+    f.git('push', 'origin', 'main'); f.git('checkout', 'feature'); f.pr()
+    assert.equal((await f.verify()).verified, false)
+    const r = await f.verify({}, { ...policy, allowNoGate: true })
+    assert.equal(r.verified, true)
+    assert.match(r.checks.find(c => c.name === 'owner policy')!.detail, /"allowNoGate":true/)
+  } finally { f.cleanup() }
+})
+test('only owner policy can allow test removal, env files and secrets', async () => {
+  const f = fixture()
+  try {
+    f.write('example.test.ts', '// empty\n')
+    f.write('.env', 'KEY=-----BEGIN PRIVATE KEY-----\n'); f.commit()
+    assert.equal((await f.verify()).verified, false)
+    assert.equal((await f.verify({}, { ...policy, allowTestChanges: true, allowEnvFiles: true, allowSecrets: true })).verified, true)
   } finally { f.cleanup() }
 })

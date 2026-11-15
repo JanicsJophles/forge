@@ -22,6 +22,11 @@ export const config = {
     maxOutputBytes: Math.min(positiveEnv('DEFAULT_OUTPUT_BYTES', 5_242_880), maximum.maxOutputBytes),
   },
   verification: {
+    requireDraftPR: process.env.REQUIRE_DRAFT_PR === 'true',
+    allowNoGate: process.env.ALLOW_NO_GATE === 'true',
+    allowTestChanges: process.env.ALLOW_TEST_CHANGES === 'true',
+    allowEnvFiles: process.env.ALLOW_ENV_FILES === 'true',
+    allowSecrets: process.env.ALLOW_SECRETS === 'true',
     gateTimeoutMs: positiveEnv('GATE_TIMEOUT_MS', 300_000),
     allowWorkflows: process.env.ALLOW_WORKFLOW_EDITS === 'true',
     forbiddenPatterns: JSON.parse(process.env.FORBIDDEN_DIFF_PATTERNS ?? '[]') as string[],

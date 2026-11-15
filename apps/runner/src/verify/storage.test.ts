@@ -18,11 +18,12 @@ test('existing database migrates additively and persists options, reports and te
   old.close()
   const { db } = await import('../db/schema.js')
   try {
+    assert.deepEqual(db.prepare('SELECT id FROM _migrations').all(), [{ id: '001_verification' }])
     const q = await import('../db/queries.js')
     const options = { repo: root, prompt: 'PR', gate: 'true', maxOutputBytes: 1024 }
     q.insertTask({ id: 'test', repo: root, branch: 'feature', prompt: 'PR', log: '', status: 'queued', createdAt: new Date().toISOString(), options })
     assert.deepEqual(q.getTask('test')?.options, options)
-    const report = { verdict: 'unverified' as const, verified: false, checks: [{ name: 'gate', ok: false, detail: 'gate exited 1' }], diffStats: '', gate: { cmd: 'false', exit: 1, tail: '' } }
+    const report = { verdict: 'unverified' as const, verified: false, checks: [{ name: 'gate', ok: false, detail: 'gate exited 1' }], diffStats: '', gate: { cmd: 'private-command', exit: 1, tail: 'private-gate-output' } }
     q.setVerification('test', report)
     assert.deepEqual(q.getTask('test')?.verification, report)
     for (const status of ['failed'] as const) {
@@ -47,6 +48,7 @@ test('existing database migrates additively and persists options, reports and te
       process.env.PATH = `${join(f.root, 'bin')}:${savedPath}`
       process.env.ALLOWED_REPO_PATHS = f.repo
       process.env.CLAUDE_RUN_USER = 'forge-test-nonexistent'
+      process.env.REQUIRE_DRAFT_PR = 'true'
       process.env.AUTO_COMMIT = 'false'
       writeFileSync(join(f.root, 'bin', 'claude'), '#!/bin/sh\necho https://github.com/example/repo/pull/1\n', { mode: 0o755 })
       const { runTask } = await import('../agent/runner.js')
@@ -75,11 +77,17 @@ test('existing database migrates additively and persists options, reports and te
       const url = `http://127.0.0.1:${address.port}/tasks`
       try {
         const detail = await (await fetch(`${url}/unverified`)).json() as { status: string; failureKind: string; errorMessage: string; verification: { verified: boolean } }
+        assert.equal((detail as any).options, undefined)
+        assert.equal((detail as any).verification.gate, null)
         assert.equal(detail.status, 'failed')
         assert.equal(detail.failureKind, 'unverified')
         assert.ok(detail.errorMessage)
         const listed = await (await fetch(url)).json()
         assert.ok(JSON.stringify(listed).includes('failureKind'))
+        assert.ok(!JSON.stringify(listed).includes('private-gate-output'))
+        const privateDetail = await (await fetch(`${url}/test`)).json()
+        assert.equal(privateDetail.verification.gate, null)
+        assert.ok(listed.every((t: any) => !t.options && (!t.verification || t.verification.gate === null)))
         assert.equal(detail.verification.verified, false)
         for (const status of ['unverified', 'capped']) {
           const stream = await (await fetch(`${url}/${status}/stream`)).text()

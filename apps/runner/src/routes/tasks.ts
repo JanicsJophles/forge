@@ -15,6 +15,11 @@ import { getCurrentBranch } from '../agent/git.js'
 
 import { resolveLimits } from '../verify/caps.js'
 
+// Public task reads preserve the wire shape while withholding private commands and output.
+function publicTask(task: AgentTask) {
+  return { ...task, options: undefined, verification: task.verification ? { ...task.verification, gate: null } : undefined }
+}
+
 export const tasksRouter = Router()
 
 // POST /tasks — create and kick off a task
@@ -83,7 +88,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
 // GET /tasks — last 20
 tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+  res.json(listTasks(20).map(publicTask))
 })
 
 // GET /tasks/:id — single task
@@ -93,7 +98,7 @@ tasksRouter.get('/:id', (req: Request, res: Response) => {
     res.status(404).json({ error: 'task not found' })
     return
   }
-  res.json(task)
+  res.json(publicTask(task))
 })
 
 // GET /tasks/:id/stream — SSE stream
