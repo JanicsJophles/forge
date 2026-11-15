@@ -121,8 +121,8 @@ tasksRouter.get('/:id/stream', (req: Request, res: Response) => {
   }
 
   // If already terminal, send final status and close
-  if (task.status === 'completed' || task.status === 'failed' || task.status === 'unverified' || task.status === 'capped') {
-    send(task.status === 'completed' ? 'complete' : 'error', task.status)
+  if (task.status === 'completed' || task.status === 'failed') {
+    send(task.status === 'completed' ? 'complete' : 'error', task.errorMessage ?? task.status)
     res.end()
     return
   }

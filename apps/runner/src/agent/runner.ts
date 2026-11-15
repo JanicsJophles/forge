@@ -127,10 +127,10 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     activeProcs.delete(task.id)
 
     if (cappedReason) {
-      setErrorMessage(task.id, `capped: ${cappedReason}`)
-      setVerification(task.id, { verified: false, checks: [{ name: 'caps', ok: false, detail: cappedReason }], diffStats: '', gate: null })
-      updateTaskStatus(task.id, 'capped')
-      emitter.emit('event', makeEvent('error', `capped: ${cappedReason}`))
+      setErrorMessage(task.id, cappedReason)
+      setVerification(task.id, { verdict: 'capped', verified: false, checks: [{ name: 'caps', ok: false, detail: cappedReason }], diffStats: '', gate: null })
+      updateTaskStatus(task.id, 'failed')
+      emitter.emit('event', makeEvent('error', cappedReason))
     } else if (code === 0) {
       // Auto-commit if enabled
       if (config.autoCommit) {
@@ -163,9 +163,9 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
         updateTaskStatus(task.id, 'completed')
         emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
       } else {
-        const reason = 'unverified: ' + report.checks.filter(c => !c.ok && !c.warning).map(c => c.detail).join('; ')
+        const reason = report.checks.filter(c => !c.ok && !c.warning).map(c => c.detail).join('; ')
         setErrorMessage(task.id, reason)
-        updateTaskStatus(task.id, 'unverified')
+        updateTaskStatus(task.id, 'failed')
         emitter.emit('event', makeEvent('error', reason))
       }
     } else {

@@ -176,10 +176,18 @@ The runner executes `gate`, or the command in `.forge/gate`, directly in bash in
 the task repo with a timeout and records its real exit code and last 16 KiB of
 output. It uses the agent's uid, gid and HOME for verification commands.
 
-GET /tasks/:id includes the saved `options` and `verification` report. `unverified`
-means a required check failed; `capped` means the wall time or output budget was
-exceeded. Both are terminal states with an errorMessage and completedAt. SSE uses
-the existing error event for either state. Removed cases and assertions are review
+GET /tasks/:id and GET /tasks keep `status` within `queued`, `running`,
+`completed` and `failed`. Verification failures use `status: "failed"` with
+`failureKind: "unverified"` when a required check failed, or
+`failureKind: "capped"` when the wall time or output budget was exceeded.
+Both include the plain-language reason in `errorMessage`, `completedAt`, and the
+full `verification` object (`verified`, `verdict`, `checks`, `diffStats`, `gate`).
+`verification.verdict` is `verified`, `unverified` or `capped`. Ordinary process
+failures omit `failureKind`. New callers can inspect either outcome field;
+existing callers can continue treating `failed` as terminal. SSE uses the
+existing error event with the reason. Saved legacy outcome statuses are also
+returned as `failed` with their outcome preserved.
+Removed cases and assertions are review
 warnings. Deleted tests and new skip/only markers require `test-change:` followed
 by a justification in the PR body. Env files, likely secrets and unauthorized
 workflow edits block completion; new dependencies outside the allowlist warn.

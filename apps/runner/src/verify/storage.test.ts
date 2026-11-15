@@ -22,12 +22,22 @@ test('existing database migrates additively and persists options, reports and te
     const options = { repo: root, prompt: 'PR', gate: 'true', maxOutputBytes: 1024 }
     q.insertTask({ id: 'test', repo: root, branch: 'feature', prompt: 'PR', log: '', status: 'queued', createdAt: new Date().toISOString(), options })
     assert.deepEqual(q.getTask('test')?.options, options)
-    const report = { verified: false, checks: [{ name: 'gate', ok: false, detail: 'gate exited 1' }], diffStats: '', gate: { cmd: 'false', exit: 1, tail: '' } }
+    const report = { verdict: 'unverified' as const, verified: false, checks: [{ name: 'gate', ok: false, detail: 'gate exited 1' }], diffStats: '', gate: { cmd: 'false', exit: 1, tail: '' } }
     q.setVerification('test', report)
     assert.deepEqual(q.getTask('test')?.verification, report)
-    for (const status of ['unverified', 'capped'] as const) {
+    for (const status of ['failed'] as const) {
       q.updateTaskStatus('test', status)
       assert.equal(q.getTask('test')?.status, status)
+      assert.ok(q.getTask('test')?.completedAt)
+      assert.equal(q.countActiveTasks(), 0)
+    }
+    for (const kind of ['unverified', 'capped'] as const) {
+      db.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(kind, 'test')
+      assert.equal(q.getTask('test')?.status, 'failed')
+      // Legacy capped rows carry no verdict in their saved report.
+      q.setVerification('test', { ...report, verdict: kind })
+      assert.equal(q.getTask('test')?.failureKind, kind)
+      assert.equal(q.getTask('test')?.verification?.verdict, kind)
       assert.ok(q.getTask('test')?.completedAt)
       assert.equal(q.countActiveTasks(), 0)
     }
@@ -48,7 +58,10 @@ test('existing database migrates additively and persists options, reports and te
         const done = new Promise<void>(resolve => emitter.once('done', resolve))
         await runTask(task, emitter)
         await done
-        assert.equal(q.getTask(task.id)?.status, expected)
+        assert.equal(q.getTask(task.id)?.status, expected === 'completed' ? 'completed' : 'failed')
+        assert.equal(q.getTask(task.id)?.failureKind, expected === 'completed' ? undefined : expected)
+        assert.equal(q.getTask(task.id)?.verification?.verdict, expected === 'completed' ? 'verified' : expected)
+        if (expected !== 'completed') assert.ok(q.getTask(task.id)?.errorMessage)
         assert.equal(q.getTask(task.id)?.verification?.verified, expected === 'completed')
       }
       const { default: express } = await import('express')
@@ -61,12 +74,17 @@ test('existing database migrates additively and persists options, reports and te
       const address = server.address() as { port: number }
       const url = `http://127.0.0.1:${address.port}/tasks`
       try {
-        const detail = await (await fetch(`${url}/unverified`)).json() as { verification: { verified: boolean } }
+        const detail = await (await fetch(`${url}/unverified`)).json() as { status: string; failureKind: string; errorMessage: string; verification: { verified: boolean } }
+        assert.equal(detail.status, 'failed')
+        assert.equal(detail.failureKind, 'unverified')
+        assert.ok(detail.errorMessage)
+        const listed = await (await fetch(url)).json()
+        assert.ok(JSON.stringify(listed).includes('failureKind'))
         assert.equal(detail.verification.verified, false)
         for (const status of ['unverified', 'capped']) {
           const stream = await (await fetch(`${url}/${status}/stream`)).text()
           assert.match(stream, /event: error/)
-          assert.ok(stream.includes(status))
+          assert.ok(stream.includes(JSON.stringify(q.getTask(status)!.errorMessage!)))
         }
         const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo: f.repo, prompt: 'PR', maxWallMinutes: 999999 }) })
         assert.equal(response.status, 400)

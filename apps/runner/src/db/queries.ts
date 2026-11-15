@@ -18,14 +18,19 @@ interface TaskRow {
 }
 
 function rowToTask(row: TaskRow): AgentTask {
+  const verification: Verification | undefined = row.verification ? JSON.parse(row.verification) : undefined
+  const legacyKind = row.status === 'unverified' || row.status === 'capped' ? row.status : undefined
+  const verdict = legacyKind ?? verification?.verdict ?? (verification ? (verification.verified ? 'verified' : 'unverified') : undefined)
+  const failureKind = verdict === 'unverified' || verdict === 'capped' ? verdict : undefined
   return {
+    failureKind,
     options: row.options ? JSON.parse(row.options) : undefined,
-    verification: row.verification ? JSON.parse(row.verification) : undefined,
+    verification: verification ? { ...verification, verdict } : undefined,
     id: row.id,
     repo: row.repo,
     branch: row.branch,
     prompt: row.prompt,
-    status: row.status as TaskStatus,
+    status: legacyKind ? 'failed' : row.status as TaskStatus,
     log: row.log,
     createdAt: row.created_at,
     startedAt: row.started_at ?? undefined,
@@ -64,7 +69,7 @@ export function listTasks(limit = 20): AgentTask[] {
 export function updateTaskStatus(id: string, status: TaskStatus): void {
   if (status === 'running') {
     db.prepare(`UPDATE tasks SET status = ?, started_at = datetime('now') WHERE id = ?`).run(status, id)
-  } else if (status === 'completed' || status === 'failed' || status === 'unverified' || status === 'capped') {
+  } else if (status === 'completed' || status === 'failed') {
     db.prepare(`UPDATE tasks SET status = ?, completed_at = datetime('now') WHERE id = ?`).run(status, id)
   } else {
     db.prepare(`UPDATE tasks SET status = ? WHERE id = ?`).run(status, id)

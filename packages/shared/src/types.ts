@@ -1,4 +1,4 @@
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'unverified' | 'capped'
+export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed'
 
 export interface AgentTask {
   id: string
@@ -10,6 +10,7 @@ export interface AgentTask {
   createdAt: string
   startedAt?: string
   completedAt?: string
+  failureKind?: 'unverified' | 'capped'
   errorMessage?: string
   options?: RunRequest
   verification?: Verification
@@ -36,6 +37,7 @@ export interface RunRequest {
 }
 
 export interface Verification {
+  verdict?: 'verified' | 'unverified' | 'capped'
   verified: boolean
   checks: { name: string; ok: boolean; detail: string; warning?: boolean }[]
   diffStats: string

@@ -81,5 +81,6 @@ export async function verifyTask(input: VerifyInput, policy: Policy, identity: I
       }
     }
   } catch (err) { check('diff inspection', false, (err as Error).message) }
+  report.verdict = report.verified ? 'verified' : 'unverified'
   return report
 }
