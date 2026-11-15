@@ -167,6 +167,8 @@ repository state before setting `completed`. Prompts containing the word `PR`
 require a claimed GitHub PR URL or `branch: name` in agent output, an open draft PR,
 and matching local, PR and remote branch heads. `verify: false` skips those PR
 checks. It does not disable gates or diff checks.
+The final working tree must be clean, including untracked files, so those checks
+cover everything the agent left behind. Gate commands must also leave it clean.
 
 POST /tasks also accepts `gate`, `base` (otherwise PR base or `main`),
 `allowedDependencies` (package names), `maxWallMinutes` and `maxOutputBytes`.

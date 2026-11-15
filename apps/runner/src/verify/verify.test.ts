@@ -60,6 +60,16 @@ test('missing base fails closed', async () => {
   const f = fixture()
   try { assert.equal((await f.verify({ base: 'missing' })).verified, false) } finally { f.cleanup() }
 })
+for (const kind of ['untracked secret', 'modified test', 'gate mutation']) test(`${kind} cannot bypass committed diff inspection`, async () => {
+  const f = fixture()
+  try {
+    if (kind === 'untracked secret') f.write('private-key', '-----BEGIN PRIVATE KEY-----\n')
+    if (kind === 'modified test') f.write('example.test.ts', "test.skip('works', () => {})\n")
+    const report = await f.verify(kind === 'gate mutation' ? { gate: 'echo changed >> feature.txt' } : {})
+    assert.equal(report.verified, false)
+    assert.equal(report.checks.find(c => c.name === 'working tree')?.ok, false)
+  } finally { f.cleanup() }
+})
 test('request caps cannot exceed owner maximum', () => {
   const limits = { maxWallMinutes: 1, maxOutputBytes: 100 }
   assert.throws(() => resolveLimits({ repo: '', prompt: '', maxOutputBytes: 101 }, limits, limits))

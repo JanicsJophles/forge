@@ -47,6 +47,8 @@ export async function verifyTask(input: VerifyInput, policy: Policy, identity: I
     } catch (err) { check('PR state', false, (err as Error).message) }
   } else check('PR state', true, 'PR verification skipped for this request')
   try {
+    const dirty = await git('status', '--porcelain=v1', '--untracked-files=all')
+    check('working tree', dirty.length === 0, 'working tree must be clean, including untracked files, so verification covers the final repository state')
     if (!base || !/^[\w./-]+$/.test(base) || base.startsWith('-')) throw new Error('invalid base branch')
     await git('fetch', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`)
     const range = `origin/${base}...HEAD`
