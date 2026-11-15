@@ -44,6 +44,15 @@ test('PR opt out and absent claim', async () => {
     assert.equal((await f.verify({ output: 'done' })).verified, false)
   } finally { f.cleanup() }
 })
+test('invalid gate spawn arguments produce a failed report instead of rejecting verification', async () => {
+  const f = fixture()
+  try {
+    const report = await f.verify({ gate: 'echo bad\u0000argument' })
+    assert.equal(report.verified, false)
+    assert.equal(report.gate?.exit, 1)
+    assert.match(report.gate!.tail, /null bytes/)
+  } finally { f.cleanup() }
+})
 test('removed cases and assertions are reported, dependencies warn, custom rules block', async () => {
   const f = fixture()
   try {

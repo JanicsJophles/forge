@@ -6,7 +6,13 @@ export function stopGroup(pid: number, signal: NodeJS.Signals): void {
 }
 export function command(repo: string, cmd: string, args: string[], identity: Identity = {}, timeout = 30_000, outputLimit = 16_384): Promise<{exit: number; tail: string}> {
   return new Promise(resolve => {
-    const proc = spawn(cmd, args, { cwd: repo, ...identity, detached: true })
+    let proc
+    try {
+      proc = spawn(cmd, args, { cwd: repo, ...identity, detached: true })
+    } catch (err) {
+      resolve({ exit: 1, tail: (err as Error).message.slice(-outputLimit) })
+      return
+    }
     let tail = ''
     let timedOut = false
     let overflow = false
