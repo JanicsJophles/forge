@@ -12,7 +12,8 @@ import express from 'express'
 // the free-disk reading (fs.statfsSync override, same approach as
 // task-data-disk.test.ts) and the queued/running task count.
 test('GET /health reports acceptingTasks matching admission', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-health-accepting-'))
+  // Resolved: the runner reports and stats real paths, and macOS tmpdir is a symlink.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'forge-health-accepting-')))
   const repo = path.join(root, 'repo')
   const data = path.join(root, 'sqlite-volume')
   fs.mkdirSync(repo)

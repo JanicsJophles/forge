@@ -19,19 +19,32 @@ after(() => { db.close(); rmSync(dir, { recursive: true, force: true }) })
 test('group signaling uses only the owned negative PID and tolerates vanished groups', () => {
   const signals: unknown[] = []
   const child = { pid: 123456, kill: () => assert.fail('must signal group'), emit: () => {} } as any
+  // The runner only detaches providers on Linux, so ownership of the group is
+  // stated explicitly: the PID rules below must hold on every platform.
   signalProvider(child, 'SIGTERM', ((pid: number, signal: string) => {
     signals.push([pid, signal]); return true
-  }) as any)
+  }) as any, true)
   assert.deepEqual(signals, [[-123456, 'SIGTERM']])
-  signalProvider(child, 'SIGKILL', (() => { throw Object.assign(new Error(), { code: 'ESRCH' }) }) as any)
+  signalProvider(child, 'SIGKILL', (() => { throw Object.assign(new Error(), { code: 'ESRCH' }) }) as any, true)
   for (const pid of [undefined, 0, 1, -10, process.pid]) {
-    signalProvider({ pid, kill: () => true } as any, 'SIGTERM', (() => assert.fail('unsafe group')) as any)
+    signalProvider({ pid, kill: () => true } as any, 'SIGTERM', (() => assert.fail('unsafe group')) as any, true)
   }
 })
 
+test('a provider that does not own a group is signalled directly, never by group', () => {
+  const direct: string[] = []
+  const child = { pid: 123456, kill: (signal: string) => { direct.push(signal); return true }, emit: () => {} } as any
+  signalProvider(child, 'SIGTERM', (() => assert.fail('must not signal a group it does not own')) as any, false)
+  assert.deepEqual(direct, ['SIGTERM'])
+})
+
+const linuxOnly = process.platform === 'linux'
+  ? false
+  : 'needs Linux: the runner only detaches providers into their own process group on Linux, and the test reads /proc/<pid>/stat'
+
 for (const inheritPipes of [true, false]) {
   test(`Linux descendants stop after ${inheritPipes ? 'cancellation with inherited pipes' : 'timeout after close'}`, {
-    skip: process.platform !== 'linux', timeout: 10000,
+    skip: linuxOnly, timeout: 10000,
   }, async () => {
     const unrelated = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
     const unrelatedClosed = once(unrelated, 'close')

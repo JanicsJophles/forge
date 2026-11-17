@@ -4,15 +4,19 @@ export const providerDetached = process.platform === 'linux'
 
 // Only detached Linux providers own a group whose ID is their child PID.
 // Missing PIDs (including failed spawns) must never become kill(0) or kill(-1).
-export function hasProcessGroup(proc: ChildProcess): boolean {
-  return providerDetached && Number.isSafeInteger(proc.pid) && proc.pid! > 1 && proc.pid !== process.pid
+// `detached` says whether the child was spawned as a group leader. It defaults
+// to the platform rule the runner spawns with, and is a parameter so the PID
+// safety rules can be exercised on any platform.
+export function hasProcessGroup(proc: ChildProcess, detached: boolean = providerDetached): boolean {
+  return detached && Number.isSafeInteger(proc.pid) && proc.pid! > 1 && proc.pid !== process.pid
 }
 
 export function signalProvider(
   proc: ChildProcess, signal: NodeJS.Signals,
   send: typeof process.kill = process.kill,
+  detached: boolean = providerDetached,
 ): void {
-  if (!hasProcessGroup(proc)) {
+  if (!hasProcessGroup(proc, detached)) {
     proc.kill(signal)
     return
   }

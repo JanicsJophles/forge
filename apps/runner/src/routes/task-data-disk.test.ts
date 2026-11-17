@@ -9,7 +9,8 @@ import { EventEmitter } from 'node:events'
 import express from 'express'
 
 test('task admission checks checkout and actual SQLite volumes independently', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-data-disk-'))
+  // Resolved: the runner reports and stats real paths, and macOS tmpdir is a symlink.
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'forge-data-disk-')))
   const repo = path.join(root, 'repo')
   const data = path.join(root, 'sqlite-volume')
   fs.mkdirSync(data)
