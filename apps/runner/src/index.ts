@@ -6,6 +6,7 @@ import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
+import { startBoardReconciler } from './db/board-sync.js'
 
 const app = express()
 
@@ -32,6 +33,10 @@ app.use(dashboardRouter)
 app.use((_req, res) => {
   res.status(404).json({ error: 'not found' })
 })
+
+// schema.ts fails zombie tasks with raw SQL at boot, so their board entries
+// are healed here, then every 5 minutes.
+startBoardReconciler()
 
 app.listen(config.port, config.host, () => {
   console.log(`[forge] runner listening on ${config.host}:${config.port}`)

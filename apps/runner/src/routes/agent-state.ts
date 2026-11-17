@@ -27,6 +27,8 @@ import {
   type EventInput,
 } from '../db/agent-state.js'
 
+import { reconcileBoardOnRead } from '../db/board-sync.js'
+
 export const agentStateRouter = Router()
 
 function badRequest(res: Response, msg: string): void {
@@ -60,6 +62,7 @@ agentStateRouter.get('/agent-state', (req: Request, res: Response) => {
   const includeExpired = req.query.includeExpired === 'true' || req.query.includeExpired === '1'
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
+  reconcileBoardOnRead() // throttled: a read writes at most once per 30 s
   const rows = listAgentState({ repo, ticket, includeExpired })
   res.json(rows)
 })
@@ -112,6 +115,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     ? req.query.since
     : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
+  reconcileBoardOnRead() // throttled: a read writes at most once per 30 s
   const live = listAgentState({})
   const events = listEvents({ since, limit: 200 })
 

@@ -159,6 +159,39 @@ export interface CheckpointInput {
   metadata?: Record<string, unknown> | null
 }
 
+/**
+ * Statuses that mean "this agent is finished". The runner writes the first
+ * six for forge tasks; clients write free-form values such as `verified`,
+ * `done` and `aborted` through /agent-state/checkpoint.
+ */
+export const TERMINAL_BOARD_STATUSES = [
+  'completed', 'failed', 'verified', 'unverified', 'capped', 'killed',
+  'done', 'aborted', 'missing',
+] as const
+
+/** Constant SQL list for `status NOT IN (...)`. Built from literals only. */
+export const TERMINAL_BOARD_STATUSES_SQL = TERMINAL_BOARD_STATUSES.map(s => `'${s}'`).join(', ')
+
+/** Board entries the runner owns: one per task, id `forge-task-<taskId>`. */
+export const BOARD_TASK_PREFIX = 'forge-task-'
+
+export function isTerminalStatus(status: string | null | undefined): boolean {
+  return typeof status === 'string' && (TERMINAL_BOARD_STATUSES as readonly string[]).includes(status)
+}
+
+/**
+ * A settled forge-task entry stays settled. A late heartbeat (`running`, or no
+ * status at all) must not reopen it or push its expiry out, or the next sweep
+ * would settle it again and announce the same task twice. Only a task that is
+ * really queued or running again in the tasks table may reopen its entry.
+ */
+function isSettledForgeEntry(agentId: string, current: string | null, next: string | null | undefined): boolean {
+  if (!agentId.startsWith(BOARD_TASK_PREFIX) || !isTerminalStatus(current) || isTerminalStatus(next)) return false
+  const task = db.prepare('SELECT status FROM tasks WHERE id = ?')
+    .get(agentId.slice(BOARD_TASK_PREFIX.length)) as { status: string | null } | undefined
+  return !(task && (task.status === 'queued' || task.status === 'running'))
+}
+
 const DEFAULT_TTL_SECONDS = 3600 // 1h — agents that go idle this long are stale
 
 export function checkpoint(input: CheckpointInput): AgentState {
@@ -168,6 +201,7 @@ export function checkpoint(input: CheckpointInput): AgentState {
   const existing = db.prepare('SELECT * FROM agent_state WHERE agent_id = ?').get(input.agentId) as AgentStateRow | undefined
 
   if (existing) {
+    const settled = isSettledForgeEntry(input.agentId, existing.status, input.status)
     db.prepare(`
       UPDATE agent_state SET
         agent_type    = COALESCE(@agent_type, agent_type),
@@ -189,8 +223,8 @@ export function checkpoint(input: CheckpointInput): AgentState {
       intent: input.intent ?? null,
       files_touched: input.filesTouched ? JSON.stringify(input.filesTouched) : null,
       ticket: input.ticket ?? null,
-      status: input.status ?? null,
-      expires_at: expiresAt,
+      status: settled ? null : input.status ?? null,
+      expires_at: settled ? existing.expires_at : expiresAt,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
     })
   } else {
@@ -228,6 +262,11 @@ export function listAgentState(filter: ListStateFilter = {}): AgentState[] {
   const params: Record<string, unknown> = {}
   if (!filter.includeExpired) {
     where.push("expires_at > datetime('now')")
+    // A finished forge task is never live, even before its TTL lapses. Every
+    // other row (sessions, local agents, team, usage) keeps showing its final
+    // status until it expires; consumers report those just-finished agents.
+    where.push(`NOT (substr(agent_id, 1, ${BOARD_TASK_PREFIX.length}) = '${BOARD_TASK_PREFIX}'
+      AND COALESCE(status, '') IN (${TERMINAL_BOARD_STATUSES_SQL}))`)
   }
   if (filter.repo) {
     where.push("repo = @repo")

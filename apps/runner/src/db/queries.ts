@@ -1,4 +1,5 @@
 import { db } from './schema.js'
+import { isTerminalStatus, settleBoardEntry } from './board-sync.js'
 import type { AgentTask, TaskStatus } from '@forge/shared'
 
 interface TaskRow {
@@ -63,6 +64,15 @@ export function listTasks(limit = 20): AgentTask[] {
 }
 
 export function updateTaskStatus(id: string, status: TaskStatus): void {
+  writeTaskStatus(id, status)
+  // Terminal transitions must reach the agent board or the forge-task entry
+  // stays "running" until its TTL lapses. Board trouble never fails the task.
+  if (isTerminalStatus(status)) {
+    try { settleBoardEntry(id, status) } catch (err) { console.error('[board] settle failed', id, err) }
+  }
+}
+
+function writeTaskStatus(id: string, status: TaskStatus): void {
   if (status === 'running') {
     db.prepare(`UPDATE tasks SET status = ?, started_at = datetime('now') WHERE id = ?`).run(status, id)
   } else if (status === 'completed' || status === 'failed') {
