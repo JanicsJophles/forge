@@ -223,11 +223,26 @@ export interface ListStateFilter {
   includeExpired?: boolean
 }
 
+/**
+ * Statuses that mean "this agent is finished". The runner writes the first
+ * six for forge tasks; clients write free-form values such as `verified`,
+ * `done` and `aborted` through /agent-state/checkpoint.
+ */
+export const TERMINAL_BOARD_STATUSES = [
+  'completed', 'failed', 'verified', 'unverified', 'capped', 'killed',
+  'done', 'aborted', 'missing',
+] as const
+
+/** Constant SQL list for `status NOT IN (...)`. Built from literals only. */
+export const TERMINAL_BOARD_STATUSES_SQL = TERMINAL_BOARD_STATUSES.map(s => `'${s}'`).join(', ')
+
 export function listAgentState(filter: ListStateFilter = {}): AgentState[] {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (!filter.includeExpired) {
     where.push("expires_at > datetime('now')")
+    // A finished agent is never live, even if its TTL has not lapsed yet.
+    where.push(`COALESCE(status, '') NOT IN (${TERMINAL_BOARD_STATUSES_SQL})`)
   }
   if (filter.repo) {
     where.push("repo = @repo")
