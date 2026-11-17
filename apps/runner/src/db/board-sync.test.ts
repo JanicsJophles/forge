@@ -9,7 +9,7 @@ process.env.DATA_DIR = mkdtempSync(join(tmpdir(), 'forge-board-sync-'))
 const { db } = await import('./schema.js')
 const { checkpoint, listAgentState, listEvents } = await import('./agent-state.js')
 const { insertTask, updateTaskStatus } = await import('./queries.js')
-const { reconcileBoard, settleBoardEntry, boardAgentId } = await import('./board-sync.js')
+const { reconcileBoard, reconcileBoardOnRead, settleBoardEntry, boardAgentId } = await import('./board-sync.js')
 
 function addTask(id: string): void {
   insertTask({
@@ -75,16 +75,77 @@ test('settling is idempotent and never overwrites a client verdict', () => {
   assert.ok(!liveIds().includes(boardAgentId('t-twice')))
 })
 
-test('client terminal statuses are not live even before their TTL lapses', () => {
-  for (const status of ['verified', 'done', 'aborted', 'missing']) {
-    checkpoint({ agentId: `local-${status}`, agentType: 'claude', status, ttlSeconds: 18000 })
+test('only forge-task rows leave the live list on a terminal status; every other row shows until its TTL', () => {
+  const others = ['local-claude-1', 'session-claude-1', 'team', 'project-x', 'crew-usage-claude', 'fleet-lane-1', 'guest-abc']
+  for (const status of ['done', 'completed', 'failed', 'aborted', 'verified', 'missing']) {
+    for (const id of others) checkpoint({ agentId: `${id}-${status}`, agentType: 'claude', status, ttlSeconds: 3600 })
+    checkpoint({ agentId: boardAgentId(`f-${status}`), agentType: 'forge', status, ttlSeconds: 3600 })
   }
-  checkpoint({ agentId: 'local-editing', agentType: 'claude', status: 'editing', ttlSeconds: 18000 })
-  checkpoint({ agentId: 'local-nostatus', agentType: 'claude', ttlSeconds: 18000 })
-  const live = liveIds()
-  for (const status of ['verified', 'done', 'aborted', 'missing']) assert.ok(!live.includes(`local-${status}`))
-  assert.ok(live.includes('local-editing'))
-  assert.ok(live.includes('local-nostatus'))
+  checkpoint({ agentId: 'local-nostatus', agentType: 'claude', ttlSeconds: 3600 })
+  const live = listAgentState({})
+  for (const status of ['done', 'completed', 'failed', 'aborted', 'verified', 'missing']) {
+    for (const id of others) assert.equal(live.find(a => a.agentId === `${id}-${status}`)?.status, status)
+    assert.ok(!live.some(a => a.agentId === boardAgentId(`f-${status}`)))
+  }
+  assert.ok(live.some(a => a.agentId === 'local-nostatus'))
+  // An expired row of any kind is still hidden, as before.
+  db.prepare("UPDATE agent_state SET expires_at = datetime('now', '-1 seconds') WHERE agent_id = 'team-done'").run()
+  assert.ok(!liveIds().includes('team-done'))
+})
+
+test('three late running heartbeats do not reopen a settled entry: exactly one event', () => {
+  addTask('t-late')
+  register('t-late')
+  updateTaskStatus('t-late', 'running')
+  updateTaskStatus('t-late', 'completed')
+  const expiry = (): string | undefined =>
+    listAgentState({ includeExpired: true }).find(a => a.agentId === boardAgentId('t-late'))?.expiresAt
+  const settledExpiry = expiry()
+
+  for (let i = 0; i < 3; i++) {
+    register('t-late', 'running')
+    checkpoint({ agentId: boardAgentId('t-late'), ttlSeconds: 18000 }) // heartbeat with no status
+    assert.equal(reconcileBoard(), 0)
+    assert.equal(boardStatus('t-late'), 'completed')
+    assert.ok(!liveIds().includes(boardAgentId('t-late')))
+  }
+  assert.equal(expiry(), settledExpiry)
+  assert.deepEqual(eventsFor('t-late'), ['task_completed'])
+
+  // A client verdict is still accepted on a settled entry.
+  register('t-late', 'verified')
+  assert.equal(boardStatus('t-late'), 'verified')
+  // The task really running again (same id) may reopen its entry.
+  forceTask('t-late', 'running', 'NULL')
+  register('t-late', 'running')
+  assert.equal(boardStatus('t-late'), 'running')
+  assert.ok(liveIds().includes(boardAgentId('t-late')))
+})
+
+test('board reads sweep at most once per 30 seconds and otherwise write nothing', () => {
+  const writes = (): number => (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n
+  const t0 = 1_000_000_000_000
+  reconcileBoard(t0)
+  addTask('r-ghost')
+  register('r-ghost')
+  forceTask('r-ghost', 'completed')
+
+  const before = writes()
+  assert.equal(reconcileBoardOnRead(t0 + 1_000), false)
+  assert.equal(reconcileBoardOnRead(t0 + 29_999), false)
+  assert.equal(writes(), before)
+  assert.equal(boardStatus('r-ghost'), 'running')
+
+  assert.equal(reconcileBoardOnRead(t0 + 30_000), true)
+  assert.equal(boardStatus('r-ghost'), 'completed')
+  const afterSweep = writes()
+  assert.equal(reconcileBoardOnRead(t0 + 31_000), false)
+  assert.equal(writes(), afterSweep)
+  // The timer and startup sweeps are never throttled.
+  addTask('r-ghost2')
+  register('r-ghost2')
+  forceTask('r-ghost2', 'failed')
+  assert.equal(reconcileBoard(t0 + 32_000), 1)
 })
 
 test('reconcile clears ghosts for terminal and missing tasks, keeps live ones, is idempotent', () => {

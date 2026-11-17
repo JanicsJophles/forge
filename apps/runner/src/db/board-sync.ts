@@ -8,17 +8,18 @@
 //   settleBoardEntry  - called from the single task-status choke point
 //                       (updateTaskStatus) on every terminal transition.
 //   reconcileBoard    - sweeps open forge-task-* entries against the tasks
-//                       table (startup, periodic, and on board reads) so
-//                       entries missed by a crash or a restart self-heal.
+//                       table (startup, every 5 minutes, and at most once
+//                       per 30 seconds on board reads) so entries missed
+//                       by a crash or a restart self-heal.
 //
 // Raw SQL on purpose: this module must not import db/queries.ts (cycle).
 // Importing agent-state.js guarantees the board tables exist first.
 // ---------------------------------------------------------------------------
 
 import { db } from './schema.js'
-import { TERMINAL_BOARD_STATUSES, TERMINAL_BOARD_STATUSES_SQL } from './agent-state.js'
+import { BOARD_TASK_PREFIX, TERMINAL_BOARD_STATUSES_SQL, isTerminalStatus } from './agent-state.js'
 
-export const BOARD_TASK_PREFIX = 'forge-task-'
+export { BOARD_TASK_PREFIX, isTerminalStatus }
 
 /** Board status written for an entry whose task row no longer exists. */
 export const MISSING_STATUS = 'missing'
@@ -29,11 +30,10 @@ const MISSING_GRACE_SECONDS = 600
 /** Catch-up sweeps only announce tasks that ended this recently. */
 const EVENT_REPLAY_SECONDS = 900
 
-const TERMINAL = new Set<string>(TERMINAL_BOARD_STATUSES)
+/** Board reads trigger a sweep at most this often, so a read is normally write-free. */
+export const READ_RECONCILE_INTERVAL_MS = 30_000
 
-export function isTerminalStatus(status: string | null | undefined): boolean {
-  return typeof status === 'string' && TERMINAL.has(status)
-}
+let lastReconcileAt = 0
 
 export function boardAgentId(taskId: string): string {
   return `${BOARD_TASK_PREFIX}${taskId}`
@@ -91,7 +91,8 @@ interface OpenEntryRow {
  * scans the large tasks table. Old ghosts settle silently: an event is only
  * written for a task that ended inside the replay window.
  */
-export function reconcileBoard(): number {
+export function reconcileBoard(now = Date.now()): number {
+  lastReconcileAt = now
   const prefixLen = BOARD_TASK_PREFIX.length
   const rows = db.prepare(`
     SELECT a.agent_id AS agent_id, t.id AS task_id, t.status AS task_status,
@@ -113,6 +114,16 @@ export function reconcileBoard(): number {
     }
   }
   return changed
+}
+
+/**
+ * For board reads: sweep only when no sweep ran in the last 30 seconds.
+ * Returns whether it swept. Failures are logged, never thrown.
+ */
+export function reconcileBoardOnRead(now = Date.now()): boolean {
+  if (now - lastReconcileAt < READ_RECONCILE_INTERVAL_MS) return false
+  try { reconcileBoard(now) } catch (err) { console.error('[board] reconcile failed', err) }
+  return true
 }
 
 /** Run reconcileBoard now and on an interval; failures are logged, never thrown. */

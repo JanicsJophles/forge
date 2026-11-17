@@ -27,14 +27,9 @@ import {
   type EventInput,
 } from '../db/agent-state.js'
 
-import { reconcileBoard } from '../db/board-sync.js'
+import { reconcileBoardOnRead } from '../db/board-sync.js'
 
 export const agentStateRouter = Router()
-
-// Board reads self-heal first. A reconcile failure must never break a read.
-function reconcileBoardSafe(): void {
-  try { reconcileBoard() } catch (err) { console.error('[board] reconcile failed', err) }
-}
 
 function badRequest(res: Response, msg: string): void {
   res.status(400).json({ error: msg })
@@ -67,7 +62,7 @@ agentStateRouter.get('/agent-state', (req: Request, res: Response) => {
   const includeExpired = req.query.includeExpired === 'true' || req.query.includeExpired === '1'
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
-  reconcileBoardSafe()
+  reconcileBoardOnRead() // throttled: a read writes at most once per 30 s
   const rows = listAgentState({ repo, ticket, includeExpired })
   res.json(rows)
 })
@@ -120,7 +115,7 @@ agentStateRouter.get('/agent-context', (req: Request, res: Response) => {
     ? req.query.since
     : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
-  reconcileBoardSafe()
+  reconcileBoardOnRead() // throttled: a read writes at most once per 30 s
   const live = listAgentState({})
   const events = listEvents({ since, limit: 200 })
 
