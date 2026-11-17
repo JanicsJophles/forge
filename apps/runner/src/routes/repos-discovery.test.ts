@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -14,7 +14,8 @@ const cleanGit = {
 }
 
 function fixture(t: { after: (fn: () => void) => void }) {
-  const root = mkdtempSync(join(tmpdir(), 'forge-repos-'))
+  // Resolved: discoverRepos reports real paths, and macOS tmpdir is a symlink.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'forge-repos-')))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const checkout = (name: string, file = false) => {
     const path = join(root, name)

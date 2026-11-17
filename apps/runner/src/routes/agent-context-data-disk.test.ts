@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, writeFile, symlink, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import express from 'express'
 
 test('/agent-context reports independent runner-wide repo and resolved SQLite disk snapshots', async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), 'forge-context-data-disk-'))
+  // Resolved: the runner reports and stats real paths, and macOS tmpdir is a symlink.
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'forge-context-data-disk-')))
   const previousDataDir = process.env.DATA_DIR
   process.env.DATA_DIR = directory
   const { db } = await import('../db/schema.js')

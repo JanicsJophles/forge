@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { discoverRepos } from './repos.js'
@@ -8,7 +8,7 @@ import { discoverRepos } from './repos.js'
 for (const branchFails of [false, true]) {
   for (const statusFails of [false, true]) {
     test(`branch failure=${branchFails}, status failure=${statusFails} remain independent`, t => {
-      const root = mkdtempSync(join(tmpdir(), 'forge-branch-error-'))
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'forge-branch-error-')))
       t.after(() => rmSync(root, { recursive: true, force: true }))
       const subject = join(root, 'subject')
       const sibling = join(root, 'sibling')
@@ -39,7 +39,9 @@ for (const branchFails of [false, true]) {
       ])
       assert.deepEqual(branchReads.sort(), [sibling, subject])
       assert.deepEqual(statusReads.sort(), [sibling, subject])
-      assert.equal(JSON.stringify(repos).includes('private'), false)
+      // The fixture root is excluded from the leak check: on macOS the real
+      // temp path is under /private, which is not a leaked probe error.
+      assert.equal(JSON.stringify(repos).replaceAll(root, '').includes('private'), false)
     })
   }
 }
