@@ -51,14 +51,20 @@ say() { printf '[deploy-live] %s\n' "$*"; }
 die() { printf '[deploy-live] FAILED: %s\n' "$*" >&2; exit 1; }
 
 # Run a command line on the runner host. FORGE_LOCAL=1 is for rehearsals against a sandbox.
-r() { if [ "${FORGE_LOCAL:-0}" = 1 ]; then bash -c "$1"; else ssh -o BatchMode=yes -o ConnectTimeout=15 "$HOST" "$1"; fi; }
+# rs passes this script's stdin through (remote scripts, tar streams); r never reads stdin.
+# One multiplexed SSH connection for the whole run: logins to 207 can take 10+ seconds each.
+CM=$(mktemp -d /tmp/fdl.XXXXXX)
+SSH_OPTS="-o BatchMode=yes -o ConnectTimeout=30 -o ControlMaster=auto -o ControlPath=$CM/cm -o ControlPersist=120"
+# shellcheck disable=SC2086
+rs() { if [ "${FORGE_LOCAL:-0}" = 1 ]; then bash -c "$1"; else ssh $SSH_OPTS "$HOST" "$1"; fi; }
+r() { rs "$1" </dev/null; }
 sum256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 REMOTE_SUM='if command -v sha256sum >/dev/null 2>&1; then xargs sha256sum; else xargs shasum -a 256; fi'
 remote_manifest() { r "cd '$APP' && find $1 -type f ! -name '*.test.ts' | LC_ALL=C sort | $REMOTE_SUM"; }
 
 # One JSON-speaking helper, run with the runner's own Node so the box needs no jq.
 probe() {
-  r "'$NODE' - $PORT $*" <<'JS'
+  rs "'$NODE' - $PORT $*" <<'JS'
 const [port, cmd, ...args] = process.argv.slice(2)
 const base = `http://127.0.0.1:${port}`
 async function call(path, init = {}) {
@@ -124,7 +130,7 @@ commands[cmd](...args).catch(err => { console.error(err.message); process.exit(1
 JS
 }
 
-db_scalar() { r "sqlite3 -readonly '$APP/data/forge.db'" <<<"$1"; }
+db_scalar() { rs "sqlite3 -readonly '$APP/data/forge.db'" <<<"$1"; }
 active_in_db() { db_scalar "SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running');"; }
 # Board entries shown as live whose task has ended, or vanished more than 10 minutes ago.
 ghosts() {
@@ -145,7 +151,7 @@ wait_healthy() {
 
 # Restore dist + src (and optionally forge.db) from a backup dir on the host, then restart.
 restore_from() {
-  r "bash -s -- '$APP' '$1' '$PM2_NAME' '$2' '$STATE'" <<'SH'
+  rs "bash -s -- '$APP' '$1' '$PM2_NAME' '$2' '$STATE'" <<'SH'
 set -euo pipefail
 app=$1 b=$2 name=$3 restore_db=$4 state=$5
 tar -tzf "$b/code.tgz" >/dev/null
@@ -180,6 +186,9 @@ on_exit() {
       say "ROLLBACK FAILED. The runner may be down. Backup: $BACKUP (code.tgz, forge.db). Check PM2 process $PM2_NAME on 207."
     fi
   fi
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS -O exit "$HOST" >/dev/null 2>&1 || true
+  rm -rf "$CM"
   exit "$code"
 }
 trap on_exit EXIT
@@ -262,7 +271,7 @@ say "      swap $(echo $DIST_FILES $SRC_FILES); restart $PM2_NAME; verify; smoke
 if [ "$DRY" = 1 ]; then say "dry run: all read-only checks passed. Nothing changed on 207."; exit 0; fi
 
 # 4. baseline smoke on the old code
-r "bash -s -- '$SMOKE_REPO'" <<'SH' || die "could not prepare the smoke-test repo; nothing else was changed"
+rs "bash -s -- '$SMOKE_REPO'" <<'SH' || die "could not prepare the smoke-test repo; nothing else was changed"
 set -euo pipefail
 if [ ! -d "$1/.git" ]; then
   mkdir -p "$1"
@@ -278,7 +287,7 @@ done
 
 # 5. backups
 say "backing up to $BACKUP ..."
-r "bash -s -- '$APP' '$BACKUP' '$BASE' '$SHA'" <<'SH' || die "backup failed; code and DB were not changed"
+rs "bash -s -- '$APP' '$BACKUP' '$BASE' '$SHA'" <<'SH' || die "backup failed; code and DB were not changed"
 set -euo pipefail
 app=$1 b=$2
 mkdir -p "$b"
@@ -291,7 +300,7 @@ SH
 # 6. stage beside the app (same filesystem), verify, then rename into place and restart
 # shellcheck disable=SC2086
 (cd "$BUILD/apps/runner" && COPYFILE_DISABLE=1 tar --format ustar -cf - $DIST_FILES $SRC_FILES) \
-  | r "mkdir -p '$STAGE' && tar --no-same-owner -xf - -C '$STAGE'" || die "staging failed; live code and DB were not changed"
+  | rs "mkdir -p '$STAGE' && tar --no-same-owner -xf - -C '$STAGE'" || die "staging failed; live code and DB were not changed"
 STAGED=$(r "cd '$STAGE' && find dist src -type f | LC_ALL=C sort | $REMOTE_SUM")
 # shellcheck disable=SC2086
 LOCAL=$(cd "$BUILD/apps/runner" && printf '%s\n' $DIST_FILES $SRC_FILES | LC_ALL=C sort | xargs shasum -a 256)
@@ -300,7 +309,7 @@ LOCAL=$(cd "$BUILD/apps/runner" && printf '%s\n' $DIST_FILES $SRC_FILES | LC_ALL
 SWAPPED=1
 set +e
 # shellcheck disable=SC2086
-r "bash -s -- '$APP' '$STAGE' '$PORT' '$PM2_NAME' $(echo $DIST_FILES $SRC_FILES)" <<'SH'
+rs "bash -s -- '$APP' '$STAGE' '$PORT' '$PM2_NAME' $(echo $DIST_FILES $SRC_FILES)" <<'SH'
 set -euo pipefail
 app=$1 stage=$2 port=$3 name=$4; shift 4
 if ! curl -fsS -m 10 "http://127.0.0.1:$port/health" | grep -q '"activeTasks":0'; then rm -rf "$stage"; exit 3; fi
