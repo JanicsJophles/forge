@@ -47,6 +47,12 @@ interface ContextDiskOptions {
   freeDiskBytes: (path: string) => number
 }
 
+import { reconcileBoard } from '../db/board-sync.js'
+
+function reconcileBoardSafe(): void {
+  try { reconcileBoard() } catch (err) { console.error('[board] reconcile failed', err) }
+}
+
 export const agentStateRouter = Router()
 
 function badRequest(res: Response, msg: string): void {
@@ -109,6 +115,7 @@ agentStateRouter.get('/agent-state', (req: Request, res: Response) => {
   const includeExpired = req.query.includeExpired === 'true' || req.query.includeExpired === '1'
   const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : undefined
+  reconcileBoardSafe()
   const rows = listAgentState({ repo, ticket, includeExpired })
   res.json(rows)
 })
@@ -215,6 +222,7 @@ export function createAgentContextRouter(options: ContextDiskOptions = {
       ? req.query.since
       : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
+    reconcileBoardSafe()
     const live = listAgentState({ repo })
     const eventWindow = listEvents({ since, repo, limit: 201 })
     const events = eventWindow.slice(0, 200)

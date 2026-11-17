@@ -13,6 +13,7 @@ import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
 import { rootRouter } from './routes/root.js'
+import { startBoardReconciler } from './db/board-sync.js'
 import { requireBearerAuth } from './routes/auth.js'
 
 const app = express()
@@ -81,6 +82,9 @@ const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
   res.status(500).json({ error: 'internal error' })
 }
 app.use(errorHandler)
+
+// Heal board entries whose tasks ended while the runner was down, then every 5 min.
+startBoardReconciler()
 
 app.listen(config.port, config.host, () => {
   console.log(`[forge] runner listening on ${config.host}:${config.port}`)

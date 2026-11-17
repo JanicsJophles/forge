@@ -268,11 +268,16 @@ export interface ListStateFilter {
   includeExpired?: boolean
 }
 
+const TERMINAL_STATUS_SQL = ['completed', 'failed', 'verified', 'unverified', 'capped', 'killed', 'missing']
+  .map(s => `'${s}'`).join(', ')
+
 export function listAgentState(filter: ListStateFilter = {}): AgentState[] {
   const where: string[] = []
   const params: Record<string, unknown> = {}
   if (!filter.includeExpired) {
     where.push("expires_at > datetime('now')")
+    // A finished agent is never live, even if its TTL has not lapsed yet.
+    where.push(`COALESCE(status, '') NOT IN (${TERMINAL_STATUS_SQL})`)
   }
   if (filter.repo) {
     where.push("repo = @repo")
