@@ -7,15 +7,19 @@
 #        --restore-db   with --rollback: also restore forge.db from that backup (drops tasks run since)
 #        --force        with --rollback: proceed while tasks are active (the restart kills them)
 #
-# What a deploy does, in order. Any failure after step 6 rolls the code back by itself.
+# What a deploy does, in order. Any failure after step 6 rolls the code back by itself
+# (it first waits, up to FORGE_ROLLBACK_WAIT seconds, for tasks running on the new code).
+# Every failure ends with the one manual recovery command for the state it stopped in.
 #   1. refuse unless /health and the tasks table both show 0 active tasks
 #   2. refuse unless the src on 207 is byte-identical to the last deployed commit
 #   3. build the commit locally; refuse unless dist differs from the live dist only in
 #      the files this commit's src changes explain
 #   4. run one trivial Claude task and one trivial Codex task on the OLD code, so a
 #      broken CLI login is not later blamed on the deploy
-#   5. back up forge.db (sqlite3 .backup + quick_check) and tar the live dist + src
-#   6. stage the changed files next to the app, move them into place, restart PM2
+#   5. back up forge.db (VACUUM INTO: one snapshot, writers cannot restart it; hard
+#      timeout; quick_check, page and row counts) and tar the live dist + src
+#   6. stage the changed files next to the app; re-check /health and the tasks table;
+#      move the files into place, restart PM2
 #   7. verify /health, a stable PM2 process, and that the board ghost count dropped
 #   8. run the two trivial tasks again and check their logs and board entries
 #
@@ -32,6 +36,8 @@ PM2_NAME="${FORGE_PM2_NAME:-forge-runner}"
 SMOKE_REPO="${FORGE_SMOKE_REPO:-/opt/repos/forge-deploy-smoke}"
 DEFAULT_BASE=e85607b2c6deb94d20a5c44479b26438c88aab13   # what ran on 207 before this script existed
 KEEP_BACKUPS=3
+BACKUP_TIMEOUT="${FORGE_BACKUP_TIMEOUT:-300}"   # seconds the DB copy may take before it is killed
+ROLLBACK_WAIT="${FORGE_ROLLBACK_WAIT:-900}"     # seconds an automatic rollback waits for running tasks
 TERMINAL="'completed','failed','verified','unverified','capped','killed','done','aborted','missing'"
 
 DRY=0 MODE=deploy RESTORE_DB=0 FORCE=0 ARG=""
@@ -41,13 +47,16 @@ for a in "$@"; do
     --rollback) MODE=rollback ;;
     --restore-db) RESTORE_DB=1 ;;
     --force) FORCE=1 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
     -*) echo "unknown flag: $a" >&2; exit 2 ;;
     *) ARG="$a" ;;
   esac
 done
 
 say() { printf '[deploy-live] %s\n' "$*"; }
+# The exact manual recovery command for the state the script is in; printed last on any failure.
+RECOVER="none needed, 207 is unchanged"
+recover_code() { RECOVER="ssh $HOST 'tar -tzf $1/code.tgz >/dev/null && rm -rf $APP/dist $APP/src && tar -xzf $1/code.tgz -C $APP && pm2 restart $PM2_NAME && sleep 3 && curl -s http://127.0.0.1:$PORT/health'"; }
 die() { printf '[deploy-live] FAILED: %s\n' "$*" >&2; exit 1; }
 
 # Run a command line on the runner host. FORGE_LOCAL=1 is for rehearsals against a sandbox.
@@ -131,7 +140,16 @@ JS
 }
 
 db_scalar() { rs "sqlite3 -readonly '$APP/data/forge.db'" <<<"$1"; }
-active_in_db() { db_scalar "SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running');"; }
+ACTIVE_SQL="FROM tasks WHERE status IN ('queued','running')"
+active_in_db() { db_scalar "SELECT COUNT(*) $ACTIVE_SQL;"; }
+# Active tasks right now: the larger of /health (spawned agents) and the tasks table
+# (a queued task has no process yet). Prints "down" when the runner does not answer.
+active_now() {
+  local h d
+  h=$(probe health 2>/dev/null) || { echo down; return 0; }
+  d=$(active_in_db)
+  echo $(( h > d ? h : d ))
+}
 # Board entries shown as live whose task has ended, or vanished more than 10 minutes ago.
 ghosts() {
   db_scalar "SELECT COUNT(*) FROM agent_state a LEFT JOIN tasks t ON t.id = substr(a.agent_id, 12)
@@ -150,42 +168,80 @@ wait_healthy() {
 }
 
 # Restore dist + src (and optionally forge.db) from a backup dir on the host, then restart.
+# Re-entrant: the tarball is unpacked into a temp dir and swapped in with renames, so a
+# run that died half way is finished by simply running it again. With the DB: the copy is
+# made and verified while the runner still runs, and any failure after the stop puts the
+# current DB back and restarts the runner.
 restore_from() {
-  rs "bash -s -- '$APP' '$1' '$PM2_NAME' '$2' '$STATE'" <<'SH'
+  rs "bash -s -- '$APP' '$1' '$PM2_NAME' '$2' '$STATE' '$REMOTE_SUM'" <<'SH'
 set -euo pipefail
-app=$1 b=$2 name=$3 restore_db=$4 state=$5
-tar -tzf "$b/code.tgz" >/dev/null
-aside="$b/replaced-$(date -u +%Y%m%dT%H%M%SZ)"
-mkdir -p "$aside"
+app=$1 b=$2 name=$3 restore_db=$4 state=$5 sums=$6
+aside="$b/replaced-$(date -u +%Y%m%dT%H%M%SZ)-$$" tmp="$app/.restore-tmp" new="$app/data/forge.db.restore"
+rm -rf "$tmp" "$new"; mkdir -p "$aside" "$tmp"
+tar -xzf "$b/code.tgz" -C "$tmp"
+(cd "$tmp" && find dist -type f | LC_ALL=C sort | sh -c "$sums") >"$b/dist.sums"
 if [ "$restore_db" = 1 ]; then
-  [ "$(sqlite3 "$b/forge.db" 'PRAGMA quick_check')" = ok ]
+  cp "$b/forge.db" "$new"
+  [ "$(sqlite3 "$new" 'PRAGMA quick_check')" = ok ]
+fi
+for d in dist src; do
+  if [ -e "$app/$d" ]; then mv "$app/$d" "$aside/$d"; fi
+  mv "$tmp/$d" "$app/$d"
+done
+rmdir "$tmp"
+if [ "$restore_db" = 1 ]; then
+  undo() {
+    if [ -e "$aside/forge.db" ]; then rm -f "$app/data/forge.db"; mv "$aside"/forge.db* "$app/data/"; fi
+    rm -f "$new"; pm2 restart "$name" >/dev/null
+    echo "restore-db failed: the current forge.db is back in place and $name was restarted" >&2
+  }
+  trap 'undo' ERR
   pm2 stop "$name" >/dev/null
   for f in forge.db forge.db-wal forge.db-shm; do
     if [ -e "$app/data/$f" ]; then mv "$app/data/$f" "$aside/"; fi
   done
-  cp "$b/forge.db" "$app/data/forge.db"
+  mv "$new" "$app/data/forge.db"
+  trap - ERR
 fi
-mv "$app/dist" "$app/src" "$aside/"
-tar -xzf "$b/code.tgz" -C "$app"
 pm2 restart "$name" >/dev/null
 cp "$b/FROM_SHA" "$state/DEPLOYED_SHA"
 SH
 }
+# A rollback is proven by /health AND by the live dist hashing equal to the backed-up dist.
+verify_restored() { wait_healthy && [ "$(remote_manifest dist)" = "$(r "cat '$1/dist.sums'")" ]; }
 
-SWAPPED=0 BACKUP="" BUILD=""
+SWAPPED=0 BACKING_UP=0 BACKUP="" BUILD=""
 on_exit() {
-  local code=$?
+  local code=$? a waited=0
+  set +e
+  trap '' INT TERM   # cleanup and rollback must run to the end; a second Ctrl-C is ignored
   if [ -n "$BUILD" ]; then rm -rf "$BUILD"; fi
+  if [ "$BACKING_UP" = 1 ]; then
+    # kill the remote watchdog shell and its sqlite3, then drop the partial backup
+    r "if [ -f '$BACKUP/backup.pid' ]; then kill \$(cat '$BACKUP/backup.pid') 2>/dev/null; sleep 2; fi; rm -rf '$BACKUP'" \
+      && { say "backup aborted: no copy process is left on 207 and the partial backup was removed"; RECOVER="none needed, 207 is unchanged"; }
+  fi
   if [ "$code" -ne 0 ] && [ "$SWAPPED" = 1 ]; then
     SWAPPED=0
     say "deploy failed after the swap; ROLLING BACK the code from $BACKUP"
-    if restore_from "$BACKUP" 0 && wait_healthy; then
-      say "ROLLED BACK. 207 runs the previous code again and /health is ok. forge.db was not touched."
+    a=$(active_now)
+    while [ "$a" != 0 ] && [ "$a" != down ] && [ "$waited" -lt "$ROLLBACK_WAIT" ]; do
+      [ "$waited" != 0 ] || say "$a task(s) are active on the new code; waiting up to ${ROLLBACK_WAIT}s for them to finish before the restart"
+      sleep 5; waited=$((waited + 5)); a=$(active_now)
+    done
+    if [ "$a" != 0 ] && [ "$a" != down ]; then
+      say "still $a active after ${ROLLBACK_WAIT}s; rolling back anyway. The restart FAILS these tasks: $(db_scalar "SELECT group_concat(id, ' ') $ACTIVE_SQL;")"
+    elif [ "$waited" -gt 0 ]; then say "the active tasks finished after ${waited}s; no task is killed by this rollback"
+    else say "no task is active (runner: $a); restarting now"; fi
+    if restore_from "$BACKUP" 0 && verify_restored "$BACKUP"; then
+      say "ROLLED BACK. /health is ok and the live dist hashes equal the backed-up ones. forge.db was not touched."
       say "The replaced files are kept under $BACKUP/replaced-*; the DB backup is $BACKUP/forge.db."
+      RECOVER="none needed, 207 runs the previous code"
     else
-      say "ROLLBACK FAILED. The runner may be down. Backup: $BACKUP (code.tgz, forge.db). Check PM2 process $PM2_NAME on 207."
+      say "ROLLBACK FAILED. The runner may be down. Backup: $BACKUP (code.tgz, forge.db)."
     fi
   fi
+  [ "$code" -eq 0 ] || say "manual recovery: $RECOVER"
   # shellcheck disable=SC2086
   ssh $SSH_OPTS -O exit "$HOST" >/dev/null 2>&1 || true
   rm -rf "$CM"
@@ -199,16 +255,20 @@ if [ "$MODE" = rollback ]; then
   [ -n "$BACKUP_NAME" ] || die "no backups under $STATE/backups on 207; nothing to roll back to"
   B="$STATE/backups/$BACKUP_NAME"
   r "test -f '$B/code.tgz' && test -f '$B/forge.db' && test -f '$B/FROM_SHA'" || die "$B is not a complete backup"
-  ACTIVE=$(probe health 2>/dev/null || echo unknown)
+  ACTIVE=$(active_now)
   say "rollback target: $B (code from commit $(r "cat '$B/FROM_SHA'")); active tasks now: $ACTIVE"
   [ "$RESTORE_DB" = 1 ] && say "forge.db will ALSO be restored; tasks and board changes since that backup are dropped (the current DB is kept aside)"
-  if [ "$ACTIVE" != 0 ] && [ "$ACTIVE" != unknown ] && [ "$FORCE" != 1 ]; then
+  if [ "$ACTIVE" != 0 ] && [ "$ACTIVE" != down ] && [ "$FORCE" != 1 ]; then
     die "$ACTIVE task(s) are active and the restart would kill them; wait, or pass --force"
   fi
   if [ "$DRY" = 1 ]; then say "dry run: would move the current dist + src aside, restore them from the backup and restart $PM2_NAME. Nothing changed."; exit 0; fi
-  restore_from "$B" "$RESTORE_DB" || die "restore step failed; check $B and PM2 process $PM2_NAME on 207"
-  wait_healthy || die "runner did not become healthy after the rollback; check PM2 process $PM2_NAME on 207"
-  say "ROLLED BACK to $(r "cat '$STATE/DEPLOYED_SHA'"). /health is ok."
+  RECOVER="scripts/deploy-live.sh --rollback $BACKUP_NAME   (safe to repeat; it finishes a half-done restore)"
+  # Safe in every state: a no-op unless a moved-aside DB is still there (then: put it back, restart).
+  [ "$RESTORE_DB" != 1 ] || RECOVER="ssh $HOST 'A=\$(ls -1d $B/replaced-*/ | sort | tail -n 1); if [ -e \$A/forge.db ]; then rm -f $APP/data/forge.db; mv \$A/forge.db* $APP/data/; pm2 restart $PM2_NAME; fi'   then: $RECOVER"
+  restore_from "$B" "$RESTORE_DB" || die "restore step failed"
+  recover_code "$B"
+  verify_restored "$B" || die "after the rollback the runner is not healthy or its dist does not hash equal to the backup"
+  say "ROLLED BACK to $(r "cat '$STATE/DEPLOYED_SHA'"). /health is ok and the live dist hashes equal the backed-up ones."
   exit 0
 fi
 
@@ -285,19 +345,47 @@ for p in claude codex; do
   probe smoke "$p" "$SMOKE_REPO" 0 || die "the $p smoke task fails BEFORE the deploy, so the box is unhealthy on its own (CLI login?). Code and DB were not changed."
 done
 
-# 5. backups
-say "backing up to $BACKUP ..."
-rs "bash -s -- '$APP' '$BACKUP' '$BASE' '$SHA'" <<'SH' || die "backup failed; code and DB were not changed"
+# 5. backups. VACUUM INTO reads one snapshot, so the board's writes (every ~12 s) cannot
+# restart it the way they restart `.backup`. A watchdog kills it after BACKUP_TIMEOUT.
+say "backing up to $BACKUP (limit ${BACKUP_TIMEOUT}s) ..."
+BACKING_UP=1
+RECOVER="ssh $HOST 'kill \$(cat $BACKUP/backup.pid); rm -rf $BACKUP'"
+rs "bash -s -- '$APP' '$BACKUP' '$BASE' '$SHA' '$BACKUP_TIMEOUT'" <<'SH' || die "backup failed or timed out; code and DB were not changed"
 set -euo pipefail
-app=$1 b=$2
+app=$1 b=$2 limit=$5 src="$1/data/forge.db" pid=""
 mkdir -p "$b"
-sqlite3 -cmd '.timeout 30000' "$app/data/forge.db" ".backup '$b/forge.db'"
+trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || true; fi' EXIT
+trap 'exit 143' TERM INT HUP
+need_kb=$(( $(stat -c %s "$src" 2>/dev/null || stat -f %z "$src") / 1024 + 1048576 ))
+[ "$(df -Pk "$b" | awk 'NR==2 {print $4}')" -gt "$need_kb" ] || { echo "not enough free disk for the DB copy (need ${need_kb} KB)" >&2; exit 1; }
+rows_before=$(sqlite3 -readonly "$src" 'SELECT COUNT(*) FROM tasks')
+sqlite3 -cmd '.timeout 30000' "$src" "VACUUM INTO '$b/forge.db'" & pid=$!
+echo "$$ $pid" >"$b/backup.pid"   # the caller kills both if this shell is cut off
+t=0
+while kill -0 "$pid" 2>/dev/null; do
+  if [ "$t" -ge "$limit" ]; then echo "DB copy exceeded ${limit}s; killed" >&2; exit 1; fi
+  sleep 1; t=$((t + 1))
+done
+wait "$pid"; pid=""
 [ "$(sqlite3 "$b/forge.db" 'PRAGMA quick_check')" = ok ]
+# The copy is repacked, so its page count is near the source's used pages but not equal
+# (measured: 0.2% larger). Accept 50% to 110%, and no fewer task rows than before the copy.
+pages=$(sqlite3 "$b/forge.db" 'PRAGMA page_count') rows=$(sqlite3 "$b/forge.db" 'SELECT COUNT(*) FROM tasks')
+src_pages=$(sqlite3 -readonly "$src" 'PRAGMA page_count') src_free=$(sqlite3 -readonly "$src" 'PRAGMA freelist_count')
+used=$(( src_pages - src_free ))
+if [ "$pages" -gt $(( used * 11 / 10 + 16 )) ] || [ "$pages" -lt $(( used / 2 )) ] || [ "$rows" -lt "$rows_before" ]; then
+  echo "DB copy looks wrong: $pages pages, $rows task rows (source: $src_pages pages, $src_free free, $rows_before rows)" >&2; exit 1
+fi
 tar -czf "$b/code.tgz" -C "$app" dist src
 echo "$3" >"$b/FROM_SHA"; echo "$4" >"$b/TO_SHA"
+rm -f "$b/backup.pid"
+echo "DB copy ok in ${t}s: $pages pages (source $src_pages, $src_free free), $rows task rows"
 SH
+BACKING_UP=0
+RECOVER="none needed, 207 is unchanged (the backup $BACKUP can stay)"
 
 # 6. stage beside the app (same filesystem), verify, then rename into place and restart
+RECOVER="ssh $HOST 'rm -rf $STAGE'   (a leftover staging dir is all that can remain; live code and DB are unchanged)"
 # shellcheck disable=SC2086
 (cd "$BUILD/apps/runner" && COPYFILE_DISABLE=1 tar --format ustar -cf - $DIST_FILES $SRC_FILES) \
   | rs "mkdir -p '$STAGE' && tar --no-same-owner -xf - -C '$STAGE'" || die "staging failed; live code and DB were not changed"
@@ -307,19 +395,27 @@ LOCAL=$(cd "$BUILD/apps/runner" && printf '%s\n' $DIST_FILES $SRC_FILES | LC_ALL
 [ "$STAGED" = "$LOCAL" ] || { r "rm -rf '$STAGE'"; die "staged files do not match the build; live code and DB were not changed"; }
 
 SWAPPED=1
+recover_code "$BACKUP"
 set +e
 # shellcheck disable=SC2086
 rs "bash -s -- '$APP' '$STAGE' '$PORT' '$PM2_NAME' $(echo $DIST_FILES $SRC_FILES)" <<'SH'
 set -euo pipefail
 app=$1 stage=$2 port=$3 name=$4; shift 4
-if ! curl -fsS -m 10 "http://127.0.0.1:$port/health" | grep -q '"activeTasks":0'; then rm -rf "$stage"; exit 3; fi
+# Last look before the restart: spawned agents (/health) and queued or running rows.
+if ! curl -fsS -m 10 "http://127.0.0.1:$port/health" | grep -q '"activeTasks":0' ||
+   [ "$(sqlite3 -readonly "$app/data/forge.db" "SELECT COUNT(*) FROM tasks WHERE status IN ('queued','running')")" != 0 ]; then
+  rm -rf "$stage"; exit 3
+fi
 for f in "$@"; do mkdir -p "$app/$(dirname "$f")"; mv -f "$stage/$f" "$app/$f"; done
 rm -rf "$stage"
 pm2 restart "$name" >/dev/null
 SH
 RC=$?
 set -e
-if [ "$RC" = 3 ]; then SWAPPED=0; die "a task started during the backup; nothing was swapped. Run again when idle."; fi
+if [ "$RC" = 3 ]; then
+  SWAPPED=0; RECOVER="none needed, nothing was swapped; run scripts/deploy-live.sh $SHA again when idle"
+  die "a task is queued or running (/health or the tasks table); nothing was swapped and the runner was not restarted"
+fi
 [ "$RC" = 0 ] || die "swap or restart failed"
 say "swapped and restarted $PM2_NAME"
 
