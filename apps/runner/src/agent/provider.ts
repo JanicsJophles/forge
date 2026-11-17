@@ -10,10 +10,13 @@ export function providerCommand(provider: AgentProvider, model?: string): { comm
       command: 'claude',
       args: ['--dangerously-skip-permissions', ...(model ? ['--model', model] : []), '-p'],
     }
-    // Stdin keeps user prompts out of argv; workspace-write preserves the sandbox.
+    // Stdin keeps user prompts out of argv. Codex's own sandbox (bubblewrap) cannot create its mount namespace in
+    // the runner's unprivileged LXC ("bwrap: Failed to make / slave: Permission denied"), so every shell command
+    // failed while the task still reported success. Like Claude above, Codex relies on the container and the
+    // non-root run user (executionIdentity refuses uid 0) as its sandbox.
     case 'codex': return {
       command: 'codex',
-      args: ['exec', '--sandbox', 'workspace-write', ...(model ? ['-m', model] : []), '-'],
+      args: ['exec', '--dangerously-bypass-approvals-and-sandbox', ...(model ? ['-m', model] : []), '-'],
     }
     default: throw new Error('Unsupported agent provider')
   }

@@ -13,7 +13,7 @@ test('providerCommand appends --model for claude only when a model is set', () =
 test('providerCommand appends -m for codex only when a model is set', () => {
   assert.deepEqual(providerCommand('codex', 'gpt-5-codex'), {
     command: 'codex',
-    args: ['exec', '--sandbox', 'workspace-write', '-m', 'gpt-5-codex', '-'],
+    args: ['exec', '--dangerously-bypass-approvals-and-sandbox', '-m', 'gpt-5-codex', '-'],
   })
 })
 
@@ -24,7 +24,7 @@ test('providerCommand preserves the default args when no model is supplied', () 
   })
   assert.deepEqual(providerCommand('codex'), {
     command: 'codex',
-    args: ['exec', '--sandbox', 'workspace-write', '-'],
+    args: ['exec', '--dangerously-bypass-approvals-and-sandbox', '-'],
   })
 })
 
@@ -33,4 +33,19 @@ test('providerCommand keeps the model as a single separate argv token', () => {
   const { args } = providerCommand('claude', 'claude-opus-4.6')
   assert.ok(args.includes('claude-opus-4.6'))
   assert.equal(args[args.indexOf('--model') + 1], 'claude-opus-4.6')
+})
+
+test('providerCommand never asks codex for its bubblewrap sandbox', () => {
+  // bwrap cannot create a mount namespace in the unprivileged runner LXC: with
+  // --sandbox every shell command fails while the task still reports success.
+  for (const model of [undefined, 'gpt-5-codex']) {
+    const { command, args } = providerCommand('codex', model)
+    assert.equal(command, 'codex')
+    assert.equal(args[0], 'exec')
+    assert.equal(args.filter(arg => arg === '--dangerously-bypass-approvals-and-sandbox').length, 1)
+    assert.ok(!args.includes('--sandbox'), 'codex must not be started with --sandbox')
+    assert.ok(!args.includes('workspace-write'), 'codex must not be started with workspace-write')
+    // The prompt arrives on stdin, so the stdin marker stays the final token.
+    assert.equal(args.at(-1), '-')
+  }
 })
