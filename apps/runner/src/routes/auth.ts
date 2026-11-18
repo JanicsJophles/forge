@@ -42,7 +42,8 @@ export function requireBearerAuth(token: string | undefined): RequestHandler {
     }
     const provided = extractBearerToken(req.headers.authorization)
     if (provided === undefined || !tokensMatch(provided, token)) {
-      res.status(401).json({ error: 'unauthorized' })
+      res.status(401).json({ error: 'unauthorized', ...(req.method === 'POST' && (req.path === '/tasks' || /^\/tasks\/[^/]+\/retry$/.test(req.path))
+        ? { code: 'FORGE_AUTH_REQUIRED', accepted: false, retryable: false } : {}) })
       return
     }
     next()

@@ -40,6 +40,8 @@ test('root discovery returns the static contract; unknown paths stay 404', async
           assert.match(response.headers.get('content-type') ?? '', /application\/json/)
           const body = await response.json() as {
             providerSelectionVersion: number
+            checkoutExclusionVersion: number
+            statusProjectionVersion: number
             providers: string[]
             version: string
             authRequired: boolean
@@ -61,6 +63,8 @@ test('root discovery returns the static contract; unknown paths stay 404', async
           }
           // Existing contract fields stay byte-for-byte stable.
           assert.equal(body.providerSelectionVersion, 1)
+          assert.equal(body.checkoutExclusionVersion, 1)
+          assert.equal(body.statusProjectionVersion, 1)
           assert.deepEqual(body.providers, ['claude', 'codex'])
           // With no token configured, auth is off.
           assert.equal(body.authRequired, false)

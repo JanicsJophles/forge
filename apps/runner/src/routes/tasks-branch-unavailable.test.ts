@@ -73,7 +73,7 @@ test('create and retry reject unavailable branch probes without dispatching', as
       assert.equal(body.taskId, undefined)
       assert.equal(count(), before)
       assert.equal(launches.length, spawned)
-      if (status === 400) assert.deepEqual(body, { error: 'could not determine repository checkout branch' })
+      if (status === 400) assert.deepEqual(body, { error: 'could not determine repository checkout branch', code: 'FORGE_BRANCH_INVALID', accepted: false, retryable: false })
       if (status === 409) assert.equal(body.error, 'requested branch does not match the repository checkout')
     }
   }

@@ -186,6 +186,19 @@ Admission can reject with `400` (bad input / repo not allowlisted), `409` (the
 checkout already has an active task, or the branch claim mismatches), `429` (max
 concurrent tasks reached), or `507` (free disk below `MIN_FREE_DISK_MB`).
 
+The canonical Git checkout is reserved by queued and running tasks across
+providers. Admission and the queued INSERT use one SQLite `BEGIN IMMEDIATE`
+transaction, and provider processes start after commit. This covers both create
+and retry, including requests from Atlas pooling. Use one runner process per
+`DATA_DIR`; the guard does not coordinate independent databases or outside CLI
+sessions. Dedicated linked worktrees or clones can run independently.
+
+Proven pre-creation refusals carry `accepted:false` and a typed `code`:
+`FORGE_CHECKOUT_BUSY` (409), `FORGE_RUNNER_CAPACITY` (429), and `FORGE_DISK_FULL`
+(507) have `retryable:true`; `FORGE_REPO_INVALID` (400), `FORGE_BRANCH_INVALID`
+(400/409), and `FORGE_AUTH_REQUIRED` (401) have `retryable:false`. A timeout,
+missing receipt or other response must not be treated as proof of rejection.
+
 ### GET /tasks query parameters
 
 `repo` (exact stored value), `status` (`queued`/`running`/`completed`/`failed`),
@@ -244,6 +257,8 @@ measurement failures and continues its other checks.
 ```json
 {
   "providerSelectionVersion": 1,
+  "checkoutExclusionVersion": 1,
+  "statusProjectionVersion": 1,
   "providers": ["claude", "codex"],
   "version": "0.1.0",
   "authRequired": false,
@@ -265,6 +280,11 @@ measurement failures and continues its other checks.
 `version` (also `build.version`) includes `+<FORGE_GIT_SHA>` when configured;
 `build.gitShaPinned` indicates whether that setting is present. Provider discovery
 does not probe CLI authentication. Retention is not exposed in this response.
+
+`checkoutExclusionVersion:1` guarantees the admission contract above.
+`statusProjectionVersion:1` provides GET `/tasks/:id?view=status` without logs
+or prompts and limits its error preview to 4096 UTF-8 bytes. These are runtime
+features, not a claim about provider credentials, quota or plan eligibility.
 
 The legacy `GET /tasks/capabilities` alias has been removed. Use `GET /capabilities`
 for discovery. The old path now follows `GET /tasks/:id`: when no task with ID

@@ -71,7 +71,7 @@ test('task admission checks checkout and actual SQLite volumes independently', a
       const body = await response.json() as { taskId: string }
       if (volume) {
         assert.equal(response.status, 507)
-        assert.deepEqual(body, { error: 'insufficient disk space to accept new tasks', volume, freeMb: 99, requiredMb: 100 })
+        assert.deepEqual(body, { error: 'insufficient disk space to accept new tasks', code: 'FORGE_DISK_FULL', accepted: false, retryable: true, volume, freeMb: 99, requiredMb: 100 })
         assert.equal(probes.length, previousProbes)
         assert.equal((db.prepare('SELECT count(*) AS n FROM tasks').get() as { n: number }).n, 0)
         assert.equal(getEmitter(body.taskId), undefined)

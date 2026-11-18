@@ -2,6 +2,7 @@ import { StringDecoder } from 'node:string_decoder'
 import type Database from 'better-sqlite3'
 
 export const LOG_TAIL_BYTES = 262144
+export const STATUS_ERROR_BYTES = 4096
 export type TaskView = 'status' | 'detail'
 
 // SQLite projects the byte suffix before materializing it in Node. A suffix can
@@ -47,9 +48,10 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
       - julianday(started_at)) * 86400000.0) AS INTEGER)) END AS durationMs`
   const row = db.prepare(`SELECT id, status, created_at AS createdAt,
     started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha,
-    error_message AS errorMessage, ${duration}
+    ${view === 'status' ? `substr(CAST(error_message AS BLOB), 1, ${STATUS_ERROR_BYTES})` : 'error_message'} AS errorMessage, ${duration}
     ${provider}${autoCommit}${detail} FROM tasks WHERE id = ?`).get(id) as Record<string, unknown> | undefined
   if (!row) return undefined
+  if (view === 'status' && row.errorMessage !== null) row.errorMessage = decodeHead(row.errorMessage as Buffer)
   row.autoCommit = row.autoCommit == null ? undefined : Boolean(row.autoCommit)
   if (view === 'detail') {
     const tail = row.log_tail as Buffer | null

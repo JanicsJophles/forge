@@ -44,7 +44,7 @@ function resolveCheckout(storedPath: string):
   | { ok: true; repo: string }
   | { ok: false; status: number; body: Record<string, unknown> } {
   if (!isRepoAllowed(storedPath)) {
-    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS' } }
+    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS', code: 'FORGE_REPO_INVALID', accepted: false, retryable: false } }
   }
 
   let repo: string
@@ -52,16 +52,16 @@ function resolveCheckout(storedPath: string):
     repo = realpathSync(storedPath)
     if (!statSync(repo).isDirectory()) throw new Error('not a directory')
   } catch {
-    return { ok: false, status: 400, body: { error: 'repo must be an existing directory' } }
+    return { ok: false, status: 400, body: { error: 'repo must be an existing directory', code: 'FORGE_REPO_INVALID', accepted: false, retryable: false } }
   }
   if (!isRepoAllowed(repo)) {
-    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS' } }
+    return { ok: false, status: 400, body: { error: 'repo path is not in ALLOWED_REPO_PATHS', code: 'FORGE_REPO_INVALID', accepted: false, retryable: false } }
   }
 
   try {
     repo = checkoutRoot(repo)
   } catch {
-    return { ok: false, status: 400, body: { error: 'repo must be inside a Git checkout with a discoverable root' } }
+    return { ok: false, status: 400, body: { error: 'repo must be inside a Git checkout with a discoverable root', code: 'FORGE_REPO_INVALID', accepted: false, retryable: false } }
   }
 
   return { ok: true, repo }
@@ -80,7 +80,7 @@ type AdmissionOutcome =
 
 function admitCheckout(repo: string, requestedBranch: string | undefined): AdmissionOutcome {
   if (!isRepoAllowed(repo)) {
-    return { ok: false, status: 400, body: { error: 'repo checkout root is not in ALLOWED_REPO_PATHS' } }
+    return { ok: false, status: 400, body: { error: 'repo checkout root is not in ALLOWED_REPO_PATHS', code: 'FORGE_REPO_INVALID', accepted: false, retryable: false } }
   }
 
   // Keep admission synchronous: queued login probes also own their checkout.
@@ -95,7 +95,7 @@ function admitCheckout(repo: string, requestedBranch: string | undefined): Admis
     return activeRepo === repo
   })
   if (conflict) {
-    return { ok: false, status: 409, body: { error: 'repo checkout already has an active task', taskId: conflict.id } }
+    return { ok: false, status: 409, body: { error: 'repo checkout already has an active task', code: 'FORGE_CHECKOUT_BUSY', accepted: false, retryable: true, taskId: conflict.id } }
   }
 
   // Disk guard: the runner git-pulls into the repo and the agent writes files
@@ -115,6 +115,7 @@ function admitCheckout(repo: string, requestedBranch: string | undefined): Admis
           status: 507,
           body: {
             error: 'insufficient disk space to accept new tasks',
+            code: 'FORGE_DISK_FULL', accepted: false, retryable: true,
             volume,
             freeMb: Math.floor(freeBytes / (1024 * 1024)),
             requiredMb: config.minFreeDiskMb,
@@ -127,7 +128,7 @@ function admitCheckout(repo: string, requestedBranch: string | undefined): Admis
   }
 
   if (countActiveTasks() >= config.maxConcurrentTasks) {
-    return { ok: false, status: 429, body: { error: 'max concurrent tasks reached' } }
+    return { ok: false, status: 429, body: { error: 'max concurrent tasks reached', code: 'FORGE_RUNNER_CAPACITY', accepted: false, retryable: true } }
   }
 
   // Resolve checkout state before accepting any caller claim. Symbolic unborn
@@ -137,39 +138,50 @@ function admitCheckout(repo: string, requestedBranch: string | undefined): Admis
   try {
     checkoutBranch = getCurrentBranch(repo)
   } catch {
-    return { ok: false, status: 400, body: { error: 'could not determine repository checkout branch' } }
+    return { ok: false, status: 400, body: { error: 'could not determine repository checkout branch', code: 'FORGE_BRANCH_INVALID', accepted: false, retryable: false } }
   }
   if (requestedBranch !== undefined && checkoutBranch !== requestedBranch) {
-    return { ok: false, status: 409, body: { error: 'requested branch does not match the repository checkout' } }
+    return { ok: false, status: 409, body: { error: 'requested branch does not match the repository checkout', code: 'FORGE_BRANCH_INVALID', accepted: false, retryable: false } }
   }
   return { ok: true, branch: checkoutBranch }
 }
 
-// Build, persist and kick off a queued task from already-admitted inputs. Used by
-// both POST / and POST /:id/retry so the two dispatch paths stay identical.
-function dispatchTask(fields: {
+// Admission and queued reservation commit together before any CLI is started.
+// BEGIN IMMEDIATE also prevents another writer accepting this same checkout
+// between the active-task read and INSERT. Both POST and retry use this path.
+type TaskFields = {
   provider: AgentProvider
   autoCommit: boolean
   model: string | undefined
   repo: string
   branch: string
   prompt: string
-}): string {
-  const task: AgentTask = {
-    id: uuidv4(),
-    provider: fields.provider,
-    autoCommit: fields.autoCommit,
-    model: fields.model,
-    repo: fields.repo,
-    branch: fields.branch,
-    prompt: fields.prompt,
-    status: 'queued',
-    log: '',
-    createdAt: new Date().toISOString(),
-  }
+}
+function reserveTask(fields: Omit<TaskFields, 'branch'> & { branch?: string }):
+  | { ok: true; task: AgentTask }
+  | Exclude<AdmissionOutcome, { ok: true }> {
+  return db.transaction(() => {
+    const admission = admitCheckout(fields.repo, fields.branch)
+    if (!admission.ok) return admission
+    const task: AgentTask = {
+      id: uuidv4(),
+      provider: fields.provider,
+      autoCommit: fields.autoCommit,
+      model: fields.model,
+      repo: fields.repo,
+      branch: admission.branch,
+      prompt: fields.prompt,
+      status: 'queued',
+      log: '',
+      createdAt: new Date().toISOString(),
+    }
 
-  insertTask(task)
+    insertTask(task)
+    return { ok: true as const, task }
+  }).immediate()
+}
 
+function dispatchTask(task: AgentTask): string {
   const emitter = createEmitter(task.id)
 
   // Run async — do not await here
@@ -225,26 +237,24 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   // Reject a malformed branch claim (body-level) before running shared admission;
   // admitCheckout receives an already-validated non-empty string or undefined.
   if (body.branch !== undefined && (typeof body.branch !== 'string' || !body.branch.trim())) {
-    res.status(400).json({ error: 'branch must be a non-empty string' })
+    res.status(400).json({ error: 'branch must be a non-empty string', code: 'FORGE_BRANCH_INVALID', accepted: false, retryable: false })
     return
   }
 
-  const admission = admitCheckout(repo, body.branch)
-  if (!admission.ok) {
-    res.status(admission.status).json(admission.body)
-    return
-  }
-
-  const taskId = dispatchTask({
+  const reservation = reserveTask({
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
     model: body.model,
     repo,
-    branch: admission.branch,
+    branch: body.branch,
     prompt: body.prompt,
   })
+  if (!reservation.ok) {
+    res.status(reservation.status).json(reservation.body)
+    return
+  }
 
-  res.status(201).json({ taskId })
+  res.status(201).json({ taskId: dispatchTask(reservation.task) })
 })
 
 // GET /tasks — bounded history with exact stored-value filters.
@@ -436,22 +446,19 @@ tasksRouter.post('/:id/retry', (req: Request, res: Response) => {
     return
   }
   const { repo } = checkout
-  const admission = admitCheckout(repo, undefined)
-  if (!admission.ok) {
-    res.status(admission.status).json(admission.body)
-    return
-  }
-
-  const taskId = dispatchTask({
+  const reservation = reserveTask({
     provider: source.provider ?? 'claude',
     autoCommit: source.autoCommit == null ? config.autoCommit : Boolean(source.autoCommit),
     model: source.model ?? undefined,
     repo,
-    branch: admission.branch,
     prompt: source.prompt,
   })
+  if (!reservation.ok) {
+    res.status(reservation.status).json(reservation.body)
+    return
+  }
 
-  res.status(201).json({ taskId })
+  res.status(201).json({ taskId: dispatchTask(reservation.task) })
 })
 
 // DELETE /tasks/:id — kill active task
