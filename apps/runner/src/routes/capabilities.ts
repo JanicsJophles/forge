@@ -15,6 +15,10 @@ export const capabilitiesRouter = Router()
 capabilitiesRouter.get('/capabilities', (_req, res) => {
   res.json({
     providerSelectionVersion: 1,
+    // Dispatchers must require these before contributing a runtime to a pool.
+    // Exclusion covers tasks sharing this runner DB, not arbitrary external CLIs.
+    checkoutExclusionVersion: 1,
+    statusProjectionVersion: 1,
     providers: ['claude', 'codex'],
     version,
     // Whether a bearer token guards state-changing routes. Lets dispatchers

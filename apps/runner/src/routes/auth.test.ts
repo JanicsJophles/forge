@@ -54,7 +54,7 @@ test('auth on: mutating methods require a correct bearer token; reads stay open'
     // Missing header → 401, no passthrough.
     const missing = await fetch(`${base}/tasks`, { method: 'POST' })
     assert.equal(missing.status, 401)
-    assert.deepEqual(await missing.json(), { error: 'unauthorized' })
+    assert.deepEqual(await missing.json(), { error: 'unauthorized', code: 'FORGE_AUTH_REQUIRED', accepted: false, retryable: false })
 
     // Wrong token, wrong scheme, and bare token all → 401.
     for (const authorization of [`Bearer ${TOKEN}x`, `Basic ${TOKEN}`, TOKEN, 'Bearer ']) {
@@ -115,7 +115,7 @@ test('real POST /tasks is gated: 401 without token creates no task; correct toke
           body: JSON.stringify({ repo: dataDir, prompt: 'hello' }),
         })
         assert.equal(blocked.status, 401)
-        assert.deepEqual(await blocked.json(), { error: 'unauthorized' })
+        assert.deepEqual(await blocked.json(), { error: 'unauthorized', code: 'FORGE_AUTH_REQUIRED', accepted: false, retryable: false })
 
         // Correct token clears the gate and reaches the handler: an empty body
         // yields the handler's own 400 (not a 401), proving passthrough without

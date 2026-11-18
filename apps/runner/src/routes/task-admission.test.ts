@@ -7,6 +7,7 @@ import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { EventEmitter } from 'node:events'
 import express from 'express'
+import Database from 'better-sqlite3'
 
 test('canonical checkout admission reserves queued probes and releases terminal tasks', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-admission-'))
@@ -28,13 +29,21 @@ test('canonical checkout admission reserves queued probes and releases terminal 
   const originalSpawn = childProcess.spawn
   const originalExec = childProcess.execSync
   const originalExecFile = childProcess.execFileSync
+  let peer: Database.Database | undefined
+  let checkedWriterFence = false
   // Fake provider login stays pending until explicitly failed. Only Git
   // discovery runs real child processes, against these temporary repositories.
-  childProcess.execFileSync = ((file: string, args: string[], options: object) => file === 'git'
-    ? originalExecFile(file, args, options)
-    : 'fake:x:1234:1234::/tmp:/bin/sh') as typeof childProcess.execFileSync
+  childProcess.execFileSync = ((file: string, args: string[], options: object) => {
+    if (peer && db.inTransaction && !checkedWriterFence) {
+      // A second SQLite writer cannot race admission between its read and INSERT.
+      assert.throws(() => peer!.prepare('UPDATE tasks SET log = log').run(), /locked/)
+      checkedWriterFence = true
+    }
+    return file === 'git' ? originalExecFile(file, args, options) : 'fake:x:1234:1234::/tmp:/bin/sh'
+  }) as typeof childProcess.execFileSync
   childProcess.execSync = (() => { gitCalls++; return '' }) as typeof childProcess.execSync
   childProcess.spawn = (() => {
+    assert.equal(db.inTransaction, false, 'provider processes start only after the reservation commits')
     const probe = new EventEmitter()
     Object.assign(probe, { kill: () => true })
     probes.push(probe)
@@ -43,25 +52,32 @@ test('canonical checkout admission reserves queued probes and releases terminal 
   syncBuiltinESMExports()
   const { tasksRouter } = await import('./tasks.js')
   const { db } = await import('../db/schema.js')
+  peer = new Database(db.name, { timeout: 0 })
   const { getTask, insertTask, updateTaskStatus } = await import('../db/queries.js')
   const { getEmitter } = await import('../agent/stream.js')
   const app = express().use(express.json()).use('/tasks', tasksRouter)
   const server = app.listen(0, '127.0.0.1')
   await new Promise<void>(resolve => server.once('listening', resolve))
   const address = server.address() as import('node:net').AddressInfo
-  async function post(candidate: string) {
+  async function post(candidate: string, provider = 'codex') {
     const response = await fetch(`http://127.0.0.1:${address.port}/tasks`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo: candidate, prompt: 'test', branch: 'main', provider: 'codex' }),
+      body: JSON.stringify({ repo: candidate, prompt: 'test', branch: 'main', provider }),
     })
-    return { status: response.status, body: await response.json() as { taskId: string } }
+    return { status: response.status, body: await response.json() as { taskId: string; code?: string; accepted?: boolean; retryable?: boolean } }
   }
   try {
     for (const invalid of [path.join(root, 'missing'), path.join(root, 'file')]) {
       assert.equal((await post(invalid)).status, 400)
     }
     assert.equal(probes.length, 0)
-    const first = await post(repo)
+    const raced = await Promise.all([post(repo), post(repo, 'claude')])
+    assert.deepEqual(raced.map(r => r.status).sort(), [201, 409])
+    const first = raced.find(r => r.status === 201)!
+    const refused = raced.find(r => r.status === 409)!
+    assert.equal(refused.body.code, 'FORGE_CHECKOUT_BUSY')
+    assert.equal(refused.body.accepted, false)
+    assert.equal(refused.body.retryable, true)
     assert.equal(first.status, 201)
     assert.equal(getTask(first.body.taskId)?.status, 'queued')
     assert.ok(getEmitter(first.body.taskId))
@@ -72,6 +88,7 @@ test('canonical checkout admission reserves queued probes and releases terminal 
     }
     assert.equal(probes.length, 1)
     assert.equal(gitCalls, 0)
+    assert.equal(checkedWriterFence, true)
     assert.equal((db.prepare('SELECT count(*) AS n FROM tasks').get() as { n: number }).n, 1)
     updateTaskStatus(first.body.taskId, 'running')
     assert.equal((await post(repo)).status, 409)
@@ -93,7 +110,7 @@ test('canonical checkout admission reserves queued probes and releases terminal 
     await new Promise(resolve => setImmediate(resolve))
     server.closeAllConnections()
     await new Promise<void>(resolve => server.close(() => resolve()))
-    db.close()
+    peer.close(); db.close()
     childProcess.spawn = originalSpawn
     childProcess.execSync = originalExec
     childProcess.execFileSync = originalExecFile
