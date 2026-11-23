@@ -202,6 +202,7 @@ test(
     const home = fields[5]
     assert.ok(uid > 0, 'the read-only account must be non-root')
 
+    chmodSync(root, 0o711)
     const real = tmp('rootint-real-')
     initRepo(real)
     writeFileSync(join(real, 'a.txt'), 'a\n')
@@ -214,7 +215,7 @@ test(
     execFileSync('chown', ['-R', `${uid}:${gid}`, copyRoot])
     const dest = join(copyRoot, 'repo')
 
-    const { baseHead } = await prepareReadOnlyCopy(real, dest, { uid, gid, home })
+    const { baseHead } = await prepareReadOnlyCopy(real, dest, { uid, gid, home }, { requireReadOnlySource: true })
     assert.equal(baseHead, git(real, 'rev-parse', 'HEAD'))
     // Everything the worker created must be owned by the read-only account.
     const { statSync } = await import('node:fs')
@@ -222,3 +223,29 @@ test(
     assert.equal(statSync(join(dest, 'a.txt')).uid, uid, 'copied files are owned by the read-only account')
   },
 )
+
+
+test('root integration: a writable ignored source file refuses read-only preparation', {
+  skip: !(runningAsRoot && roUser),
+}, async () => {
+  const fields = execFileSync('getent', ['passwd', roUser!], { encoding: 'utf8' }).trim().split(':')
+  const uid = Number(fields[2]), gid = Number(fields[3])
+  chmodSync(root, 0o711)
+  const real = tmp('writable-source-')
+  initRepo(real)
+  writeFileSync(join(real, '.gitignore'), 'ignored.txt\n')
+  git(real, 'add', '.'); git(real, 'commit', '-qm', 'fixture')
+  writeFileSync(join(real, 'ignored.txt'), 'must stay untouched')
+  execFileSync('chmod', ['-R', 'a+rX', real])
+  chmodSync(join(real, 'ignored.txt'), 0o666)
+  const copyRoot = tmp('writable-copy-')
+  execFileSync('chown', ['-R', `${uid}:${gid}`, copyRoot])
+  await assert.rejects(prepareReadOnlyCopy(real, join(copyRoot, 'repo'), { uid, gid }, { requireReadOnlySource: true }), /write access to the source/)
+  assert.equal(readFileSync(join(real, 'ignored.txt'), 'utf8'), 'must stay untouched')
+  assert.equal(existsSync(join(copyRoot, 'repo')), false)
+  chmodSync(join(real, 'ignored.txt'), 0o644)
+  chmodSync(root, 0o777)
+  try {
+    await assert.rejects(prepareReadOnlyCopy(real, join(copyRoot, 'repo'), { uid, gid }, { requireReadOnlySource: true }), /write access to a source ancestor/)
+  } finally { chmodSync(root, 0o711) }
+})

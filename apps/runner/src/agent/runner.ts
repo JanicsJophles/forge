@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
-import { chownSync, mkdtempSync, statSync } from 'node:fs'
+import { chownSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
@@ -22,6 +22,7 @@ import {
 } from './provider.js'
 import { resolveReadOnlyIdentity } from '../capabilities.js'
 import {
+  prepareReadOnlyBase,
   prepareReadOnlyCopy,
   reportReadOnlyChangesAsync,
   provisionReadOnlyHome,
@@ -33,12 +34,11 @@ import { createTaskCgroup, type TaskCgroup } from './cgroup.js'
 
 interface ActiveProc {
   proc: ChildProcess
-  // Read-only agents are spawned in their own process group so we can kill the
-  // whole group (including setsid/nohup children) rather than just the leader.
+  // Writable legacy tasks may use a process group; read-only uses a cgroup.
   detached: boolean
   // cgroup node containing the task's whole process tree. A cgroup kill reaps even a
   // setsid/daemonized child that escaped the process group (finding A). Null when the
-  // runner could not create one (non-root / no cgroup v2) → process-group fallback.
+  // runner handles a writable task. Read-only refuses launch without containment.
   cgroup?: TaskCgroup | null
   // Pending SIGTERM→SIGKILL escalation timer, if a termination is in flight.
   escalation?: ReturnType<typeof setTimeout>
@@ -80,7 +80,7 @@ export function killTask(taskId: string): boolean {
     }, config.killGraceMs)
     entry.escalation.unref()
   }
-  return true
+  return !entry.cgroup?.failure
 }
 
 export function countActiveProcs(): number {
@@ -129,10 +129,17 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   // Remove the disposable copy without ever letting root recurse a tree the read-only
   // account could swap for a symlink mid-delete (finding D). Idempotent + never throws.
   let copyCleaned = false
+  let copyHandedOff = false
   async function cleanupCopy(): Promise<void> {
     if (copyCleaned || !tmpRoot) return
     copyCleaned = true
-    await cleanupReadOnlyCopy(tmpRoot, { uid: identity.uid, gid: identity.gid })
+    if (!copyHandedOff) {
+      // No child has ever received this private root-owned directory. It contains
+      // only paths created by trusted provisioning; no agent can race this cleanup.
+      try { rmSync(tmpRoot, { recursive: true, force: true }) } catch { /* leave private setup state for operator cleanup */ }
+    } else {
+      await cleanupReadOnlyCopy(tmpRoot, { uid: identity.uid, gid: identity.gid })
+    }
     cgroup?.remove()
   }
 
@@ -166,15 +173,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     // the root-owned base dir (never /tmp — finding D), owned by the isolated account,
     // with ALL preparation done as that unprivileged account in a child process.
     try {
+      prepareReadOnlyBase(config.readonlyBaseDir)
       tmpRoot = mkdtempSync(join(config.readonlyBaseDir, READONLY_TMP_PREFIX))
-      // Hand the temp root to the read-only account so it can create and traverse to the
-      // copy by absolute path. Root ONLY creates + chowns the dir; it never writes inside
-      // (finding 7). chown is a harmless no-op when the runner is not root (tests).
-      try {
-        chownSync(tmpRoot, identity.uid, identity.gid)
-      } catch {
-        // Not running as root — the copy stays owned by the current user.
-      }
+      // Keep mode-0700 root ownership until credential provisioning has finished.
+      // Handing this dir to the shared agent uid earlier lets another task replace
+      // home/config paths while the privileged parent is still writing them.
     } catch (err) {
       cgroup?.remove()
       fail(`[forge] read-only: cannot create disposable copy dir under ${config.readonlyBaseDir}: ${err instanceof Error ? err.message : 'unknown error'}`)
@@ -192,12 +195,22 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     const authSrc = provider === 'claude'
       ? (config.readonlyClaudeConfigDir ?? join(identity.home, '.claude'))
       : (config.readonlyCodexHome ?? join(identity.home, '.codex'))
-    const eph = provisionReadOnlyHome(tmpRoot!, { uid: identity.uid, gid: identity.gid }, provider, authSrc)
-    ephemeralHome = eph.home
-    launchEnv = readOnlyEnv(eph.home, identity.username, provider, {
-      claudeConfigDir: provider === 'claude' ? eph.configDir : undefined,
-      codexHome: provider === 'codex' ? eph.configDir : undefined,
-    })
+    try {
+      const eph = provisionReadOnlyHome(tmpRoot!, { uid: identity.uid, gid: identity.gid }, provider, authSrc)
+      ephemeralHome = eph.home
+      launchEnv = readOnlyEnv(eph.home, identity.username, provider, {
+        claudeConfigDir: provider === 'claude' ? eph.configDir : undefined,
+        codexHome: provider === 'codex' ? eph.configDir : undefined,
+      })
+      // Last privileged write below the task root: after this handoff all workers
+      // and recursive cleanup run only as the read-only identity.
+      chownSync(tmpRoot!, identity.uid, identity.gid)
+      copyHandedOff = true
+    } catch (err) {
+      await cleanupCopy()
+      fail(`[forge] read-only home setup failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+      return
+    }
   } else {
     launchEnv = identity.env
   }
@@ -236,6 +249,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
           timeoutMs: config.readonlyPrepTimeoutMs,
           onSpawn: (child) => { prepEntry.proc = child },
           cgroup: cgroup!,
+          requireReadOnlySource: true,
         },
       )
       baseHead = prepared.baseHead
@@ -246,6 +260,13 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       if (prepEntry.escalation) clearTimeout(prepEntry.escalation)
       await cleanupCopy()
       fail(`[forge] read-only: failed to prepare disposable copy: ${err instanceof Error ? err.message : 'unknown error'}`)
+      return
+    }
+    if (cgroup?.failure) {
+      activeProcs.delete(task.id)
+      if (prepEntry.escalation) clearTimeout(prepEntry.escalation)
+      await cleanupCopy()
+      fail(cgroup.failure)
       return
     }
     activeProcs.delete(task.id)
@@ -339,8 +360,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   }
 
   // Reap the whole process tree. The cgroup reaches setsid/daemonized children that a
-  // process-group kill misses (finding A); the group kill is the fallback when there is
-  // no cgroup. Harmless if everything is already gone.
+  // process-group kill misses. Read-only never falls back to a process-group claim.
   function reapTree(): void {
     cgroup?.killAll()
   }
@@ -369,13 +389,24 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
   flushTimer = setInterval(flush, 500)
 
+  let readonlyLogChars = 0
+  const MAX_READONLY_LOG = 16 * 1024 * 1024
+  function appendOutput(text: string): void {
+    if (!readOnly) { buffer += text; return }
+    const remaining = MAX_READONLY_LOG - readonlyLogChars
+    if (remaining <= 0) return
+    const bounded = text.slice(0, remaining)
+    buffer += bounded
+    readonlyLogChars += bounded.length
+    if (readonlyLogChars === MAX_READONLY_LOG) buffer += '\n[forge] read-only log capped at 16 MiB\n'
+  }
   proc.stdout!.on('data', (data: Buffer) => {
-    buffer += data.toString()
+    appendOutput(data.toString())
   })
 
   proc.stderr!.on('data', (data: Buffer) => {
     const text = data.toString().split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
-    buffer += text
+    appendOutput(text)
   })
 
   // Finalise the task exactly once. Driven by 'close' normally; for read-only tasks a
@@ -411,11 +442,11 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
 
       await cleanupCopy()
 
-      if (code === 0) {
+      if (code === 0 && !cgroup?.failure) {
         updateTaskStatus(task.id, 'completed')
         emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
       } else {
-        const errMsg = `[forge] ${provider} exited with code ${code}\n`
+        const errMsg = cgroup?.failure ? `[forge] ${cgroup.failure}\n` : `[forge] ${provider} exited with code ${code}\n`
         appendLog(task.id, errMsg)
         setErrorMessage(task.id, `${provider} exited with code ${code}`)
         updateTaskStatus(task.id, 'failed')

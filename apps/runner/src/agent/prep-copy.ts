@@ -10,12 +10,15 @@
 // Contract: argv = [realRepo, copyRepo]. On success it prints a single JSON line
 // `{"baseHead":"<sha>"}` to stdout and exits 0. Any failure throws → non-zero exit.
 import {
+  accessSync,
   closeSync,
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
+  fstatSync,
+  readSync,
   readlinkSync,
+  readdirSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -31,6 +34,7 @@ import {
   isSafeRelPath,
   PER_FILE_COPY_CAP,
   TOTAL_COPY_CAP,
+  GIT_HARDENING_FLAGS,
 } from './git-safe.js'
 
 interface OverlayState {
@@ -171,10 +175,25 @@ function overlayPath(realRepo: string, copyRepo: string, rel: string, state: Ove
   // Read with O_NOFOLLOW (st is already a regular file, but guard against TOCTOU),
   // write with O_CREAT|O_EXCL|O_NOFOLLOW so we only ever create a fresh real file
   // inside the real-dir parent — a write can never be redirected through a symlink.
-  const srcFd = openSync(src, FS.O_RDONLY | FS.O_NOFOLLOW)
+  // NONBLOCK prevents a regular-file -> FIFO race from blocking open. Recheck
+  // the opened descriptor and read a bounded amount even if the source grows.
+  const srcFd = openSync(src, FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK)
   let buf: Buffer
   try {
-    buf = readFileSync(srcFd)
+    const opened = fstatSync(srcFd)
+    const cap = Math.min(PER_FILE_COPY_CAP, TOTAL_COPY_CAP - state.totalBytes)
+    if (!opened.isFile() || opened.size > cap) return
+    const chunks: Buffer[] = []
+    let length = 0
+    while (length <= cap) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, cap + 1 - length))
+      const n = readSync(srcFd, chunk, 0, chunk.length, null)
+      if (n === 0) break
+      length += n
+      if (length > cap) return
+      chunks.push(chunk.subarray(0, n))
+    }
+    buf = Buffer.concat(chunks, length)
   } finally {
     closeSync(srcFd)
   }
@@ -187,15 +206,72 @@ function overlayPath(realRepo: string, copyRepo: string, rel: string, state: Ove
   }
 }
 
-export function prepareCopy(realRepo: string, copyRepo: string): string {
+/** Refuse ACL/mode write access to any real-tree entry, including ignored files. */
+export function assertSourceReadOnly(realRepo: string): void {
+  if (!lstatSync(realRepo).isDirectory()) throw new Error('read-only source must be a real directory')
+  // Write access to a parent can rename/delete even a non-writable repository.
+  // A root-owned sticky temp directory protects another uid's children.
+  for (let parent = dirname(realRepo); ; parent = dirname(parent)) {
+    const st = lstatSync(parent)
+    if (!st.isDirectory()) throw new Error('read-only source has a symlinked ancestor')
+    let writable = false
+    try { accessSync(parent, FS.W_OK); writable = true } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EACCES') throw error
+    }
+    if (writable && (!(st.mode & 0o1000) || st.uid === process.getuid!())) {
+      throw new Error('read-only account has write access to a source ancestor')
+    }
+    if (parent === dirname(parent)) break
+  }
+  const pending = [realRepo]
+  let entries = 0
+  while (pending.length) {
+    const path = pending.pop()!
+    if (++entries > 1_000_000) throw new Error('read-only source exceeds inspection limit')
+    const st = lstatSync(path)
+    // Parent writability controls replacement/deletion of links; never follow a
+    // user-controlled link merely to inspect it.
+    if (st.isSymbolicLink()) continue
+    try {
+      accessSync(path, FS.W_OK)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EACCES') throw error
+      if (st.isDirectory()) for (const name of readdirSync(path)) pending.push(join(path, name))
+      continue
+    }
+    throw new Error('read-only account has write access to the source repository')
+  }
+}
+
+function shellArgument(value: string): string {
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'"
+}
+
+export function prepareCopy(realRepo: string, copyRepo: string, requireReadOnlySource = false): string {
+  if (requireReadOnlySource) assertSourceReadOnly(realRepo)
+  // upload-pack validates the resolved git directory separately from the worktree.
+  // Trust only the exact resolved paths, never safe.directory=*.
+  const gitDir = safeGit(['rev-parse', '--absolute-git-dir'], realRepo, { safeDir: realRepo, worktree: realRepo })
+  const commonDir = safeGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], realRepo, { safeDir: realRepo, worktree: realRepo })
+  if (requireReadOnlySource) {
+    assertSourceReadOnly(gitDir)
+    if (commonDir !== gitDir) assertSourceReadOnly(commonDir)
+  }
   // 1. Clone committed history only, over the regular transport (no hardlinks into
   //    the real object store). safeDir trusts the real repo's ownership (it is owned
   //    by the writable account, not us); the hardening flags neutralise any hostile
   //    repo-local config for this and the upload-pack subprocess.
   safeGit(
-    ['clone', '--no-local', '--no-hardlinks', '--quiet', realRepo, copyRepo],
+    ['clone', '--no-local', '--no-hardlinks', '--quiet',
+      // Git strips -c configuration from its upload-pack environment. Carry the
+      // exact ownership exceptions and hardening flags into that trusted command
+      // explicitly. Shell quoting is necessary because Git invokes this as a command.
+      '--upload-pack', ['git', ...GIT_HARDENING_FLAGS,
+        '-c', `safe.directory=${realRepo}`, '-c', `safe.directory=${gitDir}`,
+        '-c', `safe.directory=${commonDir}`, 'upload-pack'].map(shellArgument).join(' '),
+      realRepo, copyRepo],
     dirname(copyRepo),
-    { safeDir: realRepo },
+    { safeDir: realRepo, extraSafeDirs: [gitDir, commonDir] },
   )
 
   // 2. Overlay the real working tree: tracked changes vs HEAD (+ deletions) and
@@ -248,7 +324,7 @@ if (isMain()) {
     process.exit(2)
   }
   try {
-    const baseHead = prepareCopy(realRepo, copyRepo)
+    const baseHead = prepareCopy(realRepo, copyRepo, process.argv[4] === '--require-read-only-source')
     process.stdout.write(JSON.stringify({ baseHead }) + '\n')
     process.exit(0)
   } catch (err) {

@@ -1,13 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, existsSync, rmSync, rmdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
+import { execFileSync } from 'node:child_process'
 import { spawnContained } from './contained.js'
 import { createTaskCgroup, type TaskCgroup } from './cgroup.js'
 
-const fake = (addPid: (pid: number) => void): TaskCgroup => ({ dir: '', addPid, killAll() {}, remove() {} })
+const fake = (addPid: (pid: number) => void): TaskCgroup => ({ dir: '', addPid, killAll() { return true }, remove() {} })
 
 test('attachment failure never starts the target', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'forge-barrier-'))
@@ -63,4 +64,27 @@ test('cancelling the blocked launcher prevents the target', async () => {
     await once(child, 'close')
     assert.equal(existsSync(marker), false)
   } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+
+test('a teardown permission failure disables further read-only launches', {
+  skip: process.getuid?.() !== 0 || process.env.FORGE_TEST_CGROUP !== '1',
+}, () => {
+  const moduleUrl = new URL('./cgroup.ts', import.meta.url).href
+  const script = `
+    const { createTaskCgroup, containmentAvailable } = await import(${JSON.stringify(moduleUrl)});
+    const group = createTaskCgroup('failure-' + process.pid);
+    if (!group) throw new Error('requires delegated cgroup');
+    process.setgroups([]); process.setgid(65534); process.setuid(65534);
+    console.log(JSON.stringify({ dir: group.dir, killed: group.killAll(), failure: group.failure, available: containmentAvailable() }));
+  `
+  const output = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    encoding: 'utf8', env: { PATH: '/usr/local/bin:/usr/bin:/bin', READONLY_CGROUP_PARENT: process.env.READONLY_CGROUP_PARENT },
+  })
+  const result = JSON.parse(output)
+  try {
+    assert.equal(result.killed, false)
+    assert.match(result.failure, /teardown failed/)
+    assert.equal(result.available, false)
+  } finally { rmdirSync(result.dir) }
 })

@@ -1,4 +1,3 @@
-import { mkdirSync, chmodSync } from 'node:fs'
 import express from 'express'
 import { config } from './config.js'
 import './db/schema.js'  // runs CREATE TABLE on import
@@ -7,7 +6,7 @@ import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
-import { sweepStaleReadOnlyDirs } from './agent/readonly.js'
+import { sweepStaleReadOnlyDirs, prepareReadOnlyBase } from './agent/readonly.js'
 import { sweepStaleTaskCgroups } from './agent/cgroup.js'
 import { readOnlyIdentityFor } from './capabilities.js'
 
@@ -17,8 +16,7 @@ import { readOnlyIdentityFor } from './capabilities.js'
 // when the runner is not root (CI / dev) read-only is unsupported anyway, so a failure
 // here is not fatal.
 try {
-  mkdirSync(config.readonlyBaseDir, { recursive: true })
-  chmodSync(config.readonlyBaseDir, 0o711)
+  prepareReadOnlyBase(config.readonlyBaseDir)
 } catch (err) {
   console.warn(`[forge] could not prepare read-only base dir ${config.readonlyBaseDir}: ${err instanceof Error ? err.message : 'unknown error'}`)
 }

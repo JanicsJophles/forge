@@ -1,15 +1,19 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import {
   chmodSync,
-  cpSync,
+  closeSync,
+  constants as FS,
+  fstatSync,
+  openSync,
+  readFileSync,
+  writeFileSync,
   lchownSync,
   lstatSync,
   mkdirSync,
   readdirSync,
   rmdirSync,
-  statSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type { AgentProvider } from '@forge/shared'
@@ -41,6 +45,7 @@ export interface PrepOpts {
   // Move the prep child into the task's cgroup so a cgroup kill reaps it and anything
   // it forks (finding A). No-op when the runner has no cgroup (non-root / CI).
   cgroup?: TaskCgroup
+  requireReadOnlySource?: boolean
 }
 
 // The runner's own temp-dir prefix for read-only copies. Distinct from the test
@@ -78,9 +83,10 @@ export function prepareReadOnlyCopy(
   return new Promise((resolve, reject) => {
     const { args } = workerInvocation('prep-copy')
     const launchOpts = { cwd: process.cwd(), env: minimalGitEnv(identity.home), uid: identity.uid, gid: identity.gid }
+    const workerArgs = [...args, realRepo, copyRepo, ...(opts.requireReadOnlySource ? ['--require-read-only-source'] : [])]
     const child = opts.cgroup
-      ? spawnContained(opts.cgroup, process.execPath, [...args, realRepo, copyRepo], launchOpts)
-      : spawn(process.execPath, [...args, realRepo, copyRepo], { ...launchOpts, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      ? spawnContained(opts.cgroup, process.execPath, workerArgs, launchOpts)
+      : spawn(process.execPath, workerArgs, { ...launchOpts, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
 
     opts.onSpawn?.(child)
 
@@ -100,8 +106,9 @@ export function prepareReadOnlyCopy(
       finish(() => reject(new Error('read-only copy preparation timed out')))
     }, opts.timeoutMs && opts.timeoutMs >= 1 && opts.timeoutMs <= 2 ** 31 - 1 ? opts.timeoutMs : DEFAULT_PREP_TIMEOUT_MS)
 
-    child.stdout!.on('data', d => { out += d.toString() })
-    child.stderr!.on('data', d => { err += d.toString() })
+    const append = (value: string, chunk: Buffer): string => (value + chunk.toString()).slice(-1024 * 1024)
+    child.stdout!.on('data', d => { out = append(out, d) })
+    child.stderr!.on('data', d => { err = append(err, d) })
     child.on('error', e => finish(() => reject(e)))
     child.on('exit', () => { opts.cgroup?.killAll() })
     child.on('close', code => {
@@ -218,8 +225,9 @@ export function reportReadOnlyChangesAsync(
       finish('(read-only report timed out)')
     }, opts.timeoutMs && opts.timeoutMs >= 1 && opts.timeoutMs <= 2 ** 31 - 1 ? opts.timeoutMs : DEFAULT_REPORT_TIMEOUT_MS)
 
-    child.stdout?.on('data', d => { out += d.toString() })
-    child.stderr?.on('data', d => { err += d.toString() })
+    const append = (value: string, chunk: Buffer): string => (value + chunk.toString()).slice(0, 1024 * 1024)
+    child.stdout?.on('data', d => { out = append(out, d) })
+    child.stderr?.on('data', d => { err = append(err, d) })
     child.on('error', () => finish('(could not run read-only report)'))
     child.on('exit', () => { opts.cgroup?.killAll() })
     child.on('close', code => {
@@ -228,19 +236,38 @@ export function reportReadOnlyChangesAsync(
   })
 }
 
-// lchown every entry under `path` (never following a symlink out of the tree) to the
-// read-only account. Best-effort: a chown we cannot perform (not root, in tests) is
-// simply skipped — the tree then stays owned by the current user, which is correct
-// for the non-root case.
-function chownRecursive(path: string, uid: number, gid: number): void {
-  let st
-  try { st = lstatSync(path) } catch { return }
-  try { lchownSync(path, uid, gid) } catch { /* not permitted (non-root) */ }
-  if (st.isDirectory()) {
-    let entries: string[]
-    try { entries = readdirSync(path) } catch { return }
-    for (const e of entries) chownRecursive(join(path, e), uid, gid)
+// A protected leaf is insufficient if an agent owns an ancestor and can rename
+// the leaf. Reject links and writable ancestors before privileged provisioning.
+function assertProtectedDirectory(path: string): void {
+  if (!isAbsolute(path)) throw new Error('read-only path must be absolute')
+  const owner = process.getuid!()
+  for (let current = path; ; current = dirname(current)) {
+    const st = lstatSync(current)
+    const stickyRoot = st.uid === 0 && (st.mode & 0o1000) !== 0
+    if (!st.isDirectory() || (st.uid !== owner && st.uid !== 0) || ((st.mode & 0o022) !== 0 && !stickyRoot)) {
+      throw new Error('read-only path has an unprotected ancestor')
+    }
+    if (current === dirname(current)) break
   }
+}
+
+/** Create the base only through protected real directories, never a planted link. */
+export function prepareReadOnlyBase(base: string): void {
+  if (!isAbsolute(base)) throw new Error('read-only base must be absolute')
+  const absent: string[] = []
+  let current = base
+  for (;;) {
+    try { lstatSync(current); break } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      absent.unshift(current)
+      current = dirname(current)
+    }
+  }
+  assertProtectedDirectory(current)
+  for (const directory of absent) mkdirSync(directory, { mode: 0o711 })
+  assertProtectedDirectory(base)
+  if (lstatSync(base).uid !== process.getuid!()) throw new Error('read-only base must be runner-owned')
+  chmodSync(base, 0o711)
 }
 
 export interface EphemeralHome {
@@ -267,29 +294,48 @@ export function provisionReadOnlyHome(
   provider: AgentProvider,
   authSrc?: string,
 ): EphemeralHome {
+  // The parent must still exclusively own the task root. In production the
+  // runner is root; tests may run as their own unprivileged uid.
+  const owner = process.getuid!()
+  assertProtectedDirectory(tmpRoot)
+  const root = lstatSync(tmpRoot)
+  if (!root.isDirectory() || root.uid !== owner || (root.mode & 0o077) !== 0) {
+    throw new Error('read-only home requires a private runner-owned task directory')
+  }
   const home = join(tmpRoot, 'home')
-  mkdirSync(home, { recursive: true })
+  mkdirSync(home, { mode: 0o700 }) // exclusive: never reuse a planted directory/link
 
   let configDir: string | undefined
+  let credential: string | undefined
   if (authSrc) {
-    try {
-      if (statSync(authSrc).isDirectory()) {
-        configDir = join(home, provider === 'claude' ? '.claude' : '.codex')
-        // dereference:false so a symlink in the pristine auth dir is copied as a link,
-        // never followed out into the host.
-        cpSync(authSrc, configDir, { recursive: true, dereference: false, force: true })
-      }
-    } catch {
-      configDir = undefined
+    assertProtectedDirectory(authSrc)
+    const source = lstatSync(authSrc)
+    if (!source.isDirectory() || source.uid !== owner || (source.mode & 0o022) !== 0) {
+      throw new Error('read-only auth must come from a protected runner-owned directory')
     }
+    // Copy only the provider credential, never user config, hooks, plugins,
+    // symlinks or arbitrary files from the account's config tree.
+    const name = provider === 'claude' ? '.credentials.json' : 'auth.json'
+    const fd = openSync(join(authSrc, name), FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK)
+    let data: Buffer
+    try {
+      const st = fstatSync(fd)
+      if (!st.isFile() || st.uid !== owner || (st.mode & 0o022) !== 0 || st.size > 1024 * 1024) {
+        throw new Error('read-only credential must be a protected regular file under 1 MiB')
+      }
+      data = readFileSync(fd)
+      if (data.length > 1024 * 1024) throw new Error('read-only credential exceeds 1 MiB')
+    } finally { closeSync(fd) }
+    configDir = join(home, provider === 'claude' ? '.claude' : '.codex')
+    mkdirSync(configDir, { mode: 0o700 })
+    credential = join(configDir, name)
+    writeFileSync(credential, data, { mode: 0o600, flag: 'wx' })
   }
-
   if (identity.uid !== undefined && identity.gid !== undefined) {
-    chownRecursive(home, identity.uid, identity.gid)
+    if (credential) lchownSync(credential, identity.uid, identity.gid)
+    if (configDir) lchownSync(configDir, identity.uid, identity.gid)
+    lchownSync(home, identity.uid, identity.gid)
   }
-  try { chmodSync(home, 0o700) } catch { /* best effort */ }
-  if (configDir) { try { chmodSync(configDir, 0o700) } catch { /* best effort */ } }
-
   return { home, configDir }
 }
 

@@ -136,8 +136,9 @@ runner is not configured for read-only, a `readOnly: true` request is rejected w
 ## Read-only tasks
 
 A read-only task (`"readOnly": true`) lets an agent explore and reason about a repo
-without any possibility of changing it. The enforcement is **structural, not just a
-set of tool flags**:
+using a separate OS account and disposable copy. This requires the source tree
+and Git directories to deny writes to that account; preparation checks this, including
+ACLs and ignored files. It is not a tenant or network sandbox:
 
 1. **The agent never runs in the real repo.** Before launch the runner builds a
    disposable copy in a fresh temp dir with
@@ -162,9 +163,9 @@ set of tool flags**:
    diffs. **This narrows the attack surface; it is not the guarantee.** The guarantee
    is structural: the preparation and report run unprivileged (dropped to the read-only
    account) inside a disposable copy, so even a git-config vector we did not anticipate
-   executes as a credential-less account that cannot reach the real repo or any remote.
-2. **The copy has nowhere to push.** Every remote is removed from the copy, so
-   `git push`/`fetch` have no target.
+   executes as the restricted account. Host permissions remain the boundary for other files.
+2. **The copy starts without remotes.** Every remote is removed. This avoids accidental
+   pushes; it is not an egress control, since an agent can supply a URL itself.
 3. **The agent runs as a separate, credential-less account.** Set
    `READONLY_RUN_USER` to a dedicated OS account (e.g. `forge-ro`) that owns nothing
    and holds no SSH keys, `gh` login, or `~/.git-credentials`. The copy is `chown`ed
@@ -184,8 +185,11 @@ set of tool flags**:
    `OPENAI_API_KEY`, and `AWS_*` are stripped. `HOME` is a **fresh per-task directory
    inside the disposable copy's tree**, discarded with it — so one read-only task
    cannot plant a `~/.gitconfig` / `~/.config/...` that the next task would read. The
-   provider's auth is **copied per task** into that ephemeral HOME at mode `0700` owned
-   by the read-only account (see below), never shared live between tasks.
+   provider's credential file alone (`auth.json` or `.credentials.json`) is copied
+   into that ephemeral HOME (directories `0700`, file `0600`). Configuration and hooks
+   are not copied. The task root remains private and runner-owned until provisioning
+   finishes, then ownership is handed to the agent account. Sources, ancestors and
+   destination paths are checked; writable paths and symlinks fail closed.
 5. **Defense in depth on the claude side.** Read-only claude runs drop
    `--dangerously-skip-permissions` and instead pin `--permission-mode plan`,
    `--setting-sources ""` (so a repo `.claude/settings.json` cannot re-enable tools),
@@ -200,9 +204,12 @@ set of tool flags**:
    cgroup v2 node (when the runner runs as root on a cgroup-v2 host) holding the prep
    worker, the agent, the report worker, and everything they fork. Cancel/close/timeout
    writes `cgroup.kill`, reaping the **entire tree in one shot** — including a child
-   that called `setsid()` to escape the process group. Where a cgroup can't be created
-   (non-root / no cgroup v2) it falls back to a process-group `SIGTERM`→`SIGKILL`
-   (grace `KILL_GRACE_MS`, default 10s). The agent leader exiting is treated as the
+   that called `setsid()` to escape the process group. A trusted launcher waits for
+   confirmed attachment before it can start any target process. Without delegated
+   cgroup v2 containment, memory and pids controllers, read-only fails closed. Every
+   task is capped at 1 GiB memory, no swap, and 128 processes; output logs cap at
+   16 MiB. Teardown failure fails the task and disables further read-only launches
+   until restart. `KILL_GRACE_MS` (default 10s) bounds pipe-close settlement. The agent leader exiting is treated as the
    authoritative "done" signal, so a surviving child holding stdout open can no longer
    keep a finished task "running" forever. A cancel that arrives **during copy
    preparation** (up to `READONLY_PREP_TIMEOUT_MS`, default 2 min) kills the prep
@@ -224,14 +231,14 @@ the real repo and its remotes are never inspected or modified.
 ### What read-only does NOT guarantee
 
 - **Network egress is not blocked.** The agent can still make outbound network calls
-  (it just has no credentials and no git remotes). If you need egress isolation, run
+  (including with its provider OAuth credential). If you need egress isolation, run
   the runner inside a network-restricted container/namespace.
 - **The read-only account can still *read* whatever its uid is allowed to read.** That
   includes:
   - **The provider's own OAuth tokens.** The agent needs valid auth to run, so a
     *copy* of the provider's credentials is necessarily reachable by the running agent.
     The pristine source (`READONLY_CLAUDE_CONFIG_DIR` / `READONLY_CODEX_HOME`, or the
-    account's `~/.claude` / `~/.codex`) should be **root-owned and mode `0700`** — not
+    account's `~/.claude` / `~/.codex`) must have protected runner-owned ancestors and be **root-owned and mode `0700`** — not
     world- or group-readable — so only root can read it at rest; each task gets its own
     `0700` copy inside its ephemeral HOME, which is destroyed when the task ends. Keep
     the source `0700` so neither other local users nor a prior task's leftovers can
@@ -242,6 +249,9 @@ the real repo and its remotes are never inspected or modified.
     group**, which would also hand the read-only account the writable run account's
     other group-readable files. Keep other local users out (`chmod -R o-rx <path>`),
     and never leave plaintext secrets in tracked/ignored repo files.
+- **Concurrent tasks share the configured OS uid.** They are not mutually isolated
+  tenants and may access one another’s accessible files or provider credentials.
+  Use separate runners/containers/accounts for mutually untrusted tenants.
 - It is not a sandbox for arbitrary host damage outside the copy — it relies on the
   `READONLY_RUN_USER` account owning nothing the agent should be able to touch, and on
   that account having its own dedicated uid **and** gid.
@@ -279,12 +289,22 @@ chmod -R o-rx /home/forge/repos                       # keep OTHER local users o
 #    READONLY_CLAUDE_CONFIG_DIR=/etc/forge-ro/claude
 #    READONLY_CODEX_HOME=/etc/forge-ro/codex
 #    READONLY_BASE_DIR=/var/lib/forge/ro   # root-owned 0711; the runner creates it
+#    READONLY_CGROUP_PARENT=/sys/fs/cgroup # explicit delegated parent, if the service cgroup cannot delegate
 ```
 
 `scripts/setup.sh` automates steps 1, 2, and 4 when you pass `READONLY_RUN_USER`
 (it leaves the dirs writable for the first login, then locks them to root-owned `0700`
 on a re-run once they contain credentials). The runner must itself start as root for
-the uid/gid drop, the per-task auth copy, and `chown` to work.
+the uid/gid drop, the per-task auth copy, and `chown` to work. The selected cgroup
+parent must already delegate memory and pids controllers; the runner never enables
+controllers or moves existing host processes as part of task submission.
+
+Root integration verification uses only scratch repositories, credentials and SQLite:
+
+```bash
+READONLY_CGROUP_PARENT=/sys/fs/cgroup FORGE_TEST_CGROUP=1 FORGE_TEST_RO_USER=nobody \
+  node --import tsx --test apps/runner/src/agent/{contained,runner-cancel,provision,readonly-security}.test.ts
+```
 
 ### SSE event types
 

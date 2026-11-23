@@ -37,6 +37,7 @@ export interface GitRunOpts {
   // Absolute path to trust for ownership (`-c safe.directory=...`) when we read a
   // repo owned by a different user (the real repo, read as the read-only uid).
   safeDir?: string
+  extraSafeDirs?: string[]
   // When set, pin `core.worktree` to this absolute path so a repo-local
   // `core.worktree` (pointing git's working tree at an external dir) cannot redirect
   // reads/writes. Pass the repo root (== cwd) — correct for a standard non-bare repo.
@@ -52,7 +53,8 @@ export interface GitRunOpts {
 export function filterNeutralizationFlags(cwd: string, opts: GitRunOpts = {}): string[] {
   let out = ''
   try {
-    out = execFileSync('git', [...GIT_HARDENING_FLAGS, 'config', '--get-regexp', '^filter\\.'], {
+    const trust = opts.safeDir ? ['-c', `safe.directory=${opts.safeDir}`] : []
+    out = execFileSync('git', [...GIT_HARDENING_FLAGS, ...trust, 'config', '--get-regexp', '^filter\\.'], {
       cwd,
       encoding: 'utf8',
       maxBuffer: 4 * 1024 * 1024,
@@ -102,6 +104,7 @@ export function minimalGitEnv(home?: string): NodeJS.ProcessEnv {
 export function safeGit(args: string[], cwd: string, opts: GitRunOpts = {}): string {
   const flags = [...GIT_HARDENING_FLAGS]
   if (opts.safeDir) flags.push('-c', `safe.directory=${opts.safeDir}`)
+  for (const dir of opts.extraSafeDirs ?? []) flags.push('-c', `safe.directory=${dir}`)
   if (opts.worktree) flags.push('-c', `core.worktree=${opts.worktree}`)
   flags.push(...filterNeutralizationFlags(cwd, opts))
   return execFileSync('git', [...flags, ...args], {
