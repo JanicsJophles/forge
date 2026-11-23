@@ -1,5 +1,8 @@
 import { spawn } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
 import {
@@ -10,15 +13,34 @@ import {
   setCommitSha,
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
-import { gitPull, gitCommit, hasUncommittedChanges, revertRepo } from './git.js'
-import { providerCommand, executionIdentity, checkCodexLogin, readOnlyGitEnv } from './provider.js'
+import { gitPull, gitCommit } from './git.js'
+import { providerCommand, executionIdentity, checkCodexLogin, readOnlyEnv } from './provider.js'
+import { resolveReadOnlyIdentity } from '../capabilities.js'
+import { prepareReadOnlyCopy, reportReadOnlyChanges } from './readonly.js'
+
+interface ActiveProc {
+  proc: ReturnType<typeof spawn>
+  // Read-only agents are spawned in their own process group so we can kill the
+  // whole group (including setsid/nohup children) rather than just the leader.
+  detached: boolean
+}
 
 // Active process handles keyed by taskId for SIGTERM support
-const activeProcs = new Map<string, ReturnType<typeof spawn>>()
+const activeProcs = new Map<string, ActiveProc>()
 
 export function killTask(taskId: string): boolean {
-  const proc = activeProcs.get(taskId)
-  if (!proc) return false
+  const entry = activeProcs.get(taskId)
+  if (!entry) return false
+  const { proc, detached } = entry
+  if (detached && typeof proc.pid === 'number') {
+    // Negative pid signals the entire process group.
+    try {
+      process.kill(-proc.pid, 'SIGTERM')
+      return true
+    } catch {
+      // Group gone already — fall through to a direct signal.
+    }
+  }
   proc.kill('SIGTERM')
   return true
 }
@@ -30,20 +52,51 @@ export function countActiveProcs(): number {
 export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
   const provider = task.provider ?? 'claude'
   const readOnly = task.readOnly ?? false
-  let identity: ReturnType<typeof executionIdentity>
-  try {
-    identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
-    if (provider === 'codex') await checkCodexLogin(identity)
-  } catch (err) {
-    const message = `[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`
+
+  function fail(message: string): void {
     appendLog(task.id, message + '\n')
     setErrorMessage(task.id, message)
     updateTaskStatus(task.id, 'failed')
     emitter.emit('event', makeEvent('error', message))
     emitter.emit('done')
     removeEmitter(task.id)
+  }
+
+  // --- resolve the account the agent runs as ---
+  let identity: ReturnType<typeof executionIdentity>
+  try {
+    if (readOnly) {
+      // Fail closed: read-only must have its dedicated, isolated account.
+      const ro = resolveReadOnlyIdentity()
+      if (!ro) {
+        fail('[forge] read-only is not supported by this runner: READONLY_RUN_USER is not configured or the account does not exist')
+        return
+      }
+      identity = ro
+    } else {
+      identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
+    }
+  } catch (err) {
+    fail(`[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`)
     return
   }
+
+  // Read-only agents get a MINIMAL env (explicit allowlist, no inherited tokens);
+  // writable agents keep the existing env (tokens already stripped in identity.env).
+  const launchEnv = readOnly
+    ? readOnlyEnv(identity.home, identity.username, provider, {
+        claudeConfigDir: config.readonlyClaudeConfigDir,
+        codexHome: config.readonlyCodexHome,
+      })
+    : identity.env
+
+  try {
+    if (provider === 'codex') await checkCodexLogin({ uid: identity.uid, gid: identity.gid, env: launchEnv })
+  } catch (err) {
+    fail(`[forge] ${provider} setup failed: ${err instanceof Error ? err.message : 'unknown error'}`)
+    return
+  }
+
   // A cancellation may arrive while the login probe is in flight.
   if (getTask(task.id)?.status !== 'queued') {
     emitter.emit('event', makeEvent('error', 'Task cancelled before launch'))
@@ -51,44 +104,69 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     removeEmitter(task.id)
     return
   }
-  // --- git pull before starting ---
-  try {
-    // Read-only: only fast-forward a clean tree; skip otherwise (see gitPull).
-    gitPull(task.repo, identity, { onlyIfClean: readOnly })
-    const pullMsg = `[forge] git pull completed\n`
-    appendLog(task.id, pullMsg)
-    emitter.emit('event', makeEvent('log', pullMsg))
-  } catch (err: any) {
-    const msg = `[forge] git pull failed: ${err.message}\n`
-    appendLog(task.id, msg)
-    setErrorMessage(task.id, `git pull failed: ${err.message}`)
-    updateTaskStatus(task.id, 'failed')
-    emitter.emit('event', makeEvent('error', msg))
-    emitter.emit('done')
-    removeEmitter(task.id)
-    return
+
+  // --- prepare the working directory the agent runs in ---
+  let cwd = task.repo
+  let tmpRoot: string | undefined
+  let baseHead = ''
+  let copyCleaned = false
+  function cleanupCopy(): void {
+    if (copyCleaned || !tmpRoot) return
+    copyCleaned = true
+    rmSync(tmpRoot, { recursive: true, force: true })
+  }
+
+  if (readOnly) {
+    // The agent NEVER runs in the real repo. Build a disposable, remote-less copy
+    // owned by the isolated account. Any failure here fails the task before the
+    // agent starts (fail closed) — the real repo is only ever read.
+    try {
+      tmpRoot = mkdtempSync(join(tmpdir(), 'forge-ro-'))
+      const copyRepo = join(tmpRoot, 'repo')
+      const prepared = prepareReadOnlyCopy(task.repo, copyRepo, { uid: identity.uid, gid: identity.gid })
+      baseHead = prepared.baseHead
+      cwd = copyRepo
+    } catch (err) {
+      cleanupCopy()
+      fail(`[forge] read-only: failed to prepare disposable copy: ${err instanceof Error ? err.message : 'unknown error'}`)
+      return
+    }
+  } else {
+    // --- git pull before starting (writable tasks only; never mutate the real
+    //     repo for read-only runs) ---
+    try {
+      gitPull(task.repo, { uid: identity.uid, gid: identity.gid })
+      const pullMsg = `[forge] git pull completed\n`
+      appendLog(task.id, pullMsg)
+      emitter.emit('event', makeEvent('log', pullMsg))
+    } catch (err: any) {
+      fail(`[forge] git pull failed: ${err.message}`)
+      return
+    }
   }
 
   updateTaskStatus(task.id, 'running')
   emitter.emit('event', makeEvent('status', 'running'))
 
-  const startMsg = `[forge] starting ${provider} agent in ${task.repo}${readOnly ? ' (read-only)' : ''}\n`
+  const startMsg = `[forge] starting ${provider} agent in ${cwd}${readOnly ? ' (read-only, disposable copy)' : ''}\n`
   appendLog(task.id, startMsg)
   emitter.emit('event', makeEvent('log', startMsg))
 
   const command = providerCommand(provider, readOnly)
-  // Read-only tasks launch with git push disabled in the agent's environment.
-  const launchIdentity = readOnly ? { ...identity, env: readOnlyGitEnv(identity.env) } : identity
   const proc = spawn(
     command.command,
     provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
-      cwd: task.repo,
-      ...launchIdentity,
+      cwd,
+      uid: identity.uid,
+      gid: identity.gid,
+      env: launchEnv,
+      // Read-only: own process group → whole-group kill on cancel/close.
+      ...(readOnly ? { detached: true } : {}),
     }
   )
 
-  activeProcs.set(task.id, proc)
+  activeProcs.set(task.id, { proc, detached: readOnly })
   let settled = false
   proc.stdin.on('error', () => { /* early process exit is handled below */ })
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
@@ -134,33 +212,21 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     activeProcs.delete(task.id)
 
     if (readOnly) {
-      // Enforce read-only: nothing may persist in the working tree. Any change
-      // (even on a successful run) is a violation — revert it and fail the task.
-      let dirty = false
+      // The agent ran entirely inside the disposable copy. Record what it changed
+      // there as INFORMATION ONLY — the real repo is never inspected or touched —
+      // then discard the copy. No commit, no revert.
       try {
-        dirty = hasUncommittedChanges(task.repo, identity)
+        const report = reportReadOnlyChanges(cwd, baseHead, { uid: identity.uid, gid: identity.gid })
+        const reportMsg = `[forge] read-only report (changes confined to the disposable copy; the real repo and its remotes are untouched):\n${report}\n`
+        appendLog(task.id, reportMsg)
+        emitter.emit('event', makeEvent('log', reportMsg))
       } catch (err: any) {
-        const errMsg = `[forge] read-only: could not inspect working tree: ${err.message}\n`
+        const errMsg = `[forge] read-only: could not summarize copy changes: ${err.message}\n`
         appendLog(task.id, errMsg)
         emitter.emit('event', makeEvent('log', errMsg))
       }
-      if (dirty) {
-        try {
-          revertRepo(task.repo, identity)
-        } catch (err: any) {
-          const errMsg = `[forge] read-only: revert failed: ${err.message}\n`
-          appendLog(task.id, errMsg)
-          emitter.emit('event', makeEvent('log', errMsg))
-        }
-        const msg = `[forge] read-only violation: agent modified the working tree; changes reverted`
-        appendLog(task.id, msg + '\n')
-        setErrorMessage(task.id, msg)
-        updateTaskStatus(task.id, 'failed')
-        emitter.emit('event', makeEvent('error', msg))
-        emitter.emit('done')
-        removeEmitter(task.id)
-        return
-      }
+      cleanupCopy()
+
       if (code === 0) {
         updateTaskStatus(task.id, 'completed')
         emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
@@ -182,7 +248,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
         try {
           const sha = gitCommit(
             task.repo,
-            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`, identity
+            `${config.commitMessagePrefix} ${task.prompt.slice(0, 72)}`, { uid: identity.uid, gid: identity.gid }
           )
           if (sha) {
             setCommitSha(task.id, sha)
@@ -222,6 +288,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     if (flushTimer) clearInterval(flushTimer)
     flush()
     activeProcs.delete(task.id)
+    cleanupCopy()
 
     const errMsg = `[forge] failed to spawn ${provider}: ${err.message}. Check installation and login for the configured runner user.\n`
     appendLog(task.id, errMsg)

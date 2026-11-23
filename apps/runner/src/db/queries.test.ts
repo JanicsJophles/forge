@@ -60,6 +60,7 @@ test('listTasks caps each log to the trailing bytes, getTask keeps the full log'
   assert.ok(listed)
   assert.equal(listed.log.length, queries.LIST_LOG_TAIL_BYTES)
   assert.ok(listed.log.endsWith('TAIL'), 'truncation keeps the tail of the log')
+  assert.equal(listed.log_truncated, true, 'a capped row is flagged log_truncated')
 
   const full = queries.getTask(t.id)
   assert.equal(full?.log.length, big.length, 'getTask returns the untruncated log')
@@ -78,4 +79,5 @@ test('listTasks cap is a no-op for short logs', () => {
   queries.insertTask(t)
   const listed = queries.listTasks(20, queries.LIST_LOG_TAIL_BYTES).find(x => x.id === t.id)
   assert.equal(listed?.log, 'short')
+  assert.equal(listed?.log_truncated, undefined, 'an uncapped row carries no truncation flag')
 })

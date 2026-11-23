@@ -15,11 +15,11 @@ import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
-import { runnerCapabilities } from '../capabilities.js'
+import { getCapabilities } from '../capabilities.js'
 
 export const tasksRouter = Router()
 tasksRouter.get('/capabilities', (_req, res) => {
-  res.json(runnerCapabilities)
+  res.json(getCapabilities())
 })
 
 // POST /tasks — create and kick off a task
@@ -36,6 +36,13 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   }
   if (body.readOnly !== undefined && typeof body.readOnly !== 'boolean') {
     res.status(400).json({ error: 'readOnly must be a boolean' })
+    return
+  }
+
+  // Refuse read-only tasks unless this runner can actually enforce them (a usable,
+  // isolated read-only account is configured). Never silently downgrade to writable.
+  if (body.readOnly === true && !getCapabilities().readOnly) {
+    res.status(400).json({ error: 'read-only is not supported by this runner: READONLY_RUN_USER is not configured or the account does not exist' })
     return
   }
 

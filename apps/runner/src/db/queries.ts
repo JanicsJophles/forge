@@ -66,9 +66,13 @@ export function getTask(id: string): AgentTask | undefined {
   return row ? rowToTask(row) : undefined
 }
 
+// A listed task is a regular AgentTask, plus a `log_truncated` flag set when the
+// row's log was capped to its trailing bytes (so callers know the log is partial).
+export type ListedTask = AgentTask & { log_truncated?: boolean }
+
 // logTailBytes caps each row's log to its trailing N bytes (UTF-8 safe) so a
 // large transcript does not bloat the list response. Omit it for the full log.
-export function listTasks(limit = 20, logTailBytes?: number): AgentTask[] {
+export function listTasks(limit = 20, logTailBytes?: number): ListedTask[] {
   if (logTailBytes === undefined) {
     const rows = db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?').all(limit) as TaskRow[]
     return rows.map(rowToTask)
@@ -76,13 +80,19 @@ export function listTasks(limit = 20, logTailBytes?: number): AgentTask[] {
   const rows = db.prepare(
     `SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
             error_message, commit_sha, provider, auto_commit, read_only,
-            substr(CAST(COALESCE(log, '') AS BLOB), ?) AS log
+            substr(CAST(COALESCE(log, '') AS BLOB), ?) AS log,
+            length(CAST(COALESCE(log, '') AS BLOB)) > ? AS log_truncated
      FROM tasks ORDER BY created_at DESC LIMIT ?`
-  ).all(-logTailBytes, limit) as (Omit<TaskRow, 'log'> & { log: Buffer | string | null })[]
+  ).all(-logTailBytes, logTailBytes, limit) as (Omit<TaskRow, 'log'> & {
+    log: Buffer | string | null
+    log_truncated: number
+  })[]
   // substr() of an empty blob yields SQL NULL; treat it as an empty log.
-  return rows.map(({ log, ...rest }) =>
-    rowToTask({ ...rest, log: log == null ? '' : typeof log === 'string' ? log : decodeTail(log) })
-  )
+  return rows.map(({ log, log_truncated, ...rest }) => {
+    const task: ListedTask = rowToTask({ ...rest, log: log == null ? '' : typeof log === 'string' ? log : decodeTail(log) })
+    if (log_truncated) task.log_truncated = true
+    return task
+  })
 }
 
 export function updateTaskStatus(id: string, status: TaskStatus): void {

@@ -57,6 +57,30 @@ echo "[setup] building runner..."
 cd "${RUNNER_DIR}"
 npm run build
 
+# ── Read-only task account (optional) ────────────────────────────────────────
+# Read-only tasks run as a dedicated, credential-less account against a disposable
+# copy of the repo (see the README "Read-only tasks" section). Create the account
+# and its isolated provider-auth dirs here; the interactive logins must be done by
+# hand once (they can't be scripted). Skipped unless RO_USER is set.
+RO_USER="${READONLY_RUN_USER:-forge-ro}"
+RO_CLAUDE_DIR="/etc/forge-ro/claude"
+RO_CODEX_DIR="/etc/forge-ro/codex"
+if ! id "${RO_USER}" &>/dev/null; then
+    echo "[setup] creating read-only account '${RO_USER}'..."
+    useradd --system --create-home --shell /usr/sbin/nologin "${RO_USER}"
+else
+    echo "[setup] read-only account '${RO_USER}' already exists"
+fi
+install -d -o "${RO_USER}" -g "${RO_USER}" "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
+echo ""
+echo "⚠  To finish read-only support, log the '${RO_USER}' account into each provider ONCE:"
+echo "     sudo -u ${RO_USER} CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR} claude   # then /login"
+echo "     sudo -u ${RO_USER} CODEX_HOME=${RO_CODEX_DIR} codex login"
+echo "   and set in .env:  READONLY_RUN_USER=${RO_USER}"
+echo "                     READONLY_CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR}"
+echo "                     READONLY_CODEX_HOME=${RO_CODEX_DIR}"
+echo ""
+
 # ── Runtime directories ───────────────────────────────────────────────────────
 mkdir -p "${LOG_DIR}" "${DATA_DIR}"
 

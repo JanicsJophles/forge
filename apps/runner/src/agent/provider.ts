@@ -2,53 +2,119 @@ import { execFileSync, spawn } from 'node:child_process'
 import { userInfo } from 'node:os'
 import type { AgentProvider } from '@forge/shared'
 
+// Read-only Claude is restricted to an explicit allowlist of read-only tools.
+// This is defense-in-depth ONLY — the real guarantee is that the agent runs in a
+// disposable clone owned by an unprivileged, credential-less account, so even if a
+// tool rule were bypassed the agent cannot reach the real repo or any remote.
+const READONLY_ALLOWED_TOOLS = [
+  'Read',
+  'Grep',
+  'Glob',
+  'Bash(ls:*)',
+  'Bash(cat:*)',
+  'Bash(head:*)',
+  'Bash(tail:*)',
+  'Bash(wc:*)',
+  'Bash(git log:*)',
+  'Bash(git show:*)',
+  'Bash(git diff:*)',
+  'Bash(git status:*)',
+  'Bash(rg:*)',
+  'Bash(find:*)',
+].join(' ')
+
+// Deny mutating tools outright, and best-effort-deny the two destructive find
+// forms. Deny rules take precedence over allow rules in Claude Code. Precise
+// mid-command flag matching is not expressible, so the disposable copy remains
+// the actual enforcement boundary — this just narrows the attack surface.
+const READONLY_DISALLOWED_TOOLS = [
+  'Edit',
+  'Write',
+  'NotebookEdit',
+  'Bash(find:* -delete*)',
+  'Bash(find:* -exec*)',
+].join(',')
+
 export function providerCommand(
   provider: AgentProvider,
   readOnly = false,
 ): { command: string; args: string[] } {
   switch (provider) {
     case 'claude':
-      // Read-only: plan mode forbids edits / writes / mutating bash, and we also
-      // explicitly deny the file-mutation tools. Drop --dangerously-skip-permissions
-      // so no permission bypass remains. Writable mode is unchanged.
+      // Read-only hardening (the disposable copy + isolated account is the real
+      // guarantee; these flags narrow what the agent can even attempt):
+      //   --setting-sources ""   ignore user/project/local settings.json, so a
+      //                          repo .claude/settings.json cannot re-enable tools
+      //   --strict-mcp-config    only MCP servers from --mcp-config (none given),
+      //                          so repo .mcp.json servers never load
+      //   --allowedTools         an allowlist of read-only tools (Bash otherwise
+      //                          denied by the allowlist)
+      //   --disallowedTools      belt-and-suspenders deny of mutation tools
+      //   --permission-mode plan no edits/writes/mutating bash in plan mode
+      // Drop --dangerously-skip-permissions entirely so no bypass remains.
       return readOnly
-        ? { command: 'claude', args: ['--permission-mode', 'plan', '--disallowedTools', 'Edit,Write,NotebookEdit', '-p'] }
+        ? {
+            command: 'claude',
+            args: [
+              '--setting-sources', '',
+              '--strict-mcp-config',
+              '--allowedTools', READONLY_ALLOWED_TOOLS,
+              '--disallowedTools', READONLY_DISALLOWED_TOOLS,
+              '--permission-mode', 'plan',
+              '-p',
+            ],
+          }
         : { command: 'claude', args: ['--dangerously-skip-permissions', '-p'] }
     // Stdin keeps user prompts out of argv. Codex's own sandbox (bubblewrap) cannot create its mount namespace in
     // the runner's unprivileged LXC ("bwrap: Failed to make / slave: Permission denied"), so every shell command
     // failed while the task still reported success. Like Claude above, Codex relies on the container and the
     // non-root run user (executionIdentity refuses uid 0) as its sandbox.
     //
-    // Read-only note: codex --sandbox read-only ALSO shells out to bubblewrap and
-    // fails the same way here, so it cannot be used to enforce read-only. The command
-    // is therefore identical in both modes; read-only is enforced out-of-band by the
-    // runner (autoCommit off, push blocked via readOnlyGitEnv, and a post-task
-    // dirty-tree check that reverts any change and fails the task).
+    // Read-only note: codex --sandbox read-only ALSO shells out to bubblewrap and fails the same way here, so it
+    // cannot be used to enforce read-only. The command is therefore identical in both modes; read-only is enforced
+    // entirely out-of-band: the agent runs in a disposable clone (no remotes) owned by a credential-less account,
+    // so nothing it does can touch the real repo or push anywhere.
     case 'codex': return { command: 'codex', args: ['exec', '--dangerously-bypass-approvals-and-sandbox', '-'] }
     default: throw new Error('Unsupported agent provider')
   }
 }
 
-// Returns a copy of env with git configured to refuse every push: each remote URL
-// scheme is rewritten (pushInsteadOf) to a nonexistent local path, so any `git push`
-// the agent attempts fails instantly without reaching a real remote. pushInsteadOf
-// only affects pushes, so fetch / read operations still work. Used for read-only tasks.
-export function readOnlyGitEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const blockedBase = 'file:///nonexistent/forge-read-only-no-push/'
-  const schemes = ['https://', 'http://', 'ssh://', 'git://', 'git@', 'file://']
-  const env: NodeJS.ProcessEnv = { ...baseEnv }
-  let count = Number.parseInt(env.GIT_CONFIG_COUNT ?? '', 10)
-  if (!Number.isInteger(count) || count < 0) count = 0
-  for (const scheme of schemes) {
-    env[`GIT_CONFIG_KEY_${count}`] = `url.${blockedBase}.pushInsteadOf`
-    env[`GIT_CONFIG_VALUE_${count}`] = scheme
-    count++
+// Build a MINIMAL environment for a read-only agent from an explicit allowlist.
+// Critically this is NOT derived from process.env, so GH_TOKEN / GITHUB_TOKEN /
+// ANTHROPIC_API_KEY / CLAUDE_CODE_OAUTH_TOKEN / OPENAI_API_KEY and every other
+// inherited secret are absent — the agent cannot authenticate to GitHub or any
+// remote even if it tries. The provider finds its own auth under the read-only
+// account's HOME (or an explicitly configured auth dir).
+export function readOnlyEnv(
+  home: string,
+  username: string,
+  provider: AgentProvider,
+  opts: { claudeConfigDir?: string; codexHome?: string } = {},
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    HOME: home,
+    USER: username,
+    LOGNAME: username,
   }
-  env.GIT_CONFIG_COUNT = String(count)
+  // Locale/terminal are harmless and avoid noisy CLI warnings.
+  if (process.env.LANG) env.LANG = process.env.LANG
+  if (process.env.TERM) env.TERM = process.env.TERM
+  // The provider's OWN auth file location (opt-in override). Never a token value.
+  if (provider === 'claude' && opts.claudeConfigDir) env.CLAUDE_CONFIG_DIR = opts.claudeConfigDir
+  if (provider === 'codex' && opts.codexHome) env.CODEX_HOME = opts.codexHome
   return env
 }
 
-export function executionIdentity(username: string) {
+export interface ExecutionIdentity {
+  uid: number
+  gid: number
+  home: string
+  username: string
+  env: NodeJS.ProcessEnv
+}
+
+export function executionIdentity(username: string): ExecutionIdentity {
   const current = userInfo()
   let uid = current.uid, gid = current.gid, home = current.homedir
   if (username !== current.username) {
@@ -62,10 +128,10 @@ export function executionIdentity(username: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USER: username, LOGNAME: username }
   // Never borrow the service/root account's credential directory or API keys.
   for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) delete env[key]
-  return { uid, gid, env }
+  return { uid, gid, home, username, env }
 }
 
-export function checkCodexLogin(options: ReturnType<typeof executionIdentity>): Promise<void> {
+export function checkCodexLogin(options: { uid: number; gid: number; env: NodeJS.ProcessEnv }): Promise<void> {
   return new Promise((resolve, reject) => {
     const proc = spawn('codex', ['login', 'status'], { ...options, stdio: 'ignore' })
     const timer = setTimeout(() => { proc.kill('SIGKILL'); reject(new Error('Codex login check timed out')) }, 10_000)
