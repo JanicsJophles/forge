@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { chownSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentTask } from '@forge/shared'
@@ -14,34 +14,63 @@ import {
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
-import { providerCommand, executionIdentity, checkCodexLogin, readOnlyEnv } from './provider.js'
+import {
+  providerCommand,
+  executionIdentity,
+  checkCodexLogin,
+  readOnlyEnv,
+  resolveExecutable,
+} from './provider.js'
 import { resolveReadOnlyIdentity } from '../capabilities.js'
-import { prepareReadOnlyCopy, reportReadOnlyChanges } from './readonly.js'
+import {
+  prepareReadOnlyCopy,
+  reportReadOnlyChanges,
+  READONLY_TMP_PREFIX,
+} from './readonly.js'
 
 interface ActiveProc {
   proc: ReturnType<typeof spawn>
   // Read-only agents are spawned in their own process group so we can kill the
   // whole group (including setsid/nohup children) rather than just the leader.
   detached: boolean
+  // Pending SIGTERM→SIGKILL escalation timer, if a termination is in flight.
+  escalation?: ReturnType<typeof setTimeout>
 }
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ActiveProc>()
 
-export function killTask(taskId: string): boolean {
-  const entry = activeProcs.get(taskId)
-  if (!entry) return false
+// Signal a task's agent: the whole process group when detached (read-only), else the
+// leader. Swallows ESRCH — the target may already be gone.
+function signalTask(entry: ActiveProc, sig: NodeJS.Signals): void {
   const { proc, detached } = entry
   if (detached && typeof proc.pid === 'number') {
-    // Negative pid signals the entire process group.
     try {
-      process.kill(-proc.pid, 'SIGTERM')
-      return true
+      process.kill(-proc.pid, sig)
+      return
     } catch {
       // Group gone already — fall through to a direct signal.
     }
   }
-  proc.kill('SIGTERM')
+  try {
+    proc.kill(sig)
+  } catch {
+    // Process already exited.
+  }
+}
+
+// Terminate a task, escalating SIGTERM → SIGKILL after the grace period so a process
+// that ignores SIGTERM (or a process group with stubborn children) is still reaped.
+export function killTask(taskId: string): boolean {
+  const entry = activeProcs.get(taskId)
+  if (!entry) return false
+  signalTask(entry, 'SIGTERM')
+  if (!entry.escalation) {
+    entry.escalation = setTimeout(() => {
+      if (activeProcs.get(taskId) === entry) signalTask(entry, 'SIGKILL')
+    }, config.killGraceMs)
+    entry.escalation.unref()
+  }
   return true
 }
 
@@ -117,13 +146,40 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   }
 
   if (readOnly) {
-    // The agent NEVER runs in the real repo. Build a disposable, remote-less copy
-    // owned by the isolated account. Any failure here fails the task before the
-    // agent starts (fail closed) — the real repo is only ever read.
+    // Fail closed: the read-only account must not own the repo it is about to read —
+    // otherwise it is not isolated from the writable account (finding 10).
     try {
-      tmpRoot = mkdtempSync(join(tmpdir(), 'forge-ro-'))
+      const repoOwner = statSync(task.repo).uid
+      if (repoOwner === identity.uid) {
+        fail('[forge] read-only is refused: the read-only account owns this repo (not isolated from the writable account)')
+        return
+      }
+    } catch (err) {
+      fail(`[forge] read-only: cannot stat repo: ${err instanceof Error ? err.message : 'unknown error'}`)
+      return
+    }
+
+    // The agent NEVER runs in the real repo. Build a disposable, remote-less copy
+    // owned by the isolated account, with ALL preparation (clone + overlay) done as
+    // that unprivileged account in a child process — never as root. Any failure here
+    // fails the task before the agent starts (fail closed); the real repo is read-only.
+    try {
+      tmpRoot = mkdtempSync(join(tmpdir(), READONLY_TMP_PREFIX))
+      // Hand the temp root to the read-only account so it can create and traverse to
+      // the copy by absolute path (claude's Read/Glob/Grep need this). Root ONLY
+      // creates + chowns the dir; it never writes anything inside (finding 7). chown
+      // is a no-op (and harmless) when the runner is not root, e.g. in tests.
+      try {
+        chownSync(tmpRoot, identity.uid, identity.gid)
+      } catch {
+        // Not running as root — the copy stays owned by the current user.
+      }
       const copyRepo = join(tmpRoot, 'repo')
-      const prepared = prepareReadOnlyCopy(task.repo, copyRepo, { uid: identity.uid, gid: identity.gid })
+      const prepared = await prepareReadOnlyCopy(task.repo, copyRepo, {
+        uid: identity.uid,
+        gid: identity.gid,
+        home: identity.home,
+      })
       baseHead = prepared.baseHead
       cwd = copyRepo
     } catch (err) {
@@ -153,21 +209,54 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   emitter.emit('event', makeEvent('log', startMsg))
 
   const command = providerCommand(provider, readOnly)
+  // Read-only resolves the binary to an absolute path on the fixed PATH, so the
+  // launch does not depend on an attacker-influenceable PATH lookup. Writable keeps
+  // its existing behaviour (bare name resolved via the identity env's PATH).
+  let executable: string
+  if (readOnly) {
+    try {
+      executable = resolveExecutable(command.command)
+    } catch (err) {
+      fail(`[forge] read-only: ${err instanceof Error ? err.message : 'provider binary not found'}`)
+      cleanupCopy()
+      return
+    }
+  } else {
+    executable = command.command
+  }
+
   const proc = spawn(
-    command.command,
+    executable,
     provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
       cwd,
       uid: identity.uid,
       gid: identity.gid,
       env: launchEnv,
-      // Read-only: own process group → whole-group kill on cancel/close.
+      // Read-only: own process group → whole-group kill on cancel/close/timeout.
       ...(readOnly ? { detached: true } : {}),
     }
   )
 
-  activeProcs.set(task.id, { proc, detached: readOnly })
+  const activeEntry: ActiveProc = { proc, detached: readOnly }
+  activeProcs.set(task.id, activeEntry)
   let settled = false
+
+  // Wall-clock safety cap. On expiry, terminate (SIGTERM→SIGKILL) via killTask so a
+  // wedged agent — or one holding stdout open through a backgrounded child so `close`
+  // never fires — cannot run forever.
+  const taskTimeout = setTimeout(() => {
+    const msg = `[forge] task exceeded ${config.taskTimeoutMs}ms wall-clock limit — terminating\n`
+    appendLog(task.id, msg)
+    emitter.emit('event', makeEvent('log', msg))
+    killTask(task.id)
+  }, config.taskTimeoutMs)
+  taskTimeout.unref()
+
+  function clearTaskTimers(): void {
+    clearTimeout(taskTimeout)
+    if (activeEntry.escalation) clearTimeout(activeEntry.escalation)
+  }
   proc.stdin.on('error', () => { /* early process exit is handled below */ })
   proc.stdin.end(provider === 'codex' ? task.prompt : undefined)
 
@@ -207,9 +296,17 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     settled = true
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
+    clearTaskTimers()
     flush()
 
     activeProcs.delete(task.id)
+
+    // Read-only leader exited: SIGKILL the whole group to reap any backgrounded
+    // children it spawned (they share the read-only uid and could otherwise reach a
+    // later task's copy). Harmless if the group is already empty.
+    if (readOnly && typeof proc.pid === 'number') {
+      try { process.kill(-proc.pid, 'SIGKILL') } catch { /* group already gone */ }
+    }
 
     if (readOnly) {
       // The agent ran entirely inside the disposable copy. Record what it changed
@@ -286,6 +383,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     if (settled) return
     settled = true
     if (flushTimer) clearInterval(flushTimer)
+    clearTaskTimers()
     flush()
     activeProcs.delete(task.id)
     cleanupCopy()

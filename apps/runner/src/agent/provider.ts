@@ -1,6 +1,29 @@
 import { execFileSync, spawn } from 'node:child_process'
+import { accessSync, constants as FS } from 'node:fs'
 import { userInfo } from 'node:os'
+import { join } from 'node:path'
 import type { AgentProvider } from '@forge/shared'
+import { SAFE_PATH } from './git-safe.js'
+
+// The fixed directories a read-only run may resolve executables from. NEVER the
+// inherited PATH, which (under pm2/root) can point under /root or at shims.
+const SAFE_PATH_DIRS = SAFE_PATH.split(':')
+
+// Resolve a bare command name to an absolute path on the fixed PATH that is
+// executable. Throws if it is not found — read-only then fails closed rather than
+// relying on an attacker-influenceable PATH lookup.
+export function resolveExecutable(name: string): string {
+  for (const dir of SAFE_PATH_DIRS) {
+    const candidate = join(dir, name)
+    try {
+      accessSync(candidate, FS.X_OK)
+      return candidate
+    } catch {
+      // keep looking
+    }
+  }
+  throw new Error(`executable '${name}' not found on the fixed read-only PATH`)
+}
 
 // Read-only Claude is restricted to an explicit allowlist of read-only tools.
 // This is defense-in-depth ONLY — the real guarantee is that the agent runs in a
@@ -20,19 +43,17 @@ const READONLY_ALLOWED_TOOLS = [
   'Bash(git diff:*)',
   'Bash(git status:*)',
   'Bash(rg:*)',
-  'Bash(find:*)',
 ].join(' ')
 
-// Deny mutating tools outright, and best-effort-deny the two destructive find
-// forms. Deny rules take precedence over allow rules in Claude Code. Precise
-// mid-command flag matching is not expressible, so the disposable copy remains
-// the actual enforcement boundary — this just narrows the attack surface.
+// Deny mutating tools outright. Deny rules take precedence over allow rules in Claude
+// Code. `find` is intentionally NOT on the allow list (it can delete/exec), and the
+// prefix syntax cannot express "find without -delete/-exec", so it is simply omitted
+// rather than pseudo-denied. The disposable copy + credential-less account remains
+// the actual enforcement boundary; these flags only narrow the attack surface.
 const READONLY_DISALLOWED_TOOLS = [
   'Edit',
   'Write',
   'NotebookEdit',
-  'Bash(find:* -delete*)',
-  'Bash(find:* -exec*)',
 ].join(',')
 
 export function providerCommand(
@@ -92,7 +113,9 @@ export function readOnlyEnv(
   opts: { claudeConfigDir?: string; codexHome?: string } = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+    // Fixed PATH, never inherited: the parent's PATH (pm2/root) can point under /root
+    // or at shims the read-only account should not resolve.
+    PATH: SAFE_PATH,
     HOME: home,
     USER: username,
     LOGNAME: username,

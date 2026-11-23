@@ -141,13 +141,25 @@ set of tool flags**:
    the real object store), then overlays the real repo's uncommitted **tracked**
    changes and **untracked, non-ignored** files so the agent sees the true working
    state. Ignored files (e.g. `.env`, `secret.log`) are deliberately **not** copied.
-   The real repo is only ever *read*.
+   The real repo is only ever *read*. **All of this preparation — the clone, every
+   read of the real working tree, and every overlay write — runs in a child process
+   that has already dropped to the read-only account**, never as root, so a hostile
+   working tree cannot trick a privileged process into reading host files or writing
+   outside the copy. Each overlay refuses to follow a symlinked parent, opens source
+   and destination with `O_NOFOLLOW`, skips non-regular files (FIFOs/sockets/devices),
+   and enforces per-file and total size caps. Every git invocation runs with a fixed
+   PATH and `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, and
+   `-c core.fsmonitor=false -c core.untrackedCache=false -c core.hooksPath=/dev/null`,
+   so a malicious repo-local `core.fsmonitor`/hook can never execute code.
 2. **The copy has nowhere to push.** Every remote is removed from the copy, so
    `git push`/`fetch` have no target.
 3. **The agent runs as a separate, credential-less account.** Set
    `READONLY_RUN_USER` to a dedicated OS account (e.g. `forge-ro`) that owns nothing
    and holds no SSH keys, `gh` login, or `~/.git-credentials`. The copy is `chown`ed
-   to that account and the process runs under its uid/gid.
+   to that account and the process runs under its uid/gid. This account must be
+   **distinct** from `CLAUDE_RUN_USER`/`CODEX_RUN_USER` (the writable run accounts) and
+   must **not own the repo** it reads — if the read-only uid equals a writable run
+   uid, uid 0, or the repo owner, read-only is refused and the task fails closed.
 4. **The environment is an explicit allowlist, not inherited.** The read-only process
    gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `TERM`, and the provider's
    isolated auth dir (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`). Inherited tokens such as
@@ -163,9 +175,13 @@ set of tool flags**:
    `GET /tasks/capabilities` reports `readOnly: false` and read-only requests are
    rejected with `400`. Any error preparing the copy fails the task **before** the
    agent starts.
-7. **Whole-process-group teardown.** The agent is spawned in its own process group;
-   cancel/close sends `SIGTERM` to the entire group (not just the leader), so
-   backgrounded children don't outlive the task. The disposable copy is then removed.
+7. **Whole-process-group teardown + wall-clock cap.** The agent is spawned in its own
+   process group; cancel/close/timeout sends `SIGTERM` to the entire group (not just
+   the leader), escalating to `SIGKILL` after `KILL_GRACE_MS` (default 10s), so
+   backgrounded children don't outlive the task. A task that exceeds
+   `TASK_TIMEOUT_MS` (default 60 min) is terminated the same way. The disposable copy
+   is then removed. On startup the runner also sweeps any copy temp dirs orphaned by a
+   previous crash/restart.
 
 After the run, the runner records an informational report of what changed **inside
 the copy** (`git status --porcelain=v2 --ignored` plus any commits the agent made);
@@ -176,6 +192,21 @@ the real repo and its remotes are never inspected or modified.
 - **Network egress is not blocked.** The agent can still make outbound network calls
   (it just has no credentials and no git remotes). If you need egress isolation, run
   the runner inside a network-restricted container/namespace.
+- **The read-only account can still *read* whatever its uid is allowed to read.** That
+  includes:
+  - **The provider's own OAuth tokens** in its auth dir (`CLAUDE_CONFIG_DIR` /
+    `CODEX_HOME` or the account's `~/.claude` / `~/.codex`) — the agent needs them to
+    run, so they are reachable. Lock these dirs down so a task cannot *tamper* with
+    them (poisoning the next task's auth): after the one-time login, make them
+    **root-owned and non-writable** by the read-only account —
+    `chown -R root:root <dir> && chmod -R u=rwX,go=rX <dir>` (the read-only user can
+    read but not modify). `scripts/setup.sh` does this automatically once the dirs are
+    non-empty.
+  - **Any repo the account is allowed to clone**, plus anything world-readable on the
+    host. Keep other users out of your repos so the read-only account only sees what
+    you intend: `chmod -R o-rx <each ALLOWED_REPO_PATH>` (it must still be readable by
+    `READONLY_RUN_USER`, e.g. via a shared group), and never leave plaintext secrets
+    in tracked/ignored repo files.
 - It is not a sandbox for arbitrary host damage outside the copy — it relies on the
   `READONLY_RUN_USER` account owning nothing the agent should be able to touch.
 
@@ -194,13 +225,25 @@ install -d -o forge-ro -g forge-ro /etc/forge-ro/claude /etc/forge-ro/codex
 sudo -u forge-ro CLAUDE_CONFIG_DIR=/etc/forge-ro/claude claude   # /login
 sudo -u forge-ro CODEX_HOME=/etc/forge-ro/codex codex login
 
-# 4. Point the runner at it (in apps/runner/.env):
-#    READONLY_RUN_USER=forge-ro
+# 4. LOCK the auth dirs so a read-only task can read but not tamper with them
+#    (a task that could rewrite the shared auth could poison the next task):
+chown -R root:root /etc/forge-ro/claude /etc/forge-ro/codex
+chmod -R u=rwX,go=rX /etc/forge-ro/claude /etc/forge-ro/codex
+
+# 5. Keep other users out of the repos the account may read (still readable by
+#    forge-ro, e.g. via a shared group):
+chmod -R o-rx /home/forge/repos   # each ALLOWED_REPO_PATH
+
+# 6. Point the runner at it (in apps/runner/.env):
+#    READONLY_RUN_USER=forge-ro            # MUST differ from CLAUDE_RUN_USER/CODEX_RUN_USER
 #    READONLY_CLAUDE_CONFIG_DIR=/etc/forge-ro/claude
 #    READONLY_CODEX_HOME=/etc/forge-ro/codex
 ```
 
-The runner must itself start as root for the uid/gid drop and `chown` to work.
+`scripts/setup.sh` automates steps 1, 2, and 4 when you pass `READONLY_RUN_USER`
+(it leaves the dirs writable for the first login, then locks them down on a re-run
+once they contain credentials). The runner must itself start as root for the uid/gid
+drop and `chown` to work.
 
 ### SSE event types
 

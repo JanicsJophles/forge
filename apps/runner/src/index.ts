@@ -6,6 +6,13 @@ import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
+import { sweepStaleReadOnlyDirs } from './agent/readonly.js'
+
+// Remove read-only copy temp dirs orphaned by a previous process (crash / pm2
+// restart / OOM kill). Safe to run here: schema.ts has just failed every in-flight
+// task, so nothing is using one of these dirs.
+const swept = sweepStaleReadOnlyDirs()
+if (swept > 0) console.log(`[forge] swept ${swept} stale read-only temp dir(s)`)
 
 const app = express()
 

@@ -61,25 +61,52 @@ npm run build
 # Read-only tasks run as a dedicated, credential-less account against a disposable
 # copy of the repo (see the README "Read-only tasks" section). Create the account
 # and its isolated provider-auth dirs here; the interactive logins must be done by
-# hand once (they can't be scripted). Skipped unless RO_USER is set.
-RO_USER="${READONLY_RUN_USER:-forge-ro}"
-RO_CLAUDE_DIR="/etc/forge-ro/claude"
-RO_CODEX_DIR="/etc/forge-ro/codex"
-if ! id "${RO_USER}" &>/dev/null; then
-    echo "[setup] creating read-only account '${RO_USER}'..."
-    useradd --system --create-home --shell /usr/sbin/nologin "${RO_USER}"
+# hand once (they can't be scripted). Skipped entirely unless READONLY_RUN_USER is set.
+if [[ -n "${READONLY_RUN_USER:-}" ]]; then
+    RO_USER="${READONLY_RUN_USER}"
+    RO_CLAUDE_DIR="/etc/forge-ro/claude"
+    RO_CODEX_DIR="/etc/forge-ro/codex"
+    if ! id "${RO_USER}" &>/dev/null; then
+        echo "[setup] creating read-only account '${RO_USER}'..."
+        useradd --system --create-home --shell /usr/sbin/nologin "${RO_USER}"
+    else
+        echo "[setup] read-only account '${RO_USER}' already exists"
+    fi
+
+    # Provider auth dirs. They must be WRITABLE by the read-only account for the
+    # one-time interactive login below. After login, re-run setup (or the two
+    # commands it prints) to LOCK them down: once they contain credentials we make
+    # them root-owned and non-writable by the read-only user, so one read-only task
+    # cannot poison the shared provider auth that the next task reads.
+    install -d -o "${RO_USER}" -g "${RO_USER}" -m 0700 "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
+    if find "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}" -mindepth 1 -print -quit | grep -q .; then
+        echo "[setup] locking read-only provider config (root-owned, not writable by ${RO_USER})..."
+        chown -R root:root "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
+        # root: rwX, group/other: rX (the read-only user can READ but not MODIFY).
+        chmod -R u=rwX,go=rX "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
+    else
+        echo "[setup] read-only provider config is empty — leaving it writable for first login"
+    fi
+
+    echo ""
+    echo "⚠  To finish read-only support, log the '${RO_USER}' account into each provider ONCE:"
+    echo "     sudo -u ${RO_USER} CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR} claude   # then /login"
+    echo "     sudo -u ${RO_USER} CODEX_HOME=${RO_CODEX_DIR} codex login"
+    echo "   THEN lock the config so a task cannot tamper with it (re-running setup also does this):"
+    echo "     chown -R root:root ${RO_CLAUDE_DIR} ${RO_CODEX_DIR}"
+    echo "     chmod -R u=rwX,go=rX ${RO_CLAUDE_DIR} ${RO_CODEX_DIR}"
+    echo "   and set in .env:  READONLY_RUN_USER=${RO_USER}"
+    echo "                     READONLY_CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR}"
+    echo "                     READONLY_CODEX_HOME=${RO_CODEX_DIR}"
+    echo ""
+    echo "   The read-only account can still READ any repo it is allowed to clone. Keep"
+    echo "   other users out of your repos (it must stay readable by ${RO_USER}, e.g. via"
+    echo "   a shared group):  chmod -R o-rx <each ALLOWED_REPO_PATH>"
+    echo "   and never leave plaintext secrets inside tracked/ignored repo files."
+    echo ""
 else
-    echo "[setup] read-only account '${RO_USER}' already exists"
+    echo "[setup] READONLY_RUN_USER not set — skipping read-only account setup"
 fi
-install -d -o "${RO_USER}" -g "${RO_USER}" "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
-echo ""
-echo "⚠  To finish read-only support, log the '${RO_USER}' account into each provider ONCE:"
-echo "     sudo -u ${RO_USER} CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR} claude   # then /login"
-echo "     sudo -u ${RO_USER} CODEX_HOME=${RO_CODEX_DIR} codex login"
-echo "   and set in .env:  READONLY_RUN_USER=${RO_USER}"
-echo "                     READONLY_CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR}"
-echo "                     READONLY_CODEX_HOME=${RO_CODEX_DIR}"
-echo ""
 
 # ── Runtime directories ───────────────────────────────────────────────────────
 mkdir -p "${LOG_DIR}" "${DATA_DIR}"

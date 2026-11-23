@@ -59,11 +59,11 @@ after(() => {
   rmSync(root, { recursive: true, force: true })
 })
 
-test('the disposable copy mirrors the real working state but not ignored files', () => {
+test('the disposable copy mirrors the real working state but not ignored files', async () => {
   const real = buildRealRepo()
   const dest = join(mkdtempSync(join(root, 'copyroot-')), 'repo')
 
-  const { baseHead } = prepareReadOnlyCopy(real, dest)
+  const { baseHead } = await prepareReadOnlyCopy(real, dest)
   assert.equal(baseHead, git(real, 'rev-parse', 'HEAD'), 'copy starts at the real HEAD')
 
   // Working-tree content matches what the agent should see:
@@ -79,7 +79,7 @@ test('the disposable copy mirrors the real working state but not ignored files',
   assert.equal(git(dest, 'remote'), '', 'all remotes removed from the copy')
 })
 
-test('the real repo is byte-for-byte unaffected by preparing and mutating the copy', () => {
+test('the real repo is byte-for-byte unaffected by preparing and mutating the copy', async () => {
   const real = buildRealRepo()
   const dest = join(mkdtempSync(join(root, 'copyroot2-')), 'repo')
 
@@ -88,7 +88,7 @@ test('the real repo is byte-for-byte unaffected by preparing and mutating the co
   const remotesBefore = git(real, 'remote')
   const secretBefore = readFileSync(join(real, 'secret.log'), 'utf8')
 
-  const { baseHead } = prepareReadOnlyCopy(real, dest)
+  const { baseHead } = await prepareReadOnlyCopy(real, dest)
 
   // Simulate a hostile agent doing everything the reviewer worried about — all
   // inside the copy.
@@ -121,18 +121,18 @@ test('the real repo is byte-for-byte unaffected by preparing and mutating the co
   assert.equal(readFileSync(join(real, 'mod.txt'), 'utf8'), 'MODIFIED\n', 'real working file still untouched')
 })
 
-test('preparing a copy of a repo with no commits fails (fail closed)', () => {
+test('preparing a copy of a repo with no commits fails (fail closed)', async () => {
   const empty = mkdtempSync(join(root, 'empty-'))
   initRepo(empty) // unborn HEAD, no commits
   const dest = join(mkdtempSync(join(root, 'emptycopy-')), 'repo')
-  assert.throws(() => prepareReadOnlyCopy(empty, dest), 'an un-cloneable repo must throw before any agent runs')
+  await assert.rejects(prepareReadOnlyCopy(empty, dest), 'an un-cloneable repo must reject before any agent runs')
 })
 
-test('the disposable copy can be removed cleanly after the run', () => {
+test('the disposable copy can be removed cleanly after the run', async () => {
   const real = buildRealRepo()
   const copyRoot = mkdtempSync(join(root, 'cleanup-'))
   const dest = join(copyRoot, 'repo')
-  prepareReadOnlyCopy(real, dest)
+  await prepareReadOnlyCopy(real, dest)
   assert.ok(existsSync(dest))
   rmSync(copyRoot, { recursive: true, force: true })
   assert.ok(!existsSync(copyRoot), 'copy is fully removed')

@@ -14,6 +14,11 @@ export const config = {
   autoCommit: process.env.AUTO_COMMIT !== 'false',
   commitMessagePrefix: process.env.COMMIT_MESSAGE_PREFIX ?? '[forge]',
   logLevel: process.env.LOG_LEVEL ?? 'info',
+  // Wall-clock cap on a single task. On expiry the agent's whole process group gets
+  // SIGTERM, then SIGKILL after killGraceMs. Default 60 min.
+  taskTimeoutMs: parseInt(process.env.TASK_TIMEOUT_MS ?? '3600000', 10),
+  // Grace period between SIGTERM and SIGKILL when terminating a task (timeout/cancel).
+  killGraceMs: parseInt(process.env.KILL_GRACE_MS ?? '10000', 10),
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
