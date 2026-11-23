@@ -48,4 +48,7 @@ if (!columns.some(c => c.name === 'provider')) {
 if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
+if (!columns.some(c => c.name === 'read_only')) {
+  db.exec('ALTER TABLE tasks ADD COLUMN read_only INTEGER')
+}
 console.log(`[db] SQLite open: ${DB_PATH}`)

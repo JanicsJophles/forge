@@ -1,9 +1,16 @@
 import { db } from './schema.js'
 import type { AgentTask, TaskStatus } from '@forge/shared'
+import { decodeTail } from './task-projection.js'
+
+// The GET /tasks list caps each task's log to this many trailing bytes. A single
+// 1.28 MB codex log overran Atlas's 1 MB relay frame; 20 tasks x this cap keeps
+// the whole list well under that limit. GET /tasks/:id still returns the full log.
+export const LIST_LOG_TAIL_BYTES = 4000
 
 interface TaskRow {
   provider: 'claude' | 'codex'
   auto_commit: number | null
+  read_only: number | null
   id: string
   repo: string
   branch: string
@@ -21,6 +28,7 @@ function rowToTask(row: TaskRow): AgentTask {
   return {
     provider: row.provider,
     autoCommit: row.auto_commit == null ? undefined : Boolean(row.auto_commit),
+    readOnly: row.read_only == null ? undefined : Boolean(row.read_only),
     id: row.id,
     repo: row.repo,
     branch: row.branch,
@@ -37,12 +45,13 @@ function rowToTask(row: TaskRow): AgentTask {
 
 export function insertTask(task: AgentTask): void {
   db.prepare(`
-    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit)
-    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit)
+    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit, read_only)
+    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit, @readOnly)
   `).run({
     id: task.id,
     provider: task.provider ?? 'claude',
     autoCommit: task.autoCommit == null ? null : Number(task.autoCommit),
+    readOnly: task.readOnly == null ? null : Number(task.readOnly),
     repo: task.repo,
     branch: task.branch,
     prompt: task.prompt,
@@ -57,9 +66,23 @@ export function getTask(id: string): AgentTask | undefined {
   return row ? rowToTask(row) : undefined
 }
 
-export function listTasks(limit = 20): AgentTask[] {
-  const rows = db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?').all(limit) as TaskRow[]
-  return rows.map(rowToTask)
+// logTailBytes caps each row's log to its trailing N bytes (UTF-8 safe) so a
+// large transcript does not bloat the list response. Omit it for the full log.
+export function listTasks(limit = 20, logTailBytes?: number): AgentTask[] {
+  if (logTailBytes === undefined) {
+    const rows = db.prepare('SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?').all(limit) as TaskRow[]
+    return rows.map(rowToTask)
+  }
+  const rows = db.prepare(
+    `SELECT id, repo, branch, prompt, status, created_at, started_at, completed_at,
+            error_message, commit_sha, provider, auto_commit, read_only,
+            substr(CAST(COALESCE(log, '') AS BLOB), ?) AS log
+     FROM tasks ORDER BY created_at DESC LIMIT ?`
+  ).all(-logTailBytes, limit) as (Omit<TaskRow, 'log'> & { log: Buffer | string | null })[]
+  // substr() of an empty blob yields SQL NULL; treat it as an empty log.
+  return rows.map(({ log, ...rest }) =>
+    rowToTask({ ...rest, log: log == null ? '' : typeof log === 'string' ? log : decodeTail(log) })
+  )
 }
 
 export function updateTaskStatus(id: string, status: TaskStatus): void {

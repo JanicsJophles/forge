@@ -96,7 +96,8 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/tasks` | Create and start a task |
-| `GET` | `/tasks` | List recent tasks (last 20) |
+| `GET` | `/tasks/capabilities` | Runner capabilities (providers, `readOnly`) |
+| `GET` | `/tasks` | List recent tasks (last 20, log truncated) |
 | `GET` | `/tasks/:id` | Get a single task |
 | `GET` | `/tasks/:id/stream` | SSE stream (catches up on reconnect) |
 | `DELETE` | `/tasks/:id` | Kill a running task |
@@ -110,11 +111,19 @@ All configuration is via environment variables (see [.env.example](apps/runner/.
   "repo": "/repos/my-project",
   "branch": "main",
   "prompt": "Refactor the auth module to use JWT",
-  "autoCommit": true
+  "autoCommit": true,
+  "readOnly": false
 }
 ```
 
 Only `repo` and `prompt` are required. `branch` defaults to the repo's current branch.
+
+`readOnly` (default `false`) makes the runner enforce a read-only task: the agent
+cannot edit, write, run mutating bash, commit, or push, the pre-task `git pull`
+only fast-forwards a clean tree, and any working-tree change left behind is reverted
+and the task is marked failed. Check `GET /tasks/capabilities` for `readOnly: true`
+before relying on it. `GET /tasks` caps each task's `log` to its last 4,000 bytes;
+`GET /tasks/:id` returns the full log.
 
 ### SSE event types
 

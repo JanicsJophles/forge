@@ -4,6 +4,10 @@ export type AgentProvider = 'claude' | 'codex'
 export interface AgentTask {
   provider?: AgentProvider
   autoCommit?: boolean
+  // When true the runner enforces read-only execution: the agent cannot edit,
+  // write, run mutating bash, commit, or push, and any working-tree change is
+  // reverted and the task failed. Defaults to false (unchanged behavior).
+  readOnly?: boolean
   id: string
   repo: string
   branch: string
@@ -29,4 +33,5 @@ export interface RunRequest {
   branch?: string
   prompt: string
   autoCommit?: boolean
+  readOnly?: boolean
 }

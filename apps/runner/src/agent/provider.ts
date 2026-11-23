@@ -2,16 +2,50 @@ import { execFileSync, spawn } from 'node:child_process'
 import { userInfo } from 'node:os'
 import type { AgentProvider } from '@forge/shared'
 
-export function providerCommand(provider: AgentProvider): { command: string; args: string[] } {
+export function providerCommand(
+  provider: AgentProvider,
+  readOnly = false,
+): { command: string; args: string[] } {
   switch (provider) {
-    case 'claude': return { command: 'claude', args: ['--dangerously-skip-permissions', '-p'] }
+    case 'claude':
+      // Read-only: plan mode forbids edits / writes / mutating bash, and we also
+      // explicitly deny the file-mutation tools. Drop --dangerously-skip-permissions
+      // so no permission bypass remains. Writable mode is unchanged.
+      return readOnly
+        ? { command: 'claude', args: ['--permission-mode', 'plan', '--disallowedTools', 'Edit,Write,NotebookEdit', '-p'] }
+        : { command: 'claude', args: ['--dangerously-skip-permissions', '-p'] }
     // Stdin keeps user prompts out of argv. Codex's own sandbox (bubblewrap) cannot create its mount namespace in
     // the runner's unprivileged LXC ("bwrap: Failed to make / slave: Permission denied"), so every shell command
     // failed while the task still reported success. Like Claude above, Codex relies on the container and the
     // non-root run user (executionIdentity refuses uid 0) as its sandbox.
+    //
+    // Read-only note: codex --sandbox read-only ALSO shells out to bubblewrap and
+    // fails the same way here, so it cannot be used to enforce read-only. The command
+    // is therefore identical in both modes; read-only is enforced out-of-band by the
+    // runner (autoCommit off, push blocked via readOnlyGitEnv, and a post-task
+    // dirty-tree check that reverts any change and fails the task).
     case 'codex': return { command: 'codex', args: ['exec', '--dangerously-bypass-approvals-and-sandbox', '-'] }
     default: throw new Error('Unsupported agent provider')
   }
+}
+
+// Returns a copy of env with git configured to refuse every push: each remote URL
+// scheme is rewritten (pushInsteadOf) to a nonexistent local path, so any `git push`
+// the agent attempts fails instantly without reaching a real remote. pushInsteadOf
+// only affects pushes, so fetch / read operations still work. Used for read-only tasks.
+export function readOnlyGitEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const blockedBase = 'file:///nonexistent/forge-read-only-no-push/'
+  const schemes = ['https://', 'http://', 'ssh://', 'git://', 'git@', 'file://']
+  const env: NodeJS.ProcessEnv = { ...baseEnv }
+  let count = Number.parseInt(env.GIT_CONFIG_COUNT ?? '', 10)
+  if (!Number.isInteger(count) || count < 0) count = 0
+  for (const scheme of schemes) {
+    env[`GIT_CONFIG_KEY_${count}`] = `url.${blockedBase}.pushInsteadOf`
+    env[`GIT_CONFIG_VALUE_${count}`] = scheme
+    count++
+  }
+  env.GIT_CONFIG_COUNT = String(count)
+  return env
 }
 
 export function executionIdentity(username: string) {

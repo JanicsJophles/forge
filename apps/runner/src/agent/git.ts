@@ -45,8 +45,11 @@ function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
   }
 }
 
-export function gitPull(repoPath: string, opts: RunOpts = {}): void {
+export function gitPull(repoPath: string, opts: RunOpts = {}, options: { onlyIfClean?: boolean } = {}): void {
   ensureRepoOwnership(repoPath, opts)
+  // Read-only tasks must not merge over local state: only fast-forward a clean
+  // tree. If the tree is dirty, skip the pull entirely rather than risk a merge.
+  if (options.onlyIfClean && hasUncommittedChanges(repoPath, opts)) return
   // If there is no upstream configured (e.g. fresh local repo), pulling
   // is a no-op rather than a hard failure. We detect this by checking
   // whether there is a remote tracking branch before attempting.
@@ -91,4 +94,14 @@ export function gitCommit(repoPath: string, message: string, opts: RunOpts = {})
 export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {
   const output = exec("git status --porcelain", repoPath, opts)
   return output.length > 0
+}
+
+/**
+ * Discard every working-tree change inside the repo: revert tracked-file
+ * modifications and delete untracked files + directories. Used to undo anything
+ * a read-only task wrote before failing it.
+ */
+export function revertRepo(repoPath: string, opts: RunOpts = {}): void {
+  exec("git checkout -- .", repoPath, opts)
+  exec("git clean -fd", repoPath, opts)
 }

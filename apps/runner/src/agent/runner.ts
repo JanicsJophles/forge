@@ -10,8 +10,8 @@ import {
   setCommitSha,
 } from '../db/queries.js'
 import { removeEmitter, makeEvent } from './stream.js'
-import { gitPull, gitCommit } from './git.js'
-import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
+import { gitPull, gitCommit, hasUncommittedChanges, revertRepo } from './git.js'
+import { providerCommand, executionIdentity, checkCodexLogin, readOnlyGitEnv } from './provider.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -29,6 +29,7 @@ export function countActiveProcs(): number {
 
 export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
   const provider = task.provider ?? 'claude'
+  const readOnly = task.readOnly ?? false
   let identity: ReturnType<typeof executionIdentity>
   try {
     identity = executionIdentity(provider === 'codex' ? config.codexRunUser : config.claudeRunUser)
@@ -52,7 +53,8 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   }
   // --- git pull before starting ---
   try {
-    gitPull(task.repo, identity)
+    // Read-only: only fast-forward a clean tree; skip otherwise (see gitPull).
+    gitPull(task.repo, identity, { onlyIfClean: readOnly })
     const pullMsg = `[forge] git pull completed\n`
     appendLog(task.id, pullMsg)
     emitter.emit('event', makeEvent('log', pullMsg))
@@ -70,17 +72,19 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
   updateTaskStatus(task.id, 'running')
   emitter.emit('event', makeEvent('status', 'running'))
 
-  const startMsg = `[forge] starting ${provider} agent in ${task.repo}\n`
+  const startMsg = `[forge] starting ${provider} agent in ${task.repo}${readOnly ? ' (read-only)' : ''}\n`
   appendLog(task.id, startMsg)
   emitter.emit('event', makeEvent('log', startMsg))
 
-  const command = providerCommand(provider)
+  const command = providerCommand(provider, readOnly)
+  // Read-only tasks launch with git push disabled in the agent's environment.
+  const launchIdentity = readOnly ? { ...identity, env: readOnlyGitEnv(identity.env) } : identity
   const proc = spawn(
     command.command,
     provider === 'claude' ? [...command.args, task.prompt] : command.args,
     {
       cwd: task.repo,
-      ...identity,
+      ...launchIdentity,
     }
   )
 
@@ -128,6 +132,49 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     flush()
 
     activeProcs.delete(task.id)
+
+    if (readOnly) {
+      // Enforce read-only: nothing may persist in the working tree. Any change
+      // (even on a successful run) is a violation — revert it and fail the task.
+      let dirty = false
+      try {
+        dirty = hasUncommittedChanges(task.repo, identity)
+      } catch (err: any) {
+        const errMsg = `[forge] read-only: could not inspect working tree: ${err.message}\n`
+        appendLog(task.id, errMsg)
+        emitter.emit('event', makeEvent('log', errMsg))
+      }
+      if (dirty) {
+        try {
+          revertRepo(task.repo, identity)
+        } catch (err: any) {
+          const errMsg = `[forge] read-only: revert failed: ${err.message}\n`
+          appendLog(task.id, errMsg)
+          emitter.emit('event', makeEvent('log', errMsg))
+        }
+        const msg = `[forge] read-only violation: agent modified the working tree; changes reverted`
+        appendLog(task.id, msg + '\n')
+        setErrorMessage(task.id, msg)
+        updateTaskStatus(task.id, 'failed')
+        emitter.emit('event', makeEvent('error', msg))
+        emitter.emit('done')
+        removeEmitter(task.id)
+        return
+      }
+      if (code === 0) {
+        updateTaskStatus(task.id, 'completed')
+        emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
+      } else {
+        const errMsg = `[forge] ${provider} exited with code ${code}\n`
+        appendLog(task.id, errMsg)
+        setErrorMessage(task.id, `${provider} exited with code ${code}`)
+        updateTaskStatus(task.id, 'failed')
+        emitter.emit('event', makeEvent('error', errMsg))
+      }
+      emitter.emit('done')
+      removeEmitter(task.id)
+      return
+    }
 
     if (code === 0) {
       // Auto-commit if enabled
