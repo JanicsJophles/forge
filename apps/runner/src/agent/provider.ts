@@ -38,23 +38,14 @@ const READONLY_ALLOWED_TOOLS = [
   'Bash(head:*)',
   'Bash(tail:*)',
   'Bash(wc:*)',
-  'Bash(git log:*)',
-  'Bash(git show:*)',
-  'Bash(git diff:*)',
-  'Bash(git status:*)',
-  'Bash(rg:*)',
+  // `rg` is intentionally OMITTED (finding I): `rg --pre <prog>` executes an arbitrary
+  // program per file, turning a "search" tool into code execution. Read/Grep/Glob —
+  // and git's own grep via the allowed subcommands — cover searching without that hole.
 ].join(' ')
 
-// Deny mutating tools outright. Deny rules take precedence over allow rules in Claude
-// Code. `find` is intentionally NOT on the allow list (it can delete/exec), and the
-// prefix syntax cannot express "find without -delete/-exec", so it is simply omitted
-// rather than pseudo-denied. The disposable copy + credential-less account remains
-// the actual enforcement boundary; these flags only narrow the attack surface.
-const READONLY_DISALLOWED_TOOLS = [
-  'Edit',
-  'Write',
-  'NotebookEdit',
-].join(',')
+// Git subcommands are omitted: options such as --output can write files, and
+// prefix permission rules cannot safely constrain every argument position.
+const READONLY_DISALLOWED_TOOLS = ['Edit', 'Write', 'NotebookEdit'].join(',')
 
 export function providerCommand(
   provider: AgentProvider,

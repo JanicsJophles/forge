@@ -195,8 +195,13 @@ tasksRouter.delete('/:id', (req: Request, res: Response) => {
   }
 
   const killed = killTask(task.id)
-  if (!killed) {
-    // Queued but not started yet — just mark failed
+  // Mark the task failed when it is not actively running an agent OR when it is still
+  // queued. The queued case closes the finding-G window: a read-only task cancelled
+  // during its (up-to-two-minute) copy preparation has a prep child registered, so
+  // killTask returns true — but the task row is still 'queued'. Flipping it to 'failed'
+  // here means the runner's post-prep status re-check sees a non-queued task and aborts
+  // before the agent ever starts, instead of racing the cancel.
+  if (!killed || task.status === 'queued') {
     updateTaskStatus(task.id, 'failed')
   }
 

@@ -201,10 +201,14 @@ export function prepareCopy(realRepo: string, copyRepo: string): string {
   // 2. Overlay the real working tree: tracked changes vs HEAD (+ deletions) and
   //    untracked, non-ignored files. Both reads run as us against the real repo.
   const changed = splitZ(
-    safeGit(['diff', '--name-only', '--no-renames', '-z', 'HEAD'], realRepo, { safeDir: realRepo }),
+    safeGit(
+      ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '--no-renames', '-z', 'HEAD'],
+      realRepo,
+      { safeDir: realRepo, worktree: realRepo },
+    ),
   )
   const untracked = splitZ(
-    safeGit(['ls-files', '--others', '--exclude-standard', '-z'], realRepo, { safeDir: realRepo }),
+    safeGit(['ls-files', '--others', '--exclude-standard', '-z'], realRepo, { safeDir: realRepo, worktree: realRepo }),
   )
   const state: OverlayState = { totalBytes: 0 }
   const seen = new Set<string>()

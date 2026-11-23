@@ -68,22 +68,32 @@ if [[ -n "${READONLY_RUN_USER:-}" ]]; then
     RO_CODEX_DIR="/etc/forge-ro/codex"
     if ! id "${RO_USER}" &>/dev/null; then
         echo "[setup] creating read-only account '${RO_USER}'..."
-        useradd --system --create-home --shell /usr/sbin/nologin "${RO_USER}"
+        # --user-group gives it its OWN dedicated primary group. A shared group would
+        # let the read-only account read the writable run account's group-readable
+        # repos and credentials — isolation is by uid AND gid.
+        useradd --system --create-home --user-group --shell /usr/sbin/nologin "${RO_USER}"
     else
         echo "[setup] read-only account '${RO_USER}' already exists"
     fi
 
+    # Root-owned, mode-0711 base dir for the disposable copies (never /tmp). The runner
+    # also creates this at startup, but make it here so permissions are correct up front.
+    RO_BASE_DIR="${READONLY_BASE_DIR:-/var/lib/forge/ro}"
+    install -d -o root -g root -m 0711 "${RO_BASE_DIR}"
+    echo "[setup] read-only copies will live under ${RO_BASE_DIR} (root-owned, 0711)"
+
     # Provider auth dirs. They must be WRITABLE by the read-only account for the
     # one-time interactive login below. After login, re-run setup (or the two
     # commands it prints) to LOCK them down: once they contain credentials we make
-    # them root-owned and non-writable by the read-only user, so one read-only task
-    # cannot poison the shared provider auth that the next task reads.
+    # them root-owned and mode 0700, NOT group/world readable. The runner copies this
+    # source per-task into a throwaway 0700 HOME, so the agent never reads it directly
+    # and one read-only task cannot tamper with the auth the next task uses.
     install -d -o "${RO_USER}" -g "${RO_USER}" -m 0700 "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
     if find "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}" -mindepth 1 -print -quit | grep -q .; then
-        echo "[setup] locking read-only provider config (root-owned, not writable by ${RO_USER})..."
+        echo "[setup] locking read-only provider config (root-owned, 0700 — only root can read at rest)..."
         chown -R root:root "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
-        # root: rwX, group/other: rX (the read-only user can READ but not MODIFY).
-        chmod -R u=rwX,go=rX "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
+        # root: rwX, group/other: NONE. The runner makes a per-task copy for the agent.
+        chmod -R u=rwX,go= "${RO_CLAUDE_DIR}" "${RO_CODEX_DIR}"
     else
         echo "[setup] read-only provider config is empty — leaving it writable for first login"
     fi
@@ -94,14 +104,17 @@ if [[ -n "${READONLY_RUN_USER:-}" ]]; then
     echo "     sudo -u ${RO_USER} CODEX_HOME=${RO_CODEX_DIR} codex login"
     echo "   THEN lock the config so a task cannot tamper with it (re-running setup also does this):"
     echo "     chown -R root:root ${RO_CLAUDE_DIR} ${RO_CODEX_DIR}"
-    echo "     chmod -R u=rwX,go=rX ${RO_CLAUDE_DIR} ${RO_CODEX_DIR}"
+    echo "     chmod -R u=rwX,go= ${RO_CLAUDE_DIR} ${RO_CODEX_DIR}"
     echo "   and set in .env:  READONLY_RUN_USER=${RO_USER}"
     echo "                     READONLY_CLAUDE_CONFIG_DIR=${RO_CLAUDE_DIR}"
     echo "                     READONLY_CODEX_HOME=${RO_CODEX_DIR}"
     echo ""
-    echo "   The read-only account can still READ any repo it is allowed to clone. Keep"
-    echo "   other users out of your repos (it must stay readable by ${RO_USER}, e.g. via"
-    echo "   a shared group):  chmod -R o-rx <each ALLOWED_REPO_PATH>"
+    echo "   The read-only account can still READ any repo it is allowed to clone. Grant"
+    echo "   it read access with an ACL (NOT a shared group, which would also expose the"
+    echo "   writable account's other group-readable files), and keep OTHER users out:"
+    echo "     setfacl -R -m u:${RO_USER}:rX  <each ALLOWED_REPO_PATH>"
+    echo "     setfacl -R -d -m u:${RO_USER}:rX  <each ALLOWED_REPO_PATH>"
+    echo "     chmod -R o-rx <each ALLOWED_REPO_PATH>"
     echo "   and never leave plaintext secrets inside tracked/ignored repo files."
     echo ""
 else

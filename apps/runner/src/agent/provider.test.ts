@@ -23,9 +23,11 @@ test('claude read-only pins the isolating settings/tools flags', () => {
   const pm = args.indexOf('--permission-mode')
   assert.equal(args[pm + 1], 'plan')
   const allowed = args[args.indexOf('--allowedTools') + 1]
-  for (const tool of ['Read', 'Grep', 'Glob', 'Bash(git log:*)', 'Bash(git status:*)']) {
+  for (const tool of ['Read', 'Grep', 'Glob']) {
     assert.ok(allowed.includes(tool), `allowedTools should include ${tool}`)
   }
+  assert.ok(!allowed.includes('Bash(git '))
+  assert.ok(!allowed.includes('Bash(rg'))
   const disallowed = args[args.indexOf('--disallowedTools') + 1]
   for (const tool of ['Edit', 'Write', 'NotebookEdit']) {
     assert.ok(disallowed.includes(tool), `disallowedTools should include ${tool}`)
