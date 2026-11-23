@@ -4,6 +4,12 @@ export type AgentProvider = 'claude' | 'codex'
 export interface AgentTask {
   provider?: AgentProvider
   autoCommit?: boolean
+  // When true the runner runs the task against a disposable copy of the repo
+  // (clone of committed history + overlay of uncommitted, non-ignored files),
+  // as a separate credential-less account with all remotes removed, so the real
+  // repo is never written to. Requires READONLY_RUN_USER to be configured;
+  // otherwise the request is refused. Defaults to false (unchanged behavior).
+  readOnly?: boolean
   id: string
   repo: string
   branch: string
@@ -29,4 +35,5 @@ export interface RunRequest {
   branch?: string
   prompt: string
   autoCommit?: boolean
+  readOnly?: boolean
 }

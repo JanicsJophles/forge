@@ -5,7 +5,13 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "build:shared": "tsc -p ../../packages/shared",
+    "prebuild": "npm run build:shared",
     "build": "tsc",
+    "pretypecheck": "npm run build:shared",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build:shared",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "start": "node dist/index.js"
   },
   "dependencies": {

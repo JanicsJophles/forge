@@ -8,17 +8,18 @@ import {
   listTasks,
   countActiveTasks,
   updateTaskStatus,
+  LIST_LOG_TAIL_BYTES,
 } from '../db/queries.js'
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
+import { getCapabilities } from '../capabilities.js'
 
 export const tasksRouter = Router()
-// Versioned contract, not a claim that either CLI is authenticated.
 tasksRouter.get('/capabilities', (_req, res) => {
-  res.json({ providerSelectionVersion: 1, providers: ['claude', 'codex'] })
+  res.json(getCapabilities())
 })
 
 // POST /tasks — create and kick off a task
@@ -31,6 +32,17 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   }
   if (body.autoCommit !== undefined && typeof body.autoCommit !== 'boolean') {
     res.status(400).json({ error: 'autoCommit must be a boolean' })
+    return
+  }
+  if (body.readOnly !== undefined && typeof body.readOnly !== 'boolean') {
+    res.status(400).json({ error: 'readOnly must be a boolean' })
+    return
+  }
+
+  // Refuse read-only tasks unless this runner can actually enforce them (a usable,
+  // isolated read-only account is configured). Never silently downgrade to writable.
+  if (body.readOnly === true && !getCapabilities().readOnly) {
+    res.status(400).json({ error: 'read-only is not supported by this runner: READONLY_RUN_USER is not configured or the account does not exist' })
     return
   }
 
@@ -57,10 +69,13 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
+  const readOnly = body.readOnly ?? false
   const task: AgentTask = {
     id: uuidv4(),
     provider: body.provider ?? 'claude',
-    autoCommit: body.autoCommit ?? config.autoCommit,
+    // Read-only tasks never commit, regardless of the requested autoCommit.
+    autoCommit: readOnly ? false : (body.autoCommit ?? config.autoCommit),
+    readOnly,
     repo: body.repo,
     branch,
     prompt: body.prompt,
@@ -81,9 +96,10 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   res.status(201).json({ taskId: task.id })
 })
 
-// GET /tasks — last 20
+// GET /tasks — last 20, with each task's log capped to its trailing bytes so a
+// large transcript cannot bloat the list response (GET /tasks/:id keeps the full log).
 tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+  res.json(listTasks(20, LIST_LOG_TAIL_BYTES))
 })
 
 // GET /tasks/:id — single task
@@ -179,8 +195,13 @@ tasksRouter.delete('/:id', (req: Request, res: Response) => {
   }
 
   const killed = killTask(task.id)
-  if (!killed) {
-    // Queued but not started yet — just mark failed
+  // Mark the task failed when it is not actively running an agent OR when it is still
+  // queued. The queued case closes the finding-G window: a read-only task cancelled
+  // during its (up-to-two-minute) copy preparation has a prep child registered, so
+  // killTask returns true — but the task row is still 'queued'. Flipping it to 'failed'
+  // here means the runner's post-prep status re-check sees a non-queued task and aborts
+  // before the agent ever starts, instead of racing the cancel.
+  if (!killed || task.status === 'queued') {
     updateTaskStatus(task.id, 'failed')
   }
 
