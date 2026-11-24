@@ -8,7 +8,9 @@ import {
   appendLog,
   setErrorMessage,
   setCommitSha,
+  switchTaskProvider,
 } from '../db/queries.js'
+import { continuedPrompt, usageLimitLine } from './failover.js'
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
@@ -128,6 +130,32 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     flush()
 
     activeProcs.delete(task.id)
+
+    // Out of usage: continue the same task on the next engine Brain allowed, instead of failing it.
+    const limitLine = usageLimitLine(fullLog, code)
+    const cancelled = getTask(task.id)?.status !== 'running'
+    if (limitLine && !cancelled) {
+      const [next, ...rest] = task.fallbackProviders ?? []
+      if (next) {
+        const prompt = continuedPrompt(task.prompt, provider, next, limitLine)
+        const moveMsg = `[forge] ${provider} is out of usage (${limitLine}); continuing on ${next.provider}\n`
+        appendLog(task.id, moveMsg)
+        emitter.emit('event', makeEvent('log', moveMsg))
+        switchTaskProvider(task.id, next.provider, prompt)
+        emitter.emit('event', makeEvent('status', 'queued'))
+        runTask({ ...task, provider: next.provider, prompt, fallbackProviders: rest, status: 'queued' }, emitter)
+          .catch(err => console.error('[runner] uncaught error in failover runTask', err))
+        return
+      }
+      const errMsg = `[forge] ${provider} usage limit: ${limitLine}\n`
+      appendLog(task.id, errMsg)
+      setErrorMessage(task.id, `${provider} usage limit: ${limitLine}`)
+      updateTaskStatus(task.id, 'failed')
+      emitter.emit('event', makeEvent('error', errMsg))
+      emitter.emit('done')
+      removeEmitter(task.id)
+      return
+    }
 
     if (code === 0) {
       // Auto-commit if enabled

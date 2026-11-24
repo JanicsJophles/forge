@@ -12,13 +12,14 @@ import {
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
+import { validFallbacks } from '../agent/failover.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection } from '../db/task-projection.js'
 
 export const tasksRouter = Router()
 // Versioned contract, not a claim that either CLI is authenticated.
 tasksRouter.get('/capabilities', (_req, res) => {
-  res.json({ providerSelectionVersion: 1, providers: ['claude', 'codex'] })
+  res.json({ providerSelectionVersion: 1, providers: ['claude', 'codex'], providerFailoverVersion: 1 })
 })
 
 // POST /tasks — create and kick off a task
@@ -27,6 +28,11 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   if (body.provider !== undefined && body.provider !== 'claude' && body.provider !== 'codex') {
     res.status(400).json({ error: 'provider must be claude or codex' })
+    return
+  }
+  const fallbackProviders = validFallbacks(body.fallbackProviders)
+  if (fallbackProviders === 'invalid') {
+    res.status(400).json({ error: 'fallbackProviders must list claude or codex at most once each' })
     return
   }
   if (body.autoCommit !== undefined && typeof body.autoCommit !== 'boolean') {
@@ -60,6 +66,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
   const task: AgentTask = {
     id: uuidv4(),
     provider: body.provider ?? 'claude',
+    fallbackProviders: fallbackProviders?.filter(f => f.provider !== (body.provider ?? 'claude')),
     autoCommit: body.autoCommit ?? config.autoCommit,
     repo: body.repo,
     branch,
