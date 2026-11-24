@@ -30,3 +30,13 @@ export function readTaskProjection(db: Database.Database, id: string, view: Task
   }
   return { ...row, read_projection_version: 1 }
 }
+
+/** Same last-20 ordering as /tasks, without loading prompts or logs into Node. */
+export function readTaskStatusList(db: Database.Database): Record<string, unknown>[] {
+  const provider = (db.pragma('table_info(tasks)') as { name: string }[])
+    .some(column => column.name === 'provider') ? ', provider' : ''
+  const rows = db.prepare(`SELECT id, repo, status, created_at AS createdAt,
+    started_at AS startedAt, completed_at AS completedAt${provider}
+    FROM tasks ORDER BY created_at DESC LIMIT 20`).all() as Record<string, unknown>[]
+  return rows.map(row => ({ ...row, read_projection_version: 1 }))
+}

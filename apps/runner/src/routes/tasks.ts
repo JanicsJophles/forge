@@ -13,7 +13,7 @@ import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
 import { getCurrentBranch } from '../agent/git.js'
 import { db } from '../db/schema.js'
-import { readTaskProjection } from '../db/task-projection.js'
+import { readTaskProjection, readTaskStatusList } from '../db/task-projection.js'
 
 export const tasksRouter = Router()
 // Versioned contract, not a claim that either CLI is authenticated.
@@ -82,8 +82,8 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 })
 
 // GET /tasks — last 20
-tasksRouter.get('/', (_req: Request, res: Response) => {
-  res.json(listTasks(20))
+tasksRouter.get('/', (req: Request, res: Response) => {
+  res.json(req.query.view === 'status' ? readTaskStatusList(db) : listTasks(20))
 })
 
 // GET /tasks/:id — single task
