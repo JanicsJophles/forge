@@ -52,6 +52,11 @@ export function insertTask(task: AgentTask): void {
   })
 }
 
+/** The task moved to another engine: record it and put it back in the queue for that engine. */
+export function switchTaskProvider(id: string, provider: 'claude' | 'codex', prompt: string): void {
+  db.prepare("UPDATE tasks SET provider = ?, prompt = ?, status = 'queued', error_message = NULL WHERE id = ?").run(provider, prompt, id)
+}
+
 export function getTask(id: string): AgentTask | undefined {
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined
   return row ? rowToTask(row) : undefined
