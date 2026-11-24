@@ -40,3 +40,17 @@ export function readTaskStatusList(db: Database.Database): Record<string, unknow
     FROM tasks ORDER BY created_at DESC LIMIT 20`).all() as Record<string, unknown>[]
   return rows.map(row => ({ ...row, read_projection_version: 1 }))
 }
+
+/** List labels need a small prompt preview, never the multi-megabyte execution log. */
+export function readTaskPreviewList(db: Database.Database): Record<string, unknown>[] {
+  const provider = (db.pragma('table_info(tasks)') as { name: string }[])
+    .some(column => column.name === 'provider') ? ', provider' : ''
+  const rows = db.prepare(`SELECT id, repo, branch, status, created_at AS createdAt,
+    started_at AS startedAt, completed_at AS completedAt, commit_sha AS commitSha,
+    substr(prompt, 1, 256) AS prompt, length(prompt) > 256 AS prompt_truncated,
+    substr(error_message, 1, 1024) AS errorMessage,
+    length(COALESCE(log, '')) > 0 AS log_truncated${provider}
+    FROM tasks ORDER BY created_at DESC LIMIT 20`).all() as Record<string, unknown>[]
+  return rows.map(row => ({ ...row, prompt_truncated: Boolean(row.prompt_truncated),
+    log_truncated: Boolean(row.log_truncated), read_projection_version: 1 }))
+}
