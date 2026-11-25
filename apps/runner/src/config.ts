@@ -1,4 +1,5 @@
 import 'dotenv/config'
+import { resolveAllowedRepo } from './agent/repo-path.js'
 
 const rawPaths = process.env.ALLOWED_REPO_PATHS ?? ''
 if (!rawPaths.trim()) {
@@ -19,6 +20,7 @@ export const config = {
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
 } as const
 
+// A string prefix match let "/opt/repos/../../etc" through to the root runner's chown -R.
 export function isRepoAllowed(repo: string): boolean {
-  return config.allowedRepoPaths.some(allowed => repo.startsWith(allowed))
+  return resolveAllowedRepo(repo, config.allowedRepoPaths) !== null
 }

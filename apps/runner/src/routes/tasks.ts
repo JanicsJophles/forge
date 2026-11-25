@@ -1,7 +1,9 @@
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import type { AgentTask, RunRequest } from '@forge/shared'
-import { config, isRepoAllowed } from '../config.js'
+import { config } from '../config.js'
+import { resolveAllowedRepo } from '../agent/repo-path.js'
+import { executionIdentity } from '../agent/provider.js'
 import {
   insertTask,
   getTask,
@@ -39,7 +41,9 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
-  if (!isRepoAllowed(body.repo)) {
+  // From here on only the canonical path is used: it reaches the root runner's chown and the agent's cwd.
+  const repo = resolveAllowedRepo(body.repo, config.allowedRepoPaths)
+  if (!repo) {
     res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
     return
   }
@@ -51,7 +55,8 @@ tasksRouter.post('/', (req: Request, res: Response) => {
 
   let branch: string
   try {
-    branch = body.branch ?? getCurrentBranch(body.repo)
+    // git reads the clone's own .git/config, which agents write: run it as the agent account, never as root.
+    branch = body.branch ?? getCurrentBranch(repo, executionIdentity(config.claudeRunUser))
   } catch (err: any) {
     res.status(400).json({ error: `could not determine branch: ${err.message}` })
     return
@@ -61,7 +66,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     id: uuidv4(),
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
-    repo: body.repo,
+    repo,
     branch,
     prompt: body.prompt,
     status: 'queued',
