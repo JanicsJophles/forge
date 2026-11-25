@@ -23,12 +23,14 @@ test('agent child environment never carries the runner token', () => {
   // Even if something puts it back into process.env later.
   process.env.FORGE_RUNNER_TOKEN = TOKEN
   process.env.FORGE_RUNNER_TOKEN_MAC = TOKEN
+  process.env.FORGE_BOARD_TOKEN_GATEWAY = TOKEN
   try {
     const { env } = executionIdentity(os.userInfo().username)
-    assert.deepEqual(Object.keys(env).filter(key => key.startsWith('FORGE_RUNNER_TOKEN')), [])
+    assert.deepEqual(Object.keys(env).filter(key => key.startsWith('FORGE_RUNNER_TOKEN') || key.startsWith('FORGE_BOARD_TOKEN')), [])
     assert.ok(!Object.values(env).includes(TOKEN))
   } finally {
     delete process.env.FORGE_RUNNER_TOKEN
     delete process.env.FORGE_RUNNER_TOKEN_MAC
+    delete process.env.FORGE_BOARD_TOKEN_GATEWAY
   }
 })

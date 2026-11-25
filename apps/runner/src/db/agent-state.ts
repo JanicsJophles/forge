@@ -55,6 +55,12 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS agent_events_type_idx    ON agent_events(event_type);
 `)
 
+// written_by: the board writer (routes/board-auth.ts) that last wrote the row,
+// or NULL for an anonymous write. Added after the table, so add it if missing.
+if (!(db.prepare('PRAGMA table_info(agent_state)').all() as Array<{ name: string }>).some(c => c.name === 'written_by')) {
+  db.exec('ALTER TABLE agent_state ADD COLUMN written_by TEXT')
+}
+
 // ---- types -----------------------------------------------------------------
 
 export interface AgentState {
@@ -70,6 +76,8 @@ export interface AgentState {
   createdAt: string
   updatedAt: string
   metadata?: Record<string, unknown> | null
+  /** Board writer that last wrote this row, or null when it was written anonymously. */
+  writtenBy: string | null
 }
 
 export interface AgentEvent {
@@ -96,6 +104,7 @@ interface AgentStateRow {
   created_at: string
   updated_at: string
   metadata: string | null
+  written_by: string | null
 }
 
 interface AgentEventRow {
@@ -128,6 +137,7 @@ function rowToState(row: AgentStateRow): AgentState {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     metadata: parseJson<Record<string, unknown>>(row.metadata),
+    writtenBy: row.written_by ?? null,
   }
 }
 
@@ -161,7 +171,18 @@ export interface CheckpointInput {
 
 const DEFAULT_TTL_SECONDS = 3600 // 1h — agents that go idle this long are stale
 
-export function checkpoint(input: CheckpointInput): AgentState {
+/** A row written by a board writer can only be changed or deleted by that writer. */
+export class RowOwnedError extends Error {
+  constructor(readonly agentId: string) { super('row is owned by another writer') }
+}
+
+function assertWritable(agentId: string, writer: string | null): void {
+  const row = db.prepare('SELECT written_by FROM agent_state WHERE agent_id = ?').get(agentId) as { written_by: string | null } | undefined
+  if (row?.written_by && row.written_by !== writer) throw new RowOwnedError(agentId)
+}
+
+export function checkpoint(input: CheckpointInput, writer: string | null = null): AgentState {
+  assertWritable(input.agentId, writer)
   const ttl = Math.max(60, input.ttlSeconds ?? DEFAULT_TTL_SECONDS)
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
@@ -179,7 +200,8 @@ export function checkpoint(input: CheckpointInput): AgentState {
         status        = COALESCE(@status, status),
         expires_at    = @expires_at,
         updated_at    = datetime('now'),
-        metadata      = COALESCE(@metadata, metadata)
+        metadata      = COALESCE(@metadata, metadata),
+        written_by    = @written_by
       WHERE agent_id = @agent_id
     `).run({
       agent_id: input.agentId,
@@ -192,13 +214,14 @@ export function checkpoint(input: CheckpointInput): AgentState {
       status: input.status ?? null,
       expires_at: expiresAt,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      written_by: writer,
     })
   } else {
     db.prepare(`
       INSERT INTO agent_state
-        (agent_id, agent_type, repo, branch, intent, files_touched, ticket, status, expires_at, metadata)
+        (agent_id, agent_type, repo, branch, intent, files_touched, ticket, status, expires_at, metadata, written_by)
       VALUES
-        (@agent_id, @agent_type, @repo, @branch, @intent, @files_touched, @ticket, @status, @expires_at, @metadata)
+        (@agent_id, @agent_type, @repo, @branch, @intent, @files_touched, @ticket, @status, @expires_at, @metadata, @written_by)
     `).run({
       agent_id: input.agentId,
       agent_type: input.agentType ?? 'unknown',
@@ -210,6 +233,7 @@ export function checkpoint(input: CheckpointInput): AgentState {
       status: input.status ?? null,
       expires_at: expiresAt,
       metadata: input.metadata ? JSON.stringify(input.metadata) : null,
+      written_by: writer,
     })
   }
 
@@ -242,7 +266,8 @@ export function listAgentState(filter: ListStateFilter = {}): AgentState[] {
   return rows.map(rowToState)
 }
 
-export function deleteAgentState(agentId: string): boolean {
+export function deleteAgentState(agentId: string, writer: string | null = null): boolean {
+  assertWritable(agentId, writer)
   const info = db.prepare('DELETE FROM agent_state WHERE agent_id = ?').run(agentId)
   return info.changes > 0
 }

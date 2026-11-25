@@ -2,17 +2,22 @@ import express, { type Express } from 'express'
 import { config } from './config.js'
 import './db/schema.js'  // runs CREATE TABLE on import
 import { runnerAuth, type RunnerAuthOptions } from './routes/auth.js'
+import { boardAuth, type BoardAuthOptions } from './routes/board-auth.js'
 import { healthRouter } from './routes/health.js'
 import { tasksRouter } from './routes/tasks.js'
 import { reposRouter } from './routes/repos.js'
 import { agentStateRouter } from './routes/agent-state.js'
 import { dashboardRouter } from './routes/dashboard.js'
 
-export function createApp(auth: RunnerAuthOptions = { tokens: config.runnerTokens }): Express {
+export function createApp(
+  auth: RunnerAuthOptions = { tokens: config.runnerTokens },
+  board: BoardAuthOptions = { tokens: config.boardTokens },
+): Express {
   const app = express()
 
   // Before the body parser, so an unauthenticated write is refused unread.
   app.use(runnerAuth(auth))
+  app.use(boardAuth(board))
   app.use(express.json())
 
   app.use(healthRouter)
