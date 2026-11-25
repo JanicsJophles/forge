@@ -1,6 +1,16 @@
+import { redact } from './redact.js'
+
 // Claude runs with `--output-format stream-json --verbose`: one JSON event per stdout line. The task log gets one
 // short human line per event instead (tool name and its first argument, a result marker, the final answer), so a
 // running task shows live progress and the database never stores raw event JSON.
+//
+// Log format, for consumers of task logs:
+//   [claude] session started (<model>)          [tool] <name>: <first argument>        -> ok | -> error: <start>
+//   [claude] <assistant text, one line>         [claude] finished: <subtype>, N turns, Xs
+//   then the final answer text verbatim (the agent's answer starts after the `[claude] finished:` line), then the
+//   runner's own `[forge] outcome: PR <url>` / `[forge] outcome: ABORTED <reason>` line.
+// Values that look like credentials are masked everywhere, and agent lines that start with "[forge]" are prefixed
+// with "[agent] " so only the runner writes lines starting with "[forge]".
 
 /** Longest stdout line that is parsed; longer ones (huge tool results) are skipped up to their newline. */
 export const MAX_EVENT_LINE = 2 * 1024 * 1024
@@ -18,8 +28,9 @@ export interface ClaudeOutcome {
   aborted?: string
 }
 
+// Masks credentials (before cutting, so a cut never exposes part of one) and flattens to one line.
 function oneLine(value: string, max: number): string {
-  const flat = value.replace(/\s+/g, ' ').trim()
+  const flat = redact(value).replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
@@ -42,12 +53,19 @@ function resultText(content: unknown): string {
   return ''
 }
 
+// Lines the runner writes start with "[forge]"; agent text that does is marked so it can't pass for one.
+export function neutralize(text: string): string {
+  return text.replace(/^(\s*)\[forge\]/gim, '$1[agent] [forge]')
+}
+
 export function parseOutcome(text: string, isError: boolean): ClaudeOutcome {
-  const outcome: ClaudeOutcome = { text: text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS)}\n…` : text, isError }
+  const capped = text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS)}\n…` : text
+  const outcome: ClaudeOutcome = { text: neutralize(redact(capped)), isError }
   const pr = /^\s*PR:\s*(https:\/\/\S+)/m.exec(text)
   if (pr) outcome.prUrl = pr[1]
   const aborted = /^\s*ABORTED:\s*(.*)$/m.exec(text)
   if (aborted) outcome.aborted = oneLine(aborted[1], 500)
+  if (outcome.prUrl) outcome.prUrl = redact(outcome.prUrl)
   return outcome
 }
 
@@ -145,7 +163,7 @@ export class ClaudeStreamParser {
       event = JSON.parse(line)
     } catch {
       // Not an event (a CLI warning, or plain text from an older CLI): keep it, shortened.
-      return `${oneLine(line, 2000)}\n`
+      return `${neutralize(oneLine(line, 2000))}\n`
     }
     return describeEvent(event, outcome => { this.outcome = outcome }).map(l => `${l}\n`).join('')
   }
