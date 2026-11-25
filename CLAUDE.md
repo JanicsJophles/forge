@@ -108,6 +108,15 @@ GET    /agent-context           → combined snapshot: live agents + last 24h of
 GET    /dashboard           → live HTML view of the agent board (polls /agent-context)
 ```
 
+## CI and fork pull requests
+
+- CI (`.github/workflows/ci.yml`) runs on GitHub-hosted runners only. This repo is public:
+  for `pull_request` events GitHub runs the workflow file from the PR, so a fork chooses its
+  own `runs-on`. Do not point any job at a self-hosted label.
+- **No agent approves a fork's workflow run**, ever: not the "Approve and run" button, not
+  `POST /repos/{repo}/actions/runs/{id}/approve`. Only Krish approves, after reading the diff
+  including workflow files.
+
 ## Development
 
 ```bash

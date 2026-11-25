@@ -1,0 +1,42 @@
+name: CI
+
+# Build + test every workspace on pushes to the integration branches and on every pull request.
+#
+# GitHub-hosted runners only, on purpose. This repository is public, and for pull_request
+# events GitHub runs the workflow file from the pull request, so a fork can rewrite runs-on
+# to any label it likes: no expression in this file can keep outside code off a self-hosted
+# runner. The only barrier would be the fork-run approval (Settings > Actions > require
+# approval for all external contributors), and no agent may ever approve a fork run.
+# So forge is not in the homelab runner pool; if it ever needs homelab hardware it gets its
+# own runner container, never a slot next to private repositories.
+on:
+  push:
+    branches: [main, 'fleet/**', live]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: build + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
