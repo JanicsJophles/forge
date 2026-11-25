@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from 'node:child_process'
 import { config } from '../config.js'
+import { redact } from './redact.js'
 import { resolveAllowedRepo } from './repo-path.js'
 
 // The runner itself is root. Every git command here runs as the agent account (uid/gid below) inside a clone
@@ -23,11 +24,11 @@ function git(args: string[], cwd: string, opts: RunOpts): string {
   }).trim()
 }
 
-/** Same rules as git() (argv only, never uid 0) without blocking the event loop: for fetches and clones. */
-export function gitAsync(args: string[], cwd: string, opts: RunOpts): Promise<string> {
-  if (!Number.isInteger(opts.uid) || opts.uid === 0) return Promise.reject(new Error('git must run as the non-root agent account'))
+/** Runs a command as the agent account (never uid 0, argv only) without blocking the event loop. */
+export function execAsAgent(file: string, args: string[], cwd: string, opts: RunOpts): Promise<string> {
+  if (!Number.isInteger(opts.uid) || opts.uid === 0) return Promise.reject(new Error(`${file} must run as the non-root agent account`))
   return new Promise((resolve, reject) => {
-    execFile('git', args, {
+    execFile(file, args, {
       cwd,
       encoding: 'utf8',
       maxBuffer: 16 * 1024 * 1024,
@@ -35,12 +36,16 @@ export function gitAsync(args: string[], cwd: string, opts: RunOpts): Promise<st
       gid: opts.gid,
       ...(opts.env ? { env: opts.env } : {}),
     }, (err, stdout, stderr) => {
-      // The message reaches the task log: never a credential embedded in a remote URL.
-      const detail = String(stderr || err?.message).replace(/:\/\/[^/@\s]+@/g, '://***@').trim().slice(0, 500)
-      if (err) reject(new Error(`git ${args[0]} failed: ${detail}`))
+      // The message reaches the task log: credentials in it are masked.
+      if (err) reject(new Error(`${file} ${args[0]} failed: ${redact(String(stderr || err.message)).trim().slice(0, 500)}`))
       else resolve(stdout.trim())
     })
   })
+}
+
+/** git as the agent account, without blocking the event loop: for fetches and worktree commands. */
+export function gitAsync(args: string[], cwd: string, opts: RunOpts): Promise<string> {
+  return execAsAgent('git', args, cwd, opts)
 }
 
 export function getCurrentBranch(repoPath: string, opts: RunOpts): string {

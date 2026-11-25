@@ -1,8 +1,8 @@
-import { chownSync, lstatSync, mkdirSync } from 'node:fs'
+import { lstatSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentTask, RunRequest } from '@forge/shared'
 import { config } from '../config.js'
-import { gitAsync, type RunOpts } from './git.js'
+import { execAsAgent, gitAsync, type RunOpts } from './git.js'
 import { isPlainAbsolutePath, resolveAllowedRepo } from './repo-path.js'
 
 // Per-task workspaces: one forge-owned bare mirror per repo (<root>/.mirrors/<repo>) and one git worktree per
@@ -23,6 +23,10 @@ export interface WorkspaceLayout {
   allowedRoots: readonly string[]
   /** Explicitly allowed repo names and their remote URLs (WORKSPACE_REPOS="name=url,name=url"). */
   remotes: Readonly<Record<string, string>>
+  /** Most worktrees that may exist under .tasks at once (running plus kept); new workspace tasks fail beyond it. */
+  maxTasks: number
+  /** A requested topic branch must start with one of these. */
+  topicPrefixes: readonly string[]
 }
 
 export function workspaceLayoutFromEnv(allowedRoots: readonly string[], env = process.env): WorkspaceLayout {
@@ -32,8 +36,19 @@ export function workspaceLayoutFromEnv(allowedRoots: readonly string[], env = pr
     const name = pair.slice(0, at).trim()
     if (at > 0 && isRepoName(name)) remotes[name] = pair.slice(at + 1).trim()
   }
-  return { root: (env.WORKSPACE_ROOT ?? '/opt/repos').replace(/\/+$/, ''), allowedRoots, remotes }
+  const maxTasks = Number.parseInt(env.WORKSPACE_MAX_TASKS ?? '', 10)
+  const prefixes = (env.WORKSPACE_TOPIC_PREFIXES ?? DEFAULT_TOPIC_PREFIXES.join(','))
+    .split(',').map(p => p.trim()).filter(p => p.endsWith('/') && isRefName(`${p}x`))
+  return {
+    root: (env.WORKSPACE_ROOT ?? '/opt/repos').replace(/\/+$/, ''),
+    allowedRoots,
+    remotes,
+    maxTasks: Number.isInteger(maxTasks) && maxTasks > 0 ? maxTasks : 30,
+    topicPrefixes: prefixes.length ? prefixes : DEFAULT_TOPIC_PREFIXES,
+  }
 }
+
+const DEFAULT_TOPIC_PREFIXES = ['forge/', 'feat/', 'fix/', 'chore/', 'docs/', 'refactor/', 'test/']
 
 const REPO_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/
 // A conservative subset of git's ref rules: no leading "-", no "..", "//", "@{", or trailing "/", "." or ".lock".
@@ -49,6 +64,19 @@ export function isRefName(name: unknown): name is string {
 
 export function workspaceTopic(taskId: string, requested?: string): string {
   return requested ?? `forge/task-${taskId.slice(0, 8)}`
+}
+
+/** A topic branch a caller may ask for: a valid name under one of the allowed prefixes (never main etc.). */
+export function isAllowedTopic(name: unknown, layout: WorkspaceLayout): name is string {
+  return isRefName(name) && layout.topicPrefixes.some(prefix => name.startsWith(prefix) && name.length > prefix.length)
+}
+
+/** Remote URLs must not carry credentials (the mirror's config is readable by agents); use a credential helper. */
+export function hasUrlCredentials(url: string): boolean {
+  const m = /^[a-z][a-z0-9+.-]*:\/\/([^/@]*)@/i.exec(url)
+  if (!m) return false
+  // ssh://git@host is a user name, not a credential; anything else before @ is refused.
+  return !/^ssh:/i.test(url) || m[1].includes(':')
 }
 
 /** Validates a POST /tasks `workspace`: a repo the runner may check out, and a base branch name. */
@@ -79,14 +107,15 @@ function withRepoLock<T>(repo: string, fn: () => Promise<T>): Promise<T> {
   return next
 }
 
-// The runner is root; these two directories are created by it and handed to the agent account. A symlink
-// or non-directory planted at either path is refused rather than followed.
-function ensureAgentDir(path: string, opts: RunOpts): void {
+// The runner is root, and the workspace root is agent-writable: root never creates, chowns or follows anything
+// there. The agent account creates these directories itself; anything that is not a real directory owned by it
+// (a symlink, a file, a root-owned leftover) is refused.
+async function ensureAgentDir(path: string, opts: RunOpts): Promise<void> {
   if (!isPlainAbsolutePath(path)) throw new Error('workspace directory is not a plain absolute path')
-  mkdirSync(path, { recursive: true, mode: 0o755 })
+  await execAsAgent('mkdir', ['-p', '--', path], '/', opts)
   const stat = lstatSync(path)
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`${path} is not a directory`)
-  if (stat.uid !== opts.uid) chownSync(path, opts.uid, opts.gid)
+  if (stat.uid !== opts.uid) throw new Error(`${path} is not owned by the agent account`)
 }
 
 function exists(path: string): boolean {
@@ -104,12 +133,13 @@ async function remoteUrl(layout: WorkspaceLayout, repo: string, opts: RunOpts): 
 
 async function ensureMirror(layout: WorkspaceLayout, repo: string, opts: RunOpts): Promise<string> {
   const mirrors = join(layout.root, '.mirrors')
-  ensureAgentDir(mirrors, opts)
+  await ensureAgentDir(mirrors, opts)
   const mirror = join(mirrors, repo)
   if (!resolveAllowedRepo(mirror, [mirrors])) {
     if (exists(mirror)) throw new Error(`${mirror} exists but is not a plain directory`)
     // A bare repo with only remote-tracking refs, so a topic branch can never collide with a copied head.
     const url = await remoteUrl(layout, repo, opts)
+    if (hasUrlCredentials(url)) throw new Error('the remote URL carries credentials; use the agent account\'s credential helper')
     await gitAsync(['init', '--quiet', '--bare', '--', mirror], mirrors, opts)
     await gitAsync(['remote', 'add', '--', 'origin', url], mirror, opts)
   }
@@ -122,8 +152,14 @@ export function createWorkspace(layout: WorkspaceLayout, taskId: string, spec: W
   opts: RunOpts): Promise<string> {
   if (!isRefName(topic)) return Promise.reject(new Error('invalid topic branch name'))
   return withRepoLock(spec.repo, async () => {
+    const tasks = join(layout.root, '.tasks')
+    await ensureAgentDir(tasks, opts)
+    // Kept worktrees (uncommitted or unpushed work) stay until reviewed or pruned; never let them fill the disk.
+    const existing = readdirSync(tasks).length
+    if (existing >= layout.maxTasks) {
+      throw new Error(`${existing} task worktrees exist under ${tasks} (limit ${layout.maxTasks}); review or prune kept ones first`)
+    }
     const mirror = await ensureMirror(layout, spec.repo, opts)
-    ensureAgentDir(join(layout.root, '.tasks'), opts)
     const path = taskWorkspacePath(layout, taskId)
     await gitAsync(['worktree', 'add', '--quiet', '--no-track', '-b', topic, path, `refs/remotes/origin/${spec.base}`], mirror, opts)
     return path

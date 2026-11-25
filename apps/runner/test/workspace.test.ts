@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -124,10 +124,57 @@ test('a symlink planted where the mirror goes is refused', async () => {
   await assert.rejects(ws.createWorkspace(layout, 'sym', { repo: 'other', base: 'main' }, 'forge/sym', me), /not a plain directory/)
 })
 
-test('a failed fetch never puts a credential from the remote URL into the error', async () => {
+test('remote URLs carrying credentials are refused, and never echoed', async () => {
   const credLayout = { ...layout, remotes: { cred: 'http://agent:s3cret-value@127.0.0.1:9/x.git' } }
   await assert.rejects(ws.createWorkspace(credLayout, 'cred', { repo: 'cred', base: 'main' }, 'forge/cred', me),
+    (err: Error) => /credentials/.test(err.message) && !err.message.includes('s3cret-value'))
+  assert.equal(ws.hasUrlCredentials('https://x-access-token:abc@github.com/o/r.git'), true)
+  assert.equal(ws.hasUrlCredentials('https://ghp_abcdef@github.com/o/r.git'), true)
+  assert.equal(ws.hasUrlCredentials('ssh://git:pw@github.com/o/r.git'), true)
+  assert.equal(ws.hasUrlCredentials('ssh://git@github.com/o/r.git'), false)
+  assert.equal(ws.hasUrlCredentials('git@github.com:o/r.git'), false)
+  assert.equal(ws.hasUrlCredentials('https://github.com/o/r.git'), false)
+})
+
+test('a failed fetch masks credentials in the error text', async () => {
+  // A URL without userinfo passes the check; the failure text is still redacted on the way out.
+  const badLayout = { ...layout, remotes: { bad: 'http://127.0.0.1:9/x.git?access_token=s3cret-value' } }
+  await assert.rejects(ws.createWorkspace(badLayout, 'bad', { repo: 'bad', base: 'main' }, 'forge/bad', me),
     (err: Error) => /fetch failed/.test(err.message) && !err.message.includes('s3cret-value'))
+})
+
+test('the agent account creates .tasks and .mirrors; a symlink planted there is refused, not followed', async () => {
+  const other = join(base, 'root2')
+  mkdirSync(other)
+  git(other, 'clone', '-q', upstream, join(other, 'app'))
+  const target = join(base, 'planted-target')
+  mkdirSync(target)
+  symlinkSync(target, join(other, '.tasks'))
+  const l2 = ws.workspaceLayoutFromEnv([other], { WORKSPACE_ROOT: other })
+  await assert.rejects(ws.createWorkspace(l2, 'p1', { repo: 'app', base: 'main' }, 'forge/p1', me), /not a directory/)
+  assert.deepEqual(readdirSync(target), [])
+  rmSync(join(other, '.tasks'))
+  writeFileSync(join(other, '.mirrors'), '')
+  await assert.rejects(ws.createWorkspace(l2, 'p2', { repo: 'app', base: 'main' }, 'forge/p2', me))
+  rmSync(join(other, '.mirrors'))
+  const path = await ws.createWorkspace(l2, 'p3', { repo: 'app', base: 'main' }, 'forge/p3', me)
+  assert.equal(lstatSync(join(other, '.tasks')).uid, me.uid)
+  assert.ok(existsSync(path))
+})
+
+test('new workspaces stop once the worktree limit is reached', async () => {
+  const capped = { ...layout, maxTasks: readdirSync(join(root, '.tasks')).length }
+  await assert.rejects(ws.createWorkspace(capped, 'over', { repo: 'app', base: 'main' }, 'forge/over', me), /limit/)
+  assert.equal(existsSync(join(root, '.tasks', 'over')), false)
+})
+
+test('requested topic branches must sit under an allowed prefix', () => {
+  for (const ok of ['forge/x', 'feat/thing', 'fix/a-b']) assert.equal(ws.isAllowedTopic(ok, layout), true, ok)
+  for (const bad of ['main', 'master', 'develop', 'live', 'forge/', 'release/1', 'feat/../main', 'HEAD', 7]) {
+    assert.equal(ws.isAllowedTopic(bad, layout), false, String(bad))
+  }
+  const custom = ws.workspaceLayoutFromEnv([root], { WORKSPACE_TOPIC_PREFIXES: 'agents/, bad, main' })
+  assert.deepEqual(custom.topicPrefixes, ['agents/'])
 })
 
 test('POST /tasks validates workspace requests and keeps repo-path requests unchanged', async () => {
@@ -149,8 +196,11 @@ test('POST /tasks validates workspace requests and keeps repo-path requests unch
       { status: 400, error: 'workspace.repo is not an allowed repository' })
     assert.deepEqual(await post({ prompt: 'p', workspace: { repo: 'app', base: '-x' } }),
       { status: 400, error: 'workspace.base must be a branch name' })
-    assert.deepEqual(await post({ prompt: 'p', workspace: { repo: 'app', base: 'main' }, branch: 'a..b' }),
-      { status: 400, error: 'branch must be a valid branch name' })
+    for (const branch of ['a..b', 'main', 'develop']) {
+      const r = await post({ prompt: 'p', workspace: { repo: 'app', base: 'main' }, branch })
+      assert.equal(r.status, 400, branch)
+      assert.match(r.error ?? '', /topic branch under forge\//)
+    }
     assert.deepEqual(await post({ prompt: 'p', repo: join(root, 'app'), workspace: { repo: 'app', base: 'main' } }),
       { status: 400, error: 'give repo or workspace, not both' })
     assert.deepEqual(await post({ prompt: 'p' }), { status: 400, error: 'repo or workspace is required' })

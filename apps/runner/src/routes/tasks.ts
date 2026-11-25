@@ -4,7 +4,7 @@ import { config } from '../config.js'
 import { resolveAllowedRepo } from '../agent/repo-path.js'
 import { executionIdentity } from '../agent/provider.js'
 import {
-  isRefName, taskWorkspacePath, validateWorkspace, workspaceLayout, workspaceTopic,
+  isAllowedTopic, taskWorkspacePath, validateWorkspace, workspaceLayout, workspaceTopic,
   type RunnerTask, type TaskRequest, type WorkspaceRequest,
 } from '../agent/workspace.js'
 import {
@@ -58,8 +58,8 @@ tasksRouter.post('/', (req: Request, res: Response) => {
       res.status(400).json({ error: checked.error })
       return
     }
-    if (body.branch !== undefined && !isRefName(body.branch)) {
-      res.status(400).json({ error: 'branch must be a valid branch name' })
+    if (body.branch !== undefined && !isAllowedTopic(body.branch, workspaceLayout)) {
+      res.status(400).json({ error: `branch must be a new topic branch under ${workspaceLayout.topicPrefixes.join(', ')}` })
       return
     }
     workspace = checked.spec
