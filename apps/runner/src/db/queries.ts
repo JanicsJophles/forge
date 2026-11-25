@@ -1,5 +1,6 @@
 import { db } from './schema.js'
-import type { AgentTask, TaskStatus } from '@forge/shared'
+import type { TaskStatus } from '@forge/shared'
+import type { RunnerTask as AgentTask } from '../agent/workspace.js'
 
 interface TaskRow {
   provider: 'claude' | 'codex'
@@ -15,6 +16,8 @@ interface TaskRow {
   completed_at: string | null
   error_message: string | null
   commit_sha: string | null
+  workspace_repo: string | null
+  workspace_base: string | null
 }
 
 function rowToTask(row: TaskRow): AgentTask {
@@ -32,13 +35,17 @@ function rowToTask(row: TaskRow): AgentTask {
     completedAt: row.completed_at ?? undefined,
     errorMessage: row.error_message ?? undefined,
     commitSha: row.commit_sha ?? undefined,
+    workspace: row.workspace_repo && row.workspace_base
+      ? { repo: row.workspace_repo, base: row.workspace_base } : undefined,
   }
 }
 
 export function insertTask(task: AgentTask): void {
   db.prepare(`
-    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit)
-    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit)
+    INSERT INTO tasks (id, repo, branch, prompt, status, log, created_at, provider, auto_commit,
+      workspace_repo, workspace_base)
+    VALUES (@id, @repo, @branch, @prompt, @status, @log, @createdAt, @provider, @autoCommit,
+      @workspaceRepo, @workspaceBase)
   `).run({
     id: task.id,
     provider: task.provider ?? 'claude',
@@ -49,6 +56,8 @@ export function insertTask(task: AgentTask): void {
     status: task.status,
     log: task.log,
     createdAt: task.createdAt,
+    workspaceRepo: task.workspace?.repo ?? null,
+    workspaceBase: task.workspace?.base ?? null,
   })
 }
 

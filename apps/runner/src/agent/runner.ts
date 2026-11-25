@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
 import type { EventEmitter } from 'node:events'
-import type { AgentTask } from '@forge/shared'
 import { config } from '../config.js'
 import {
   updateTaskStatus,
@@ -12,6 +11,7 @@ import {
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
+import { createWorkspace, finishWorkspace, workspaceLayout, type RunnerTask } from './workspace.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
@@ -27,7 +27,7 @@ export function countActiveProcs(): number {
   return activeProcs.size
 }
 
-export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<void> {
+export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<void> {
   const provider = task.provider ?? 'claude'
   let identity: ReturnType<typeof executionIdentity>
   try {
@@ -50,18 +50,44 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     removeEmitter(task.id)
     return
   }
-  // --- git pull before starting ---
+  function log(line: string) {
+    appendLog(task.id, line)
+    emitter.emit('event', makeEvent('log', line))
+  }
+  // Workspace tasks: drop the worktree when nothing would be lost, otherwise keep it and say where it is.
+  async function releaseWorkspace() {
+    if (!task.workspace) return
+    try {
+      const outcome = await finishWorkspace(workspaceLayout, task.id, task.workspace, identity)
+      log(outcome.removed ? `[forge] workspace removed (${outcome.reason})\n`
+        : `[forge] workspace kept at ${task.repo} (${outcome.reason})\n`)
+    } catch (err: any) {
+      log(`[forge] workspace kept at ${task.repo} (cleanup failed: ${err.message})\n`)
+    }
+  }
+  // --- prepare the checkout: a fresh worktree for workspace tasks, otherwise pull the existing clone ---
   try {
-    gitPull(task.repo, identity)
-    const pullMsg = `[forge] git pull completed\n`
-    appendLog(task.id, pullMsg)
-    emitter.emit('event', makeEvent('log', pullMsg))
+    if (task.workspace) {
+      await createWorkspace(workspaceLayout, task.id, task.workspace, task.branch, identity)
+      log(`[forge] workspace ready: ${task.repo} on ${task.branch} from origin/${task.workspace.base}\n`)
+    } else {
+      gitPull(task.repo, identity)
+      log(`[forge] git pull completed\n`)
+    }
   } catch (err: any) {
-    const msg = `[forge] git pull failed: ${err.message}\n`
-    appendLog(task.id, msg)
-    setErrorMessage(task.id, `git pull failed: ${err.message}`)
+    const what = task.workspace ? 'workspace setup' : 'git pull'
+    log(`[forge] ${what} failed: ${err.message}\n`)
+    setErrorMessage(task.id, `${what} failed: ${err.message}`)
     updateTaskStatus(task.id, 'failed')
-    emitter.emit('event', makeEvent('error', msg))
+    emitter.emit('event', makeEvent('error', `${what} failed`))
+    emitter.emit('done')
+    removeEmitter(task.id)
+    return
+  }
+  // A cancellation may also arrive while the checkout is prepared.
+  if (getTask(task.id)?.status !== 'queued') {
+    await releaseWorkspace()
+    emitter.emit('event', makeEvent('error', 'Task cancelled before launch'))
     emitter.emit('done')
     removeEmitter(task.id)
     return
@@ -164,7 +190,7 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
       emitter.emit('event', makeEvent('error', errMsg))
     }
 
-
+    await releaseWorkspace()
     emitter.emit('done')
     removeEmitter(task.id)
   })
@@ -181,7 +207,9 @@ export async function runTask(task: AgentTask, emitter: EventEmitter): Promise<v
     setErrorMessage(task.id, err.message)
     updateTaskStatus(task.id, 'failed')
     emitter.emit('event', makeEvent('error', errMsg))
-    emitter.emit('done')
-    removeEmitter(task.id)
+    void releaseWorkspace().finally(() => {
+      emitter.emit('done')
+      removeEmitter(task.id)
+    })
   })
 }

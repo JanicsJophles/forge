@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import { config } from '../config.js'
 import { resolveAllowedRepo } from './repo-path.js'
 
@@ -21,6 +21,26 @@ function git(args: string[], cwd: string, opts: RunOpts): string {
     gid: opts.gid,
     ...(opts.env ? { env: opts.env } : {}),
   }).trim()
+}
+
+/** Same rules as git() (argv only, never uid 0) without blocking the event loop: for fetches and clones. */
+export function gitAsync(args: string[], cwd: string, opts: RunOpts): Promise<string> {
+  if (!Number.isInteger(opts.uid) || opts.uid === 0) return Promise.reject(new Error('git must run as the non-root agent account'))
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024,
+      uid: opts.uid,
+      gid: opts.gid,
+      ...(opts.env ? { env: opts.env } : {}),
+    }, (err, stdout, stderr) => {
+      // The message reaches the task log: never a credential embedded in a remote URL.
+      const detail = String(stderr || err?.message).replace(/:\/\/[^/@\s]+@/g, '://***@').trim().slice(0, 500)
+      if (err) reject(new Error(`git ${args[0]} failed: ${detail}`))
+      else resolve(stdout.trim())
+    })
+  })
 }
 
 export function getCurrentBranch(repoPath: string, opts: RunOpts): string {

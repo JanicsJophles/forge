@@ -1,9 +1,12 @@
 import { Router, Request, Response } from 'express'
 import { v4 as uuidv4 } from 'uuid'
-import type { AgentTask, RunRequest } from '@forge/shared'
 import { config } from '../config.js'
 import { resolveAllowedRepo } from '../agent/repo-path.js'
 import { executionIdentity } from '../agent/provider.js'
+import {
+  isRefName, taskWorkspacePath, validateWorkspace, workspaceLayout, workspaceTopic,
+  type RunnerTask, type TaskRequest, type WorkspaceRequest,
+} from '../agent/workspace.js'
 import {
   insertTask,
   getTask,
@@ -25,7 +28,7 @@ tasksRouter.get('/capabilities', (_req, res) => {
 
 // POST /tasks — create and kick off a task
 tasksRouter.post('/', (req: Request, res: Response) => {
-  const body = (req.body ?? {}) as RunRequest
+  const body = (req.body ?? {}) as TaskRequest
 
   if (body.provider !== undefined && body.provider !== 'claude' && body.provider !== 'codex') {
     res.status(400).json({ error: 'provider must be claude or codex' })
@@ -36,16 +39,45 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
-  if (typeof body.repo !== 'string' || !body.repo.trim() || typeof body.prompt !== 'string' || !body.prompt.trim()) {
-    res.status(400).json({ error: 'repo and prompt are required' })
+  if (typeof body.prompt !== 'string' || !body.prompt.trim()) {
+    res.status(400).json({ error: 'prompt is required' })
+    return
+  }
+  if (body.workspace !== undefined && body.repo !== undefined) {
+    res.status(400).json({ error: 'give repo or workspace, not both' })
     return
   }
 
-  // From here on only the canonical path is used: it reaches the root runner's chown and the agent's cwd.
-  const repo = resolveAllowedRepo(body.repo, config.allowedRepoPaths)
-  if (!repo) {
-    res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
-    return
+  const id = uuidv4()
+  let repo: string
+  let branch = ''
+  let workspace: WorkspaceRequest | undefined
+  if (body.workspace !== undefined) {
+    const checked = validateWorkspace(body.workspace, workspaceLayout)
+    if ('error' in checked) {
+      res.status(400).json({ error: checked.error })
+      return
+    }
+    if (body.branch !== undefined && !isRefName(body.branch)) {
+      res.status(400).json({ error: 'branch must be a valid branch name' })
+      return
+    }
+    workspace = checked.spec
+    // The worktree is created when the task starts; this is where it will be.
+    repo = taskWorkspacePath(workspaceLayout, id)
+    branch = workspaceTopic(id, body.branch)
+  } else {
+    if (typeof body.repo !== 'string' || !body.repo.trim()) {
+      res.status(400).json({ error: 'repo or workspace is required' })
+      return
+    }
+    // From here on only the canonical path is used: it reaches the root runner's chown and the agent's cwd.
+    const resolved = resolveAllowedRepo(body.repo, config.allowedRepoPaths)
+    if (!resolved) {
+      res.status(400).json({ error: 'repo path is not in ALLOWED_REPO_PATHS' })
+      return
+    }
+    repo = resolved
   }
 
   if (countActiveTasks() >= config.maxConcurrentTasks) {
@@ -53,17 +85,18 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
-  let branch: string
-  try {
-    // git reads the clone's own .git/config, which agents write: run it as the agent account, never as root.
-    branch = body.branch ?? getCurrentBranch(repo, executionIdentity(config.claudeRunUser))
-  } catch (err: any) {
-    res.status(400).json({ error: `could not determine branch: ${err.message}` })
-    return
+  if (!workspace) {
+    try {
+      // git reads the clone's own .git/config, which agents write: run it as the agent account, never as root.
+      branch = body.branch ?? getCurrentBranch(repo, executionIdentity(config.claudeRunUser))
+    } catch (err: any) {
+      res.status(400).json({ error: `could not determine branch: ${err.message}` })
+      return
+    }
   }
 
-  const task: AgentTask = {
-    id: uuidv4(),
+  const task: RunnerTask = {
+    id,
     provider: body.provider ?? 'claude',
     autoCommit: body.autoCommit ?? config.autoCommit,
     repo,
@@ -72,6 +105,7 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     status: 'queued',
     log: '',
     createdAt: new Date().toISOString(),
+    ...(workspace ? { workspace } : {}),
   }
 
   insertTask(task)
