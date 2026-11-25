@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { resolveAllowedRepo } from './agent/repo-path.js'
+import { TOKEN_ENV, tokensFromEnv } from './routes/auth.js'
 
 const rawPaths = process.env.ALLOWED_REPO_PATHS ?? ''
 if (!rawPaths.trim()) {
@@ -18,7 +19,14 @@ export const config = {
   // Non-root user to run claude as (required: --dangerously-skip-permissions is blocked for root)
   claudeRunUser: process.env.CLAUDE_RUN_USER ?? 'forge',
   codexRunUser: process.env.CODEX_RUN_USER ?? 'forge',
+  // Bearer tokens (caller name -> token) required on state-changing task routes; see routes/auth.ts.
+  // None set = open, with a startup warning.
+  runnerTokens: tokensFromEnv(process.env),
 } as const
+
+// Read once, then drop them from the environment: agents (and git hooks in the
+// repos they edit) inherit process.env, so no token may be visible to them.
+for (const key of Object.keys(process.env)) if (TOKEN_ENV.test(key)) delete process.env[key]
 
 // A string prefix match let "/opt/repos/../../etc" through to the root runner's chown -R.
 export function isRepoAllowed(repo: string): boolean {
