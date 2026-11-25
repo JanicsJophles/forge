@@ -1,0 +1,41 @@
+name: CI
+
+# Build + test every workspace on pushes to the integration branches and on every pull request.
+#
+# Runner selection: the repository variable CI_RUNS_ON picks the runner, e.g.
+#   gh variable set CI_RUNS_ON -R JanicsJophles/forge --body '["self-hosted","homelab","linux","x64"]'
+# (the homelab pool, brain's tools/ci-runner). Unset means GitHub-hosted ubuntu-latest.
+# This repository is public: a pull request whose head is not this repository (a fork,
+# or a deleted fork whose head.repo is null) always gets ubuntu-latest, so code from
+# outside never runs on homelab hardware. Keep that guard on every job.
+on:
+  push:
+    branches: [main, 'fleet/**', live]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: build + test
+    runs-on: ${{ fromJSON((github.event.pull_request && github.event.pull_request.head.repo.full_name != github.repository && '"ubuntu-latest"') || vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
