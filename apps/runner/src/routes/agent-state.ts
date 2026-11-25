@@ -23,11 +23,17 @@ import {
   insertEvent,
   listEvents,
   gcAgentEvents,
+  RowOwnedError,
   type CheckpointInput,
   type EventInput,
 } from '../db/agent-state.js'
 
 export const agentStateRouter = Router()
+
+/** Board writer set by routes/board-auth.ts, or null for an anonymous write. */
+function writerOf(res: Response): string | null {
+  return typeof res.locals.boardWriter === 'string' ? res.locals.boardWriter : null
+}
 
 function badRequest(res: Response, msg: string): void {
   res.status(400).json({ error: msg })
@@ -52,8 +58,12 @@ agentStateRouter.post('/agent-state/checkpoint', (req: Request, res: Response) =
     ttlSeconds: typeof b.ttlSeconds === 'number' ? b.ttlSeconds : undefined,
     metadata: b.metadata && typeof b.metadata === 'object' ? b.metadata : undefined,
   }
-  const result = checkpoint(input)
-  res.json(result)
+  try {
+    res.json(checkpoint(input, writerOf(res)))
+  } catch (err) {
+    if (err instanceof RowOwnedError) return void res.status(403).json({ error: 'row is owned by another writer' })
+    throw err
+  }
 })
 
 agentStateRouter.get('/agent-state', (req: Request, res: Response) => {
@@ -72,8 +82,12 @@ agentStateRouter.get('/agent-state/:agentId', (req: Request, res: Response) => {
 })
 
 agentStateRouter.delete('/agent-state/:agentId', (req: Request, res: Response) => {
-  const ok = deleteAgentState(req.params.agentId)
-  res.json({ deleted: ok })
+  try {
+    res.json({ deleted: deleteAgentState(req.params.agentId, writerOf(res)) })
+  } catch (err) {
+    if (err instanceof RowOwnedError) return void res.status(403).json({ error: 'row is owned by another writer' })
+    throw err
+  }
 })
 
 // ---- agent_events ----------------------------------------------------------
