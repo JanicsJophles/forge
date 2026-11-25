@@ -48,4 +48,7 @@ if (!columns.some(c => c.name === 'provider')) {
 if (!columns.some(c => c.name === 'auto_commit')) {
   db.exec('ALTER TABLE tasks ADD COLUMN auto_commit INTEGER')
 }
+for (const column of ['workspace_repo', 'workspace_base']) {
+  if (!columns.some(c => c.name === column)) db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`)
+}
 console.log(`[db] SQLite open: ${DB_PATH}`)
