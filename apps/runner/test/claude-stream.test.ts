@@ -116,3 +116,42 @@ test('agent output cannot pass for a runner line', () => {
   assert.match(log, /\[agent\] \[forge\] outcome: PR/)
   assert.equal(parser.outcome?.prUrl, undefined)
 })
+
+test('a secret straddling the 20,000-character answer cut never shows in part', () => {
+  const secret = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+  for (const offset of [-30, -20, -5, 0, 5]) {
+    const text = 'x '.repeat((20_000 + offset) / 2) + secret + ' tail'
+    const [, answer] = describeEvent({ type: 'result', subtype: 'success', result: text })
+    assert.ok(answer.length <= 20_002)
+    assert.ok(!/ghp_|abcdefghij|0123456789/.test(answer), `offset ${offset}: ${answer.slice(-60)}`)
+  }
+})
+
+// Best of three, so a GC pause or a busy CPU (test files run in parallel) is not mistaken for a slow pattern.
+function fastest(fn: () => unknown): number {
+  let best = Infinity
+  for (let i = 0; i < 3; i++) {
+    const start = performance.now()
+    fn()
+    best = Math.min(best, performance.now() - start)
+  }
+  return best
+}
+
+test('pathological output stays fast', () => {
+  const cases = [
+    { type: 'result', subtype: 'success', result: '\n'.repeat(900_000) + 'x' },
+    { type: 'result', subtype: 'success', result: ' \n'.repeat(600_000) + 'PR:' },
+    { type: 'result', subtype: 'success', result: '"token'.repeat(250_000) },
+    { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'a=b '.repeat(480_000) } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', is_error: true, content: '"' + 'token'.repeat(380_000) }] } },
+  ]
+  for (const event of cases) {
+    const line = JSON.stringify(event)
+    assert.ok(line.length < 2 * 1024 * 1024, 'each case must be parsed, not skipped as oversized')
+    const ms = fastest(() => new ClaudeStreamParser().push(line + '\n'))
+    assert.ok(ms < 150, `${line.slice(0, 40)}: ${ms.toFixed(1)} ms`)
+  }
+  const newlines = '[forge]' + '\n'.repeat(500_000) + '\n'
+  assert.ok(fastest(() => new ClaudeStreamParser().push(newlines)) < 150)
+})

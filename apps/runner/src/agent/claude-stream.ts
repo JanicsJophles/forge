@@ -28,9 +28,10 @@ export interface ClaudeOutcome {
   aborted?: string
 }
 
-// Masks credentials (before cutting, so a cut never exposes part of one) and flattens to one line.
+// Masks credentials (on a bounded slice, before the final cut, so a cut never exposes part of one) and
+// flattens to one line.
 function oneLine(value: string, max: number): string {
-  const flat = redact(value).replace(/\s+/g, ' ').trim()
+  const flat = redact(value, max * 2).replace(/\s+/g, ' ').trim()
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
@@ -55,18 +56,25 @@ function resultText(content: unknown): string {
 
 // Lines the runner writes start with "[forge]"; agent text that does is marked so it can't pass for one.
 export function neutralize(text: string): string {
-  return text.replace(/^(\s*)\[forge\]/gim, '$1[agent] [forge]')
+  return text.replace(/^([ \t]*)\[forge\]/gim, '$1[agent] [forge]')
 }
 
 export function parseOutcome(text: string, isError: boolean): ClaudeOutcome {
-  const capped = text.length > RESULT_CHARS ? `${text.slice(0, RESULT_CHARS)}\n…` : text
-  const outcome: ClaudeOutcome = { text: neutralize(redact(capped)), isError }
-  const pr = /^\s*PR:\s*(https:\/\/\S+)/m.exec(text)
-  if (pr) outcome.prUrl = pr[1]
-  const aborted = /^\s*ABORTED:\s*(.*)$/m.exec(text)
+  // redact() cuts first, drops a token split by the cut, then masks: a secret at the boundary never shows in part.
+  const head = redact(text, RESULT_CHARS)
+  const outcome: ClaudeOutcome = { text: neutralize(text.length > RESULT_CHARS ? `${head}\n…` : head), isError }
+  const scan = text.slice(0, RESULT_CHARS)
+  const pr = /^[ \t]*PR:[ \t]*(https:\/\/\S+)/m.exec(scan)
+  if (pr) outcome.prUrl = redact(pr[1], 2000)
+  const aborted = /^[ \t]*ABORTED:[ \t]*(.*)$/m.exec(scan)
   if (aborted) outcome.aborted = oneLine(aborted[1], 500)
-  if (outcome.prUrl) outcome.prUrl = redact(outcome.prUrl)
   return outcome
+}
+
+function trimTrailingNewlines(text: string): string {
+  let end = text.length
+  while (end > 0 && text[end - 1] === '\n') end--
+  return text.slice(0, end)
 }
 
 /** The log lines for one event (usually one, none for bookkeeping events). */
@@ -107,7 +115,7 @@ export function describeEvent(event: any, onOutcome?: (outcome: ClaudeOutcome) =
       const turns = Number.isInteger(event.num_turns) ? `, ${event.num_turns} turns` : ''
       const secs = typeof event.duration_ms === 'number' ? `, ${(event.duration_ms / 1000).toFixed(1)}s` : ''
       const lines = [`[claude] finished: ${oneLine(String(event.subtype ?? 'done'), 40)}${turns}${secs}`]
-      if (outcome.text) lines.push(outcome.text.replace(/\n+$/, ''))
+      if (outcome.text) lines.push(trimTrailingNewlines(outcome.text))
       return lines
     }
     default:
