@@ -11,6 +11,7 @@ import {
 import { removeEmitter, makeEvent } from './stream.js'
 import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
+import { ClaudeStreamParser, type ClaudeOutcome } from './claude-stream.js'
 import { createWorkspace, finishWorkspace, workspaceLayout, type RunnerTask } from './workspace.js'
 
 // Active process handles keyed by taskId for SIGTERM support
@@ -21,6 +22,13 @@ export function killTask(taskId: string): boolean {
   if (!proc) return false
   proc.kill('SIGTERM')
   return true
+}
+
+// Tasks have no PR or abort fields yet: the outcome goes into the log as one line callers can match.
+function outcomeLine(outcome: ClaudeOutcome | undefined): string {
+  if (outcome?.prUrl) return `[forge] outcome: PR ${outcome.prUrl}\n`
+  if (outcome?.aborted) return `[forge] outcome: ABORTED ${outcome.aborted}\n`
+  return ''
 }
 
 export function countActiveProcs(): number {
@@ -137,8 +145,11 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
 
   flushTimer = setInterval(flush, 500)
 
-  proc.stdout.on('data', (data: Buffer) => {
-    buffer += data.toString()
+  // Claude prints stream-json events: each becomes a short log line, never raw JSON. Codex output is kept as is.
+  const claudeStream = provider === 'claude' ? new ClaudeStreamParser() : null
+  if (claudeStream) proc.stdout.setEncoding('utf8') // decodes characters split across chunks
+  proc.stdout.on('data', (data: Buffer | string) => {
+    buffer += claudeStream ? claudeStream.push(String(data)) : data.toString()
   })
 
   proc.stderr.on('data', (data: Buffer) => {
@@ -151,6 +162,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
     settled = true
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
+    if (claudeStream) buffer += claudeStream.end() + outcomeLine(claudeStream.outcome)
     flush()
 
     activeProcs.delete(task.id)
@@ -199,6 +211,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
     if (settled) return
     settled = true
     if (flushTimer) clearInterval(flushTimer)
+    if (claudeStream) buffer += claudeStream.end()
     flush()
     activeProcs.delete(task.id)
 
