@@ -32,6 +32,7 @@ export function executionIdentity(username: string) {
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USER: username, LOGNAME: username }
   // Never borrow the service/root account's credential directory or API keys.
   for (const key of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']) delete env[key]
+  for (const key of Object.keys(env)) if (key.startsWith('FORGE_RUNNER_TOKEN')) delete env[key]
   return { uid, gid, env }
 }
 
