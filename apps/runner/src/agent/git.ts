@@ -1,94 +1,81 @@
-import { execSync } from "node:child_process"
+import { execFileSync } from 'node:child_process'
+import { config } from '../config.js'
+import { resolveAllowedRepo } from './repo-path.js'
 
-interface RunOpts {
-  uid?: number
-  gid?: number
+// The runner itself is root. Every git command here runs as the agent account (uid/gid below) inside a clone
+// that agents write, including its .git/config and .git/hooks, so a hook or core.fsmonitor an agent plants can
+// only ever run as the agent. No command goes through a shell: arguments are passed as an argv array.
+export interface RunOpts {
+  uid: number
+  gid: number
+  env?: NodeJS.ProcessEnv
 }
 
-function exec(cmd: string, cwd: string, opts: RunOpts = {}): string {
-  return execSync(cmd, {
+function git(args: string[], cwd: string, opts: RunOpts): string {
+  if (!Number.isInteger(opts.uid) || opts.uid === 0) throw new Error('git must run as the non-root agent account')
+  return execFileSync('git', args, {
     cwd,
-    encoding: "utf8",
-    ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
-    ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    uid: opts.uid,
+    gid: opts.gid,
+    ...(opts.env ? { env: opts.env } : {}),
   }).trim()
 }
 
-export function getCurrentBranch(repoPath: string): string {
-  return exec("git rev-parse --abbrev-ref HEAD", repoPath)
+export function getCurrentBranch(repoPath: string, opts: RunOpts): string {
+  return git(['rev-parse', '--abbrev-ref', 'HEAD'], repoPath, opts)
 }
 
 /**
- * Best-effort: make sure the .git/ subtree is owned by the user that will
- * subsequently run as. The runner historically spawned `git pull` as root,
- * which created root-owned objects under .git/objects/; once we drop privs
- * to the forge user for subsequent git ops, those root-owned files break
- * `git add` / `git commit`. Walking the tree on every run is cheap enough
- * to do unconditionally rather than detect the problem after it manifests.
+ * Best-effort: make sure the clone is owned by the agent account. The runner historically ran `git pull` as
+ * root, which left root-owned files that later broke the agent's own git add / commit.
  *
- * Silently swallows errors — chown is not allowed across mount boundaries
- * or for non-root, and that's fine.
+ * This chown runs as root, so the path is re-checked right here (a canonical, non-symlink directory inside
+ * ALLOWED_REPO_PATHS) and chown never follows a symlink: -P walks the tree physically and -h changes a link
+ * itself, so a link an agent plants inside the clone (or swaps in for it) cannot point the chown at /etc.
  */
 function ensureRepoOwnership(repoPath: string, opts: RunOpts): void {
-  if (opts.uid === undefined || opts.gid === undefined) return
-  // Chown the ENTIRE repo, not just .git/. Working-tree files get
-  // root-owned too if a prior agent ran with elevated privs and wrote
-  // files (e.g. a refactor that touched src/ from root). Without this,
-  // the next agent (running as forge) hits ENOENT-equivalent failures
-  // editing src/. Mass-chown is cheap on these repos (< 1s).
+  const repo = resolveAllowedRepo(repoPath, config.allowedRepoPaths)
+  if (!repo) throw new Error('repo path is not in ALLOWED_REPO_PATHS')
   try {
-    execSync(`chown -R ${opts.uid}:${opts.gid} ${JSON.stringify(repoPath)}`, {
-      stdio: "ignore",
-    })
+    execFileSync('chown', ['-R', '-P', '-h', '--', `${opts.uid}:${opts.gid}`, repo], { stdio: 'ignore' })
   } catch {
-    // not running as root, or .git doesn't exist yet — neither case is a real error
+    // not running as root, or a file vanished mid-walk: neither is a real error
   }
 }
 
-export function gitPull(repoPath: string, opts: RunOpts = {}): void {
+export function gitPull(repoPath: string, opts: RunOpts): void {
   ensureRepoOwnership(repoPath, opts)
-  // If there is no upstream configured (e.g. fresh local repo), pulling
-  // is a no-op rather than a hard failure. We detect this by checking
-  // whether there is a remote tracking branch before attempting.
+  // No upstream (e.g. a fresh local repo) makes this a no-op. As before, a failed pull is not fatal either:
+  // the agent starts on the clone as it is.
   try {
-    const upstream = execSync("git rev-parse --abbrev-ref --symbolic-full-name @{u}", {
-      cwd: repoPath,
-      encoding: "utf8",
-      stdio: ["pipe", "pipe", "pipe"],
-      ...(opts.uid !== undefined ? { uid: opts.uid } : {}),
-      ...(opts.gid !== undefined ? { gid: opts.gid } : {}),
-    }).trim()
-    if (upstream) {
-      exec("git pull --ff-only", repoPath, opts)
-    }
+    const upstream = git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], repoPath, opts)
+    if (upstream) git(['pull', '--ff-only'], repoPath, opts)
   } catch {
-    // No upstream configured — skip pull silently
+    // no upstream, or the pull failed
   }
 }
 
-export function gitCommit(repoPath: string, message: string, opts: RunOpts = {}): string {
-  // Stage all tracked modifications (but not untracked files — let the
-  // agent's own git add handle staging if it chose to add new files)
+export function gitCommit(repoPath: string, message: string, opts: RunOpts): string {
+  // Stage tracked modifications only; the agent stages new files itself if it wants them.
   try {
-    exec("git add -u", repoPath, opts)
+    git(['add', '-u'], repoPath, opts)
   } catch {
-    // Nothing tracked was modified — that's fine
+    // Nothing tracked was modified
   }
 
   try {
-    exec(`git commit -m ${JSON.stringify(message)}`, repoPath, opts)
+    git(['commit', '-m', message], repoPath, opts)
   } catch (err: any) {
-    // "nothing to commit" is not a real error
-    if (err.stdout?.includes("nothing to commit") || err.stderr?.includes("nothing to commit")) {
-      return ""
-    }
+    const out = `${err?.stdout ?? ''}${err?.stderr ?? ''}`
+    if (out.includes('nothing to commit')) return ''
     throw err
   }
 
-  return exec("git rev-parse HEAD", repoPath, opts)
+  return git(['rev-parse', 'HEAD'], repoPath, opts)
 }
 
-export function hasUncommittedChanges(repoPath: string, opts: RunOpts = {}): boolean {
-  const output = exec("git status --porcelain", repoPath, opts)
-  return output.length > 0
+export function hasUncommittedChanges(repoPath: string, opts: RunOpts): boolean {
+  return git(['status', '--porcelain'], repoPath, opts).length > 0
 }
