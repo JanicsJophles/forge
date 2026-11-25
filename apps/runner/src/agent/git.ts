@@ -37,7 +37,7 @@ export function execAsAgent(file: string, args: string[], cwd: string, opts: Run
       ...(opts.env ? { env: opts.env } : {}),
     }, (err, stdout, stderr) => {
       // The message reaches the task log: credentials in it are masked.
-      if (err) reject(new Error(`${file} ${args[0]} failed: ${redact(String(stderr || err.message)).trim().slice(0, 500)}`))
+      if (err) reject(new Error(`${file} ${args[0]} failed: ${redact(String(stderr || err.message).trim(), 500)}`))
       else resolve(stdout.trim())
     })
   })
