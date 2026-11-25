@@ -4,7 +4,11 @@ import type { AgentProvider } from '@forge/shared'
 
 export function providerCommand(provider: AgentProvider): { command: string; args: string[] } {
   switch (provider) {
-    case 'claude': return { command: 'claude', args: ['--dangerously-skip-permissions', '-p'] }
+    // stream-json (which needs --verbose with -p) gives one event per line: the runner turns them into live log lines.
+    case 'claude': return {
+      command: 'claude',
+      args: ['--dangerously-skip-permissions', '-p', '--output-format', 'stream-json', '--verbose'],
+    }
     // Stdin keeps user prompts out of argv. Codex's own sandbox (bubblewrap) cannot create its mount namespace in
     // the runner's unprivileged LXC ("bwrap: Failed to make / slave: Permission denied"), so every shell command
     // failed while the task still reported success. Like Claude above, Codex relies on the container and the
