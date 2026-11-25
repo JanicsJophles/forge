@@ -187,8 +187,12 @@ export function checkpoint(input: CheckpointInput, writer: string | null = null)
   const expiresAt = new Date(Date.now() + ttl * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, '')
 
   const existing = db.prepare('SELECT * FROM agent_state WHERE agent_id = ?').get(input.agentId) as AgentStateRow | undefined
+  // A row changing hands (an anonymous row taken over by a board writer) keeps nothing from its old content: the new
+  // writer's fields replace it, so no field the previous writer set survives under the new writer's name.
+  const sameWriter = existing !== undefined && (existing.written_by ?? null) === writer
+  if (existing && !sameWriter) db.prepare('DELETE FROM agent_state WHERE agent_id = ?').run(input.agentId)
 
-  if (existing) {
+  if (sameWriter) {
     db.prepare(`
       UPDATE agent_state SET
         agent_type    = COALESCE(@agent_type, agent_type),

@@ -70,6 +70,25 @@ test('a trusted writer takes over an anonymous row with the same id', async () =
   assert.equal((await put('project-b', json)).status, 403)
 })
 
+test('taking over an anonymous row keeps none of its old fields', async () => {
+  const planted = { agentType: 'human', intent: 'planted', branch: 'b', ticket: 't', metadata: { mailAddress: 'evil:atlas' } }
+  assert.equal((await put('human-c', json, planted)).status, 200)
+  const res = await fetch(`${base}/agent-state/checkpoint`, { method: 'POST', headers: bearer(GATEWAY), body: JSON.stringify({ agentId: 'human-c', repo: 'r2' }) })
+  assert.equal(res.status, 200)
+  const r = await row('human-c') as unknown as Record<string, unknown>
+  assert.equal(r.writtenBy, 'gateway')
+  assert.equal(r.agentType, 'unknown')
+  assert.equal(r.intent, null)
+  assert.equal(r.branch, null)
+  assert.equal(r.ticket, null)
+  assert.equal(r.metadata, null)
+  assert.equal(r.repo, 'r2')
+  // The same writer's later partial updates still merge.
+  assert.equal((await put('human-c', bearer(GATEWAY), { agentType: 'human', intent: 'real', repo: undefined })).status, 200)
+  const r2 = await row('human-c') as unknown as Record<string, unknown>
+  assert.equal(r2.intent, 'real')
+})
+
 test('listings carry writtenBy', async () => {
   const rows = await (await fetch(`${base}/agent-state`)).json() as Array<{ agentId: string; writtenBy: string | null }>
   assert.equal(rows.find(r => r.agentId === 'project-b')?.writtenBy, 'gateway')
