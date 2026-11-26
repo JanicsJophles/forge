@@ -13,14 +13,18 @@ import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 import { ClaudeStreamParser, type ClaudeOutcome } from './claude-stream.js'
 import { createWorkspace, finishWorkspace, workspaceLayout, type RunnerTask } from './workspace.js'
+import { StallWatchdog, watchdogLimitsFromEnv, killProcessTree, type StallVerdict } from './watchdog.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
+const WATCHDOG_INTERVAL_MS = 30_000
+const KILL_ESCALATION_MS = 15_000
 
 export function killTask(taskId: string): boolean {
   const proc = activeProcs.get(taskId)
   if (!proc) return false
-  proc.kill('SIGTERM')
+  // The agent leads its own process group: take its shells and browsers down with it.
+  killProcessTree(proc.pid, 'SIGTERM')
   return true
 }
 
@@ -115,6 +119,8 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
     {
       cwd: task.repo,
       ...identity,
+      // Own process group, so a stalled task can be killed with everything it started.
+      detached: true,
     }
   )
 
@@ -145,14 +151,33 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
 
   flushTimer = setInterval(flush, 500)
 
+  // A task that stops producing output, or finishes but never exits, is killed and reported instead of
+  // sitting in `running` forever.
+  const watchdog = new StallWatchdog(watchdogLimitsFromEnv())
+  let verdict: StallVerdict | null = null
+  const watchdogTimer = setInterval(() => {
+    if (verdict) return
+    verdict = watchdog.check()
+    if (!verdict) return
+    buffer += `[forge] watchdog: ${verdict.message}; killing the agent's process tree\n`
+    flush()
+    killProcessTree(proc.pid, 'SIGTERM')
+    setTimeout(() => { if (!settled) killProcessTree(proc.pid, 'SIGKILL') }, KILL_ESCALATION_MS).unref()
+  }, WATCHDOG_INTERVAL_MS)
+  watchdogTimer.unref()
+
   // Claude prints stream-json events: each becomes a short log line, never raw JSON. Codex output is kept as is.
   const claudeStream = provider === 'claude' ? new ClaudeStreamParser() : null
   if (claudeStream) proc.stdout.setEncoding('utf8') // decodes characters split across chunks
   proc.stdout.on('data', (data: Buffer | string) => {
+    watchdog.output()
+    const before = claudeStream?.outcome
     buffer += claudeStream ? claudeStream.push(String(data)) : data.toString()
+    if (claudeStream && claudeStream.outcome !== before) watchdog.result()
   })
 
   proc.stderr.on('data', (data: Buffer) => {
+    watchdog.output()
     const text = data.toString().split('\n').map(l => l ? `[stderr] ${l}` : '').join('\n')
     buffer += text
   })
@@ -160,6 +185,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
   proc.on('close', async (code) => {
     if (settled) return
     settled = true
+    clearInterval(watchdogTimer)
     // Final flush before wrapping up
     if (flushTimer) clearInterval(flushTimer)
     if (claudeStream) buffer += claudeStream.end() + outcomeLine(claudeStream.outcome)
@@ -167,7 +193,10 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
 
     activeProcs.delete(task.id)
 
-    if (code === 0) {
+    // Killed only because it would not exit after a successful result: the agent's work stands.
+    const finishedThenKilled = verdict?.kind === 'lingering' && claudeStream?.outcome !== undefined
+      && !claudeStream.outcome.isError
+    if (code === 0 || finishedThenKilled) {
       // Auto-commit if enabled
       if (task.autoCommit ?? config.autoCommit) {
         try {
@@ -195,9 +224,10 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
       updateTaskStatus(task.id, 'completed')
       emitter.emit('event', makeEvent('complete', 'Task completed successfully'))
     } else {
-      const errMsg = `[forge] ${provider} exited with code ${code}\n`
+      const reason = verdict ? `watchdog: ${verdict.message}` : `${provider} exited with code ${code}`
+      const errMsg = `[forge] ${reason}\n`
       appendLog(task.id, errMsg)
-      setErrorMessage(task.id, `${provider} exited with code ${code}`)
+      setErrorMessage(task.id, reason)
       updateTaskStatus(task.id, 'failed')
       emitter.emit('event', makeEvent('error', errMsg))
     }
@@ -210,6 +240,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
   proc.on('error', (err) => {
     if (settled) return
     settled = true
+    clearInterval(watchdogTimer)
     if (flushTimer) clearInterval(flushTimer)
     if (claudeStream) buffer += claudeStream.end()
     flush()
