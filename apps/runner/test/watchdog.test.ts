@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { StallWatchdog, killProcessTree, watchdogLimitsFromEnv } from '../src/agent/watchdog.js'
+import { StallWatchdog, watchdogLimits, watchdogIntervalMs, invalidWatchdogOverride } from '../src/agent/watchdog.js'
 
 const MIN = 60_000
 const limits = { stallMs: 45 * MIN, exitGraceMs: 10 * MIN }
@@ -47,27 +46,30 @@ test('a zero limit turns that check off', () => {
   assert.equal(w.check(1000 * MIN), null)
 })
 
-test('limits come from minutes in the environment, with defaults', () => {
+test('limits: env defaults, per-task overrides win, interval follows the shortest limit', () => {
   const saved = { ...process.env }
   try {
     delete process.env.TASK_STALL_MINUTES
     delete process.env.TASK_EXIT_GRACE_MINUTES
-    assert.deepEqual(watchdogLimitsFromEnv(), { stallMs: 45 * MIN, exitGraceMs: 10 * MIN })
+    assert.deepEqual(watchdogLimits(), { stallMs: 45 * MIN, exitGraceMs: 10 * MIN })
     process.env.TASK_STALL_MINUTES = '5'
     process.env.TASK_EXIT_GRACE_MINUTES = 'nope'
-    assert.deepEqual(watchdogLimitsFromEnv(), { stallMs: 5 * MIN, exitGraceMs: 10 * MIN })
+    assert.deepEqual(watchdogLimits(), { stallMs: 5 * MIN, exitGraceMs: 10 * MIN })
+    assert.deepEqual(watchdogLimits({ stallMinutes: 120, exitGraceMinutes: 0 }), { stallMs: 120 * MIN, exitGraceMs: 0 })
+    assert.deepEqual(watchdogLimits({ exitGraceMinutes: 2 }), { stallMs: 5 * MIN, exitGraceMs: 2 * MIN })
   } finally {
     process.env = saved
   }
+  assert.equal(watchdogIntervalMs({ stallMs: 45 * MIN, exitGraceMs: 10 * MIN }), 30_000)
+  assert.equal(watchdogIntervalMs({ stallMs: 600, exitGraceMs: 0 }), 200)
+  assert.equal(watchdogIntervalMs({ stallMs: 0, exitGraceMs: 0 }), 30_000)
 })
 
-test('killProcessTree takes down the background shell the agent left behind', async () => {
-  // A detached parent that starts a never-ending poll loop, like the stuck tasks did.
-  const parent = spawn('bash', ['-c', '(until false; do sleep 1; done) & echo $!; wait'], { detached: true })
-  const childPid = await new Promise<number>(resolve => parent.stdout.once('data', d => resolve(Number(String(d).trim()))))
-  const closed = new Promise(resolve => parent.on('close', resolve))
-  killProcessTree(parent.pid, 'SIGTERM')
-  await closed
-  await new Promise(r => setTimeout(r, 200))
-  assert.throws(() => process.kill(childPid, 0), /ESRCH/)
+test('override validation', () => {
+  assert.equal(invalidWatchdogOverride('stallMinutes', undefined), null)
+  assert.equal(invalidWatchdogOverride('stallMinutes', 0), null)
+  assert.equal(invalidWatchdogOverride('stallMinutes', 90.5), null)
+  for (const bad of [-1, '10', Number.NaN, 24 * 60 + 1, null]) {
+    assert.match(invalidWatchdogOverride('stallMinutes', bad) ?? '', /stallMinutes must be a number of minutes/)
+  }
 })

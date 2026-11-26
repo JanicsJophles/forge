@@ -5,8 +5,9 @@ import type { AgentProvider } from '@forge/shared'
 export function providerCommand(provider: AgentProvider): { command: string; args: string[] } {
   switch (provider) {
     // stream-json (which needs --verbose with -p) gives one event per line: the runner turns them into live log lines.
+    // FORGE_CLAUDE_COMMAND points tests (or a pinned install) at another binary; it takes the same arguments.
     case 'claude': return {
-      command: 'claude',
+      command: process.env.FORGE_CLAUDE_COMMAND || 'claude',
       args: ['--dangerously-skip-permissions', '-p', '--output-format', 'stream-json', '--verbose'],
     }
     // Stdin keeps user prompts out of argv. Codex's own sandbox (bubblewrap) cannot create its mount namespace in

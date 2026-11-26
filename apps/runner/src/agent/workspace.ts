@@ -14,9 +14,9 @@ export interface WorkspaceRequest {
   base: string
 }
 /** A task that may run in its own worktree; repo is then that worktree's path and branch its topic. */
-export type RunnerTask = AgentTask & { workspace?: WorkspaceRequest }
+export type RunnerTask = AgentTask & { workspace?: WorkspaceRequest; stallMinutes?: number; exitGraceMinutes?: number }
 /** POST /tasks body: `repo` (an existing clone's path) or `workspace`; with workspace, `branch` names the topic. */
-export type TaskRequest = Omit<RunRequest, 'repo'> & { repo?: string; workspace?: unknown }
+export type TaskRequest = Omit<RunRequest, 'repo'> & { repo?: string; workspace?: unknown; stallMinutes?: unknown; exitGraceMinutes?: unknown }
 
 export interface WorkspaceLayout {
   root: string

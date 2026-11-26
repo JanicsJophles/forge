@@ -16,6 +16,7 @@ import {
 } from '../db/queries.js'
 import { createEmitter, getEmitter } from '../agent/stream.js'
 import { runTask, killTask } from '../agent/runner.js'
+import { invalidWatchdogOverride } from '../agent/watchdog.js'
 import { getCurrentBranch } from '../agent/git.js'
 import { db } from '../db/schema.js'
 import { readTaskProjection, readTaskStatusList, readTaskPreviewList } from '../db/task-projection.js'
@@ -39,6 +40,13 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     return
   }
 
+  for (const name of ['stallMinutes', 'exitGraceMinutes'] as const) {
+    const problem = invalidWatchdogOverride(name, body[name])
+    if (problem) {
+      res.status(400).json({ error: problem })
+      return
+    }
+  }
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) {
     res.status(400).json({ error: 'prompt is required' })
     return
@@ -106,6 +114,8 @@ tasksRouter.post('/', (req: Request, res: Response) => {
     log: '',
     createdAt: new Date().toISOString(),
     ...(workspace ? { workspace } : {}),
+    ...(typeof body.stallMinutes === 'number' ? { stallMinutes: body.stallMinutes } : {}),
+    ...(typeof body.exitGraceMinutes === 'number' ? { exitGraceMinutes: body.exitGraceMinutes } : {}),
   }
 
   insertTask(task)

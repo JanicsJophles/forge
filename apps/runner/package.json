@@ -7,7 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "node --import tsx --test src/db/task-status-list.test.ts src/routes/tasks-status.test.ts test/repo-path.test.ts test/git.test.ts test/workspace.test.ts test/redact.test.ts test/claude-stream.test.ts test/watchdog.test.ts"
+    "test": "node --import tsx --test src/db/task-status-list.test.ts src/routes/tasks-status.test.ts test/repo-path.test.ts test/git.test.ts test/workspace.test.ts test/redact.test.ts test/claude-stream.test.ts test/watchdog.test.ts test/proctree.test.ts test/runner-watchdog.test.ts"
   },
   "dependencies": {
     "@forge/shared": "*",

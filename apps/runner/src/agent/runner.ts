@@ -13,18 +13,18 @@ import { gitPull, gitCommit } from './git.js'
 import { providerCommand, executionIdentity, checkCodexLogin } from './provider.js'
 import { ClaudeStreamParser, type ClaudeOutcome } from './claude-stream.js'
 import { createWorkspace, finishWorkspace, workspaceLayout, type RunnerTask } from './workspace.js'
-import { StallWatchdog, watchdogLimitsFromEnv, killProcessTree, type StallVerdict } from './watchdog.js'
+import { StallWatchdog, watchdogLimits, watchdogIntervalMs, type StallVerdict } from './watchdog.js'
+import { killTree, processTree, pidsWithCwdIn, survivors, type Proc } from './proctree.js'
 
 // Active process handles keyed by taskId for SIGTERM support
 const activeProcs = new Map<string, ReturnType<typeof spawn>>()
-const WATCHDOG_INTERVAL_MS = 30_000
-const KILL_ESCALATION_MS = 15_000
+const KILL_ESCALATION_MS = Number(process.env.FORGE_KILL_GRACE_MS) || 15_000
 
 export function killTask(taskId: string): boolean {
   const proc = activeProcs.get(taskId)
   if (!proc) return false
-  // The agent leads its own process group: take its shells and browsers down with it.
-  killProcessTree(proc.pid, 'SIGTERM')
+  // Every descendant and the groups they lead: Bash tool shells and browsers run in groups of their own.
+  void killTree(proc.pid, KILL_ESCALATION_MS)
   return true
 }
 
@@ -119,7 +119,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
     {
       cwd: task.repo,
       ...identity,
-      // Own process group, so a stalled task can be killed with everything it started.
+      // Own process group, so the agent never shares the runner's group when its tree is signalled.
       detached: true,
     }
   )
@@ -153,18 +153,34 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
 
   // A task that stops producing output, or finishes but never exits, is killed and reported instead of
   // sitting in `running` forever.
-  const watchdog = new StallWatchdog(watchdogLimitsFromEnv())
+  const limits = watchdogLimits({ stallMinutes: task.stallMinutes, exitGraceMinutes: task.exitGraceMinutes })
+  const watchdog = new StallWatchdog(limits)
   let verdict: StallVerdict | null = null
+  // Everything the agent has started, refreshed each tick: a shell orphaned when its parent exits is reparented
+  // away from the agent's tree but still has to die with the task.
+  let seen: Proc[] = []
   const watchdogTimer = setInterval(() => {
+    if (proc.pid) seen = [...survivors(seen), ...processTree(proc.pid).filter(p => p.pid !== proc.pid)]
     if (verdict) return
     verdict = watchdog.check()
     if (!verdict) return
     buffer += `[forge] watchdog: ${verdict.message}; killing the agent's process tree\n`
     flush()
-    killProcessTree(proc.pid, 'SIGTERM')
-    setTimeout(() => { if (!settled) killProcessTree(proc.pid, 'SIGKILL') }, KILL_ESCALATION_MS).unref()
-  }, WATCHDOG_INTERVAL_MS)
+    void killTree(proc.pid, KILL_ESCALATION_MS, seen)
+  }, watchdogIntervalMs(limits))
   watchdogTimer.unref()
+
+  // After the agent is gone: anything it left running (tracked descendants, and for a per-task workspace anything
+  // still working inside it) is killed before the workspace is released.
+  async function reapLeftovers() {
+    const alive = survivors(seen)
+    if (alive.length) await killTree(undefined, KILL_ESCALATION_MS, alive)
+    const inWorkspace = task.workspace ? pidsWithCwdIn(task.repo) : []
+    for (const pid of inWorkspace) { try { process.kill(pid, 'SIGKILL') } catch { /* gone */ } }
+    if (alive.length || inWorkspace.length) {
+      log(`[forge] reaped ${alive.length} leftover process(es)${inWorkspace.length ? ` and ${inWorkspace.length} still in the workspace` : ''}\n`)
+    }
+  }
 
   // Claude prints stream-json events: each becomes a short log line, never raw JSON. Codex output is kept as is.
   const claudeStream = provider === 'claude' ? new ClaudeStreamParser() : null
@@ -232,6 +248,7 @@ export async function runTask(task: RunnerTask, emitter: EventEmitter): Promise<
       emitter.emit('event', makeEvent('error', errMsg))
     }
 
+    await reapLeftovers()
     await releaseWorkspace()
     emitter.emit('done')
     removeEmitter(task.id)

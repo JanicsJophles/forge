@@ -32,11 +32,35 @@ function minutesFromEnv(name: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback
 }
 
-export function watchdogLimitsFromEnv(): WatchdogLimits {
-  return {
-    stallMs: minutesFromEnv('TASK_STALL_MINUTES', 45) * 60_000,
-    exitGraceMs: minutesFromEnv('TASK_EXIT_GRACE_MINUTES', 10) * 60_000,
+/** Per-task overrides from POST /tasks, in minutes; anything unset falls back to the runner's env defaults. */
+export interface WatchdogOverrides {
+  stallMinutes?: number
+  exitGraceMinutes?: number
+}
+
+export const MAX_WATCHDOG_MINUTES = 24 * 60
+
+/** Error text for an invalid override, or null. 0 turns a check off; fractions are allowed. */
+export function invalidWatchdogOverride(name: string, value: unknown): string | null {
+  if (value === undefined) return null
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > MAX_WATCHDOG_MINUTES) {
+    return `${name} must be a number of minutes from 0 to ${MAX_WATCHDOG_MINUTES}`
   }
+  return null
+}
+
+export function watchdogLimits(overrides: WatchdogOverrides = {}): WatchdogLimits {
+  return {
+    stallMs: (overrides.stallMinutes ?? minutesFromEnv('TASK_STALL_MINUTES', 45)) * 60_000,
+    exitGraceMs: (overrides.exitGraceMinutes ?? minutesFromEnv('TASK_EXIT_GRACE_MINUTES', 10)) * 60_000,
+  }
+}
+
+/** How often to check: a quarter of the shortest active limit, between 200 ms and 30 s. */
+export function watchdogIntervalMs(limits: WatchdogLimits): number {
+  const active = [limits.stallMs, limits.exitGraceMs].filter(ms => ms > 0)
+  if (!active.length) return 30_000
+  return Math.max(200, Math.min(30_000, Math.floor(Math.min(...active) / 4)))
 }
 
 const minutes = (ms: number) => Math.round(ms / 60_000)
@@ -80,18 +104,5 @@ export class StallWatchdog {
       }
     }
     return null
-  }
-}
-
-/**
- * Signal the agent's whole process group (it is spawned detached, so it leads its own group): killing only the
- * agent leaves its shells and browsers behind. Falls back to the single process if the group is already gone.
- */
-export function killProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
-  if (!pid) return
-  try {
-    process.kill(-pid, signal)
-  } catch {
-    try { process.kill(pid, signal) } catch { /* already exited */ }
   }
 }
